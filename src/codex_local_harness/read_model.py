@@ -92,6 +92,7 @@ def summarize_views(views: Iterable[RunView]) -> dict[str, Any]:
 
 def _build_view(run_id: str, run: RunHealth | None, adjudication: Adjudication | None, events: list[LifecycleEvent]) -> RunView:
     terminal = _terminal_event(events)
+    identity = max(events, key=lambda event: (event.observed_at, event.event_id)) if events else None
     lifecycle_state = terminal.event if terminal else ("started" if events else "unknown")
     if adjudication:
         observed = effective = adjudication.verdict
@@ -107,11 +108,11 @@ def _build_view(run_id: str, run: RunHealth | None, adjudication: Adjudication |
     wall_seconds = run.wall_seconds if run else (terminal.wall_seconds if terminal and terminal.wall_seconds else 0.0)
     return RunView(
         run_id=run_id,
-        issue=run.issue if run else None,
-        role=run.role if run else None,
-        model=run.model if run else None,
-        profile=run.profile if run else None,
-        task_class=run.task_class if run else None,
+        issue=run.issue if run else (identity.issue if identity else None),
+        role=run.role if run else (identity.role if identity else None),
+        model=run.model if run else (identity.model if identity else None),
+        profile=run.profile if run else (identity.profile if identity else None),
+        task_class=run.task_class if run else (identity.task_class if identity else None),
         claimed_status=run.status if run else None,
         claimed_outcome=run.outcome if run else None,
         delivery_ready=run.delivery_ready if run else None,

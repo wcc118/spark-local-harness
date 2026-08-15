@@ -1,6 +1,6 @@
 {
   "name": "codex-led-v4",
-  "status": "scaffold-not-installed",
+  "status": "shadow-installed-v0.1.0",
   "baseline": "baseline-v2-extracted",
   "objective": {
     "primary": "high local capability per frontier token with Codex merge authority",
@@ -19,25 +19,28 @@
       "runtime": "opencode-lm-studio",
       "model": "qwen/qwen3.8-27b",
       "authority": "advisory",
-      "qualification": "pending-role-specific-evaluation"
+      "qualification": "useful-bounded-advisory; opencode-tool-loop-efficiency-unresolved"
     },
     "complex_coder": {
       "runtime": "opencode-vllm-spark",
       "model": "Qwen/Qwen3-Coder-Next-FP8",
       "authority": "bounded-implementation",
-      "qualification": "existing-route; v4-product-qualification-pending"
+      "qualification": "routine-and-moderate-pass; difficult-concurrency-requires-codex"
     },
     "scout": {
       "runtime": "opencode-lm-studio",
       "model": "qwen/qwen3.8-27b",
       "authority": "advisory-only",
-      "qualification": "pending"
+      "qualification": "initial-direct-trial-useful; repeated-qualification-pending"
     }
   },
   "health": {
     "schema_version": 1,
     "automatic_ingestion": true,
     "stores_prompt_content": false,
-    "automatic_architecture_changes": false
+    "automatic_architecture_changes": false,
+    "adjudication_schema_version": 1,
+    "lifecycle_schema_version": 1,
+    "dashboard": "localhost-read-only"
   }
 }

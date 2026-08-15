@@ -31,11 +31,13 @@ def test_interrupted_correction_exists_without_worker_health_record():
     event = LifecycleEvent(
         event_id="correction:interrupted", run_id="correction", event="interrupted",
         observed_at="2026-08-15T17:12:00Z", wall_seconds=681, exit_status=130, dirty_entries=1,
+        issue=19, role="coder", model="qwen3-coder-next", profile="v4", task_class="difficult",
     )
     view = build_run_views([], [], [event])[0]
     assert view.claimed_status is None
     assert (view.lifecycle_state, view.effective_outcome, view.wall_seconds) == ("interrupted", "interrupted", 681)
     assert (view.lifecycle_exit_status, view.lifecycle_dirty_entries) == (130, 1)
+    assert (view.issue, view.role, view.model, view.task_class) == (19, "coder", "qwen3-coder-next", "difficult")
 
 
 def test_successful_adjudication_can_contradict_worker_failure():

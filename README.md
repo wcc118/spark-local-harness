@@ -43,3 +43,9 @@ codex-local-reviewer CHECKOUT --task-file PACKET.md
 `legacy-v1/` contains rollback artifacts. Experimental routing described by
 `profiles/candidate-v3.json` is not installed and must not be compared until
 the corrected baseline qualification suite remains green.
+
+## Diagnostic dashboard
+
+The `v0.1.0` scaffold adds a localhost-only, read-only diagnostic dashboard.
+See [dashboard usage and interpretation](docs/dashboard.md). The four-state
+release replay lives in [`qualification/v010/`](qualification/v010/README.md).

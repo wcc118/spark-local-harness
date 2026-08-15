@@ -54,13 +54,18 @@ def test_lifecycle_represents_interrupted_run_without_prompt_content(tmp_path):
         wall_seconds=681.2,
         exit_status=130,
         dirty_entries=1,
+        issue=19,
+        role="coder",
+        model="qwen3-coder-next",
+        profile="codex-led-v4",
+        task_class="difficult-concurrency",
     )
     append_record(path, record)
     assert read_records(path, LifecycleEvent) == (record,)
     payload = json.loads(path.read_text())
     assert set(payload) == {
         "dirty_entries", "event", "event_id", "exit_status", "observed_at",
-        "run_id", "schema_version", "wall_seconds",
+        "run_id", "schema_version", "wall_seconds", "issue", "role", "model", "profile", "task_class",
     }
 
 
@@ -88,6 +93,8 @@ def test_cli_appends_hidden_failure_and_interrupted_lifecycle(tmp_path, capsys):
         "--run-id", "run-correction", "--event", "interrupted",
         "--observed-at", "2026-08-15T17:12:00Z", "--wall-seconds", "681.2",
         "--exit-status", "130", "--dirty-entries", "1",
+        "--issue", "19", "--role", "coder", "--model", "qwen", "--profile", "v4",
+        "--task-class", "difficult",
     ]) == 0
     assert len(capsys.readouterr().out.splitlines()) == 2
     assert read_records(adjudications, Adjudication)[0].verdict == "failed"

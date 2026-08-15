@@ -40,7 +40,9 @@ cleanup() {
       --records "$lifecycle_records" --event-id "$worker_run_id:$diagnostic_event" \
       --run-id "$worker_run_id" --event "$diagnostic_event" --observed-at "$diagnostic_now" \
       --wall-seconds "$diagnostic_elapsed" --exit-status "$cleanup_status" \
-      --dirty-entries "$diagnostic_dirty" >/dev/null 2>&1 || true
+      --dirty-entries "$diagnostic_dirty" --issue "$worker_issue" --role "$worker_role" \
+      --model "$worker_model" --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" \
+      >/dev/null 2>&1 || true
   fi
   if [[ -n $task_temp && -f $task_temp ]]; then
     rm -f -- "$task_temp"
@@ -200,7 +202,9 @@ if [[ $record_run == 1 ]]; then
   diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
     --records "$lifecycle_records" --event-id "$worker_run_id:started" \
-    --run-id "$worker_run_id" --event started --observed-at "$diagnostic_now" >/dev/null
+    --run-id "$worker_run_id" --event started --observed-at "$diagnostic_now" \
+    --issue "$worker_issue" --role "$worker_role" --model "$worker_model" \
+    --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" >/dev/null
   diagnostic_started=1
 fi
 set +e
@@ -262,7 +266,11 @@ if [[ $record_run == 1 ]]; then
     health_status=failure
     delivery_ready=false
     if (( inference_status != 0 )); then
-      failure_class=infrastructure-inference
+      case "$inference_status" in
+        124|137) failure_class=execution-timeout ;;
+        130|143) failure_class=execution-interrupted ;;
+        *) failure_class=infrastructure-inference ;;
+      esac
     else
       failure_class=workflow-postflight
     fi
@@ -302,7 +310,8 @@ if [[ $record_run == 1 ]]; then
     --records "$lifecycle_records" --event-id "$worker_run_id:$diagnostic_event" \
     --run-id "$worker_run_id" --event "$diagnostic_event" --observed-at "$diagnostic_now" \
     --wall-seconds "$diagnostic_elapsed" --exit-status "$workflow_status" \
-    --dirty-entries "$dirty_entries" >/dev/null || \
+    --dirty-entries "$dirty_entries" --issue "$worker_issue" --role "$worker_role" \
+    --model "$worker_model" --profile codex-led-v4 --task-class "$task_class" >/dev/null || \
       echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
   diagnostic_finalized=1
 fi

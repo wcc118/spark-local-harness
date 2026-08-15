@@ -96,6 +96,11 @@ class LifecycleEvent:
     wall_seconds: float | None = None
     exit_status: int | None = None
     dirty_entries: int | None = None
+    issue: int | None = None
+    role: str | None = None
+    model: str | None = None
+    profile: str | None = None
+    task_class: str | None = None
     schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -111,6 +116,13 @@ class LifecycleEvent:
         ):
             if value is not None and value < 0:
                 raise ValueError(f"{name} must be non-negative")
+        if self.issue is not None and self.issue <= 0:
+            raise ValueError("issue must be positive")
+        for name, value in (
+            ("role", self.role), ("model", self.model), ("profile", self.profile), ("task_class", self.task_class),
+        ):
+            if value is not None:
+                _safe_atom(value, name)
         if self.schema_version != DIAGNOSTIC_SCHEMA_VERSION:
             raise ValueError("unsupported diagnostic schema version")
 
