@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 
 [project.scripts]
 codex-review-transaction = "codex_local_harness.review:main"
+codex-harness-health = "codex_local_harness.monitor:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
