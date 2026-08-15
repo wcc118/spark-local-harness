@@ -7,7 +7,17 @@ from .diagnostics import DIAGNOSTIC_SCHEMA_VERSION, _safe_atom, _timestamp
 
 
 STAGES = ("intake", "routing", "local-work", "delivery", "review", "evidence", "codex-decision", "correction", "merge", "post-merge")
-STATES = {"pending", "active", "passed", "failed", "interrupted", "blocked", "awaiting-adjudication", "superseded"}
+STATES = {
+    "pending",
+    "active",
+    "passed",
+    "failed",
+    "interrupted",
+    "blocked",
+    "awaiting-adjudication",
+    "superseded",
+    "not-applicable",
+}
 
 
 @dataclass(frozen=True)
