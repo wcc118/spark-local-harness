@@ -28,6 +28,10 @@ class DashboardSource:
     frontier: Path | None = None
     release: str = "v0.1.1"
     mode: str = "live"
+    now: datetime | None = None
+
+    def _current_time(self) -> datetime:
+        return self.now if self.now is not None else datetime.now(timezone.utc)
 
     def snapshot(self) -> dict[str, Any]:
         statuses: list[dict[str, Any]] = []
@@ -47,7 +51,7 @@ class DashboardSource:
             "release": self.release,
             "read_only": True,
             "mode": self.mode,
-            "freshness": self.freshness(),
+            "freshness": self._freshness(statuses),
             "sources": statuses,
             "summary": summarize_views(views),
             "runs": [view.as_dict() for view in views],
@@ -65,67 +69,15 @@ class DashboardSource:
             return ()
         try:
             records = reader(path)
+            mtime_epoch = path.stat().st_mtime if records else None
         except (OSError, ValueError):
             statuses.append({"name": name, "state": "malformed", "file": path.name})
             return ()
-        statuses.append({"name": name, "state": "ok", "file": path.name, "records": len(records)})
+        statuses.append({"name": name, "state": "ok", "file": path.name, "records": len(records), "mtime_epoch": mtime_epoch})
         return records
 
     def paths(self) -> tuple[Path, ...]:
         return tuple(path for path in (self.runs, self.adjudications, self.lifecycle, self.workflow, self.frontier) if path is not None)
-
-    def _count_records_with_timestamps(self) -> int:
-        """Count total records across all sources that have observed_at timestamps."""
-        # Load all sources to get their records
-        statuses: list[dict[str, Any]] = []
-        adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
-        lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
-        workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
-        frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
-        
-        return len(adjudications) + len(lifecycle) + len(workflow) + len(frontier_records)
-
-    def _calc_newest_record_age(self) -> float | None:
-        """Calculate the age in seconds of the newest diagnostic record timestamp."""
-        now = datetime.now(timezone.utc)
-        
-        # Load all sources to get their records
-        statuses: list[dict[str, Any]] = []
-        adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
-        lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
-        workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
-        frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
-        
-        # Extract observed_at from each record type
-        timestamps = []
-        for record in adjudications:
-            timestamps.append(record.observed_at)
-        for record in lifecycle:
-            timestamps.append(record.observed_at)
-        for record in workflow:
-            timestamps.append(record.observed_at)
-        for record in frontier_records:
-            timestamps.append(record.observed_at)
-        
-        if not timestamps:
-            return None
-        
-        # Parse and find the newest timestamp
-        newest = None
-        for ts in timestamps:
-            try:
-                parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                if newest is None or parsed > newest:
-                    newest = parsed
-            except (ValueError, TypeError):
-                continue
-        
-        if newest is None:
-            return None
-        
-        # Calculate age in seconds
-        delta = now - newest
-        return delta.total_seconds()
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
         result = []
@@ -137,38 +89,22 @@ class DashboardSource:
                 result.append((str(path), 0, 0))
         return tuple(result)
 
-    def freshness(self) -> dict[str, Any]:
-        # Calculate the newest diagnostic record timestamp across all sources
-        newest_record_age = self._calc_newest_record_age()
-        
-        # If we have records with timestamps, use the record-based age
-        if newest_record_age is not None:
-            return {
-                "source_files": len(self.paths()),
-                "existing_files": sum(path.exists() for path in self.paths()),
-                "newest_mtime_epoch": None,
-                "newest_record_age_seconds": newest_record_age,
-                "newest_record_timestamp": None,
-                "record_count": self._count_records_with_timestamps(),
-            }
-        
-        # No records with timestamps found - show no data state
+    def _freshness(self, statuses: list[dict[str, Any]]) -> dict[str, Any]:
+        mtimes = [status["mtime_epoch"] for status in statuses if status.get("mtime_epoch") is not None]
+        newest_mtime_epoch = max(mtimes) if mtimes else None
+        age_seconds = None if newest_mtime_epoch is None else max(
+            0.0, self._current_time().timestamp() - newest_mtime_epoch
+        )
         return {
             "source_files": len(self.paths()),
             "existing_files": sum(path.exists() for path in self.paths()),
-            "newest_mtime_epoch": None,
-            "newest_record_age_seconds": None,
-            "newest_record_timestamp": None,
-            "record_count": 0,
+            "newest_mtime_epoch": newest_mtime_epoch,
+            "newest_age_seconds": age_seconds,
         }
 
 
 def _format_age(seconds: float) -> str:
-    """Format age in seconds to a human-readable string."""
-    if seconds < 0:
-        return "No data"
-    
-    # Use approximate values for common time units
+    """Format a non-negative age without implying false precision."""
     units = [
         ("year", 365.25 * 24 * 60 * 60),
         ("month", 30 * 24 * 60 * 60),
@@ -177,7 +113,7 @@ def _format_age(seconds: float) -> str:
         ("minute", 60),
         ("second", 1),
     ]
-    
+
     for name, duration in units:
         if seconds >= duration:
             value = int(seconds / duration)
@@ -282,15 +218,8 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     operations = "".join(_operation(item) for item in snapshot["operations"]) or '<p class="empty">No workflow events recorded.</p>'
     codex = snapshot["codex"]
     freshness = snapshot["freshness"]
-    
-    # Use the machine-readable age if available, otherwise fall back to file mtime
-    age_seconds = freshness.get("newest_record_age_seconds")
-    if age_seconds is not None:
-        newest_text = _format_age(age_seconds)
-    else:
-        newest_epoch = freshness.get("newest_mtime_epoch")
-        newest_text = datetime.fromtimestamp(newest_epoch, timezone.utc).isoformat().replace("+00:00", "Z") if newest_epoch else "No data"
-    
+    age_seconds = freshness["newest_age_seconds"]
+    newest_text = _format_age(age_seconds) if age_seconds is not None else "No data"
     source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
     context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
