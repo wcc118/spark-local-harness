@@ -1,0 +1,161 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "permission": {
+    "*": "allow",
+    "bash": {
+      "*": "allow",
+      "rm": "deny",
+      "rm *": "deny",
+      "rmdir": "deny",
+      "rmdir *": "deny",
+      "unlink": "deny",
+      "unlink *": "deny",
+      "git rm": "deny",
+      "git rm *": "deny",
+      "git clean": "deny",
+      "git clean *": "deny",
+      "find * -delete": "deny",
+      "find * -delete *": "deny",
+      "shred": "deny",
+      "shred *": "deny"
+    }
+  },
+
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 16000
+  },
+
+  "provider": {
+    "vllm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "vLLM Local (Spark)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1"
+      },
+      "models": {
+        "Qwen/Qwen3-Coder-Next-FP8": {
+          "name": "Qwen3 Coder Next FP8 (Spark)",
+          "limit": {
+            "context": 212599,
+            "output": 16384
+          }
+        }
+      }
+    },
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio (3090)",
+      "options": {
+        "baseURL": "http://10.0.0.92:1234/v1",
+        "apiKey": "{env:LMSTUDIO_API_TOKEN}"
+      },
+      "models": {
+        "qwen/qwen3-coder-30b": {
+          "name": "Qwen3 Coder 30B (3090)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "qwen/qwen3.8-27b": {
+          "name": "Qwen3.8 27B (3090)",
+          "limit": {
+            "context": 16384,
+            "output": 8192
+          }
+        },
+        "openai/gpt-oss-20b": {
+          "name": "GPT-OSS 20B (3090)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+
+  "model": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+  "small_model": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+  "default_agent": "orchestrator",
+
+  "agent": {
+    "orchestrator": {
+      "description": "Manages GitHub backlog and state transitions. Spawns coder and reviewer subagents. Never writes code. Uses GitHub issues for task tracking.",
+      "mode": "primary",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+      "temperature": 0.1,
+      "steps": 500,
+      "color": "info"
+    },
+
+    "coder": {
+      "description": "Implements a single issue. Creates branch, writes code, runs tests, opens PR, then stops.",
+      "mode": "primary",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+      "temperature": 0.2,
+      "steps": 1000,
+      "color": "success"
+    },
+
+    "reviewer": {
+      "description": "Reviews a single PR diff against its linked issue. Posts structured verdict. Never modifies code.",
+      "mode": "primary",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+      "temperature": 0.2,
+      "steps": 1000,
+      "color": "warning",
+      "permission": {
+        "edit": "deny",
+        "task": "deny"
+      }
+    },
+
+    "helper": {
+      "description": "Performs bounded read-only repository investigation and returns structured evidence. Never edits code or changes GitHub state.",
+      "mode": "primary",
+      "model": "lmstudio/qwen/qwen3-coder-30b",
+      "temperature": 0.1,
+      "steps": 200,
+      "color": "info",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "github_*": "deny",
+        "gitea_*": "deny"
+      }
+    }
+  },
+
+  "command": {
+    "bootstrap": {
+      "description": "Bootstrap a new project: create repo, labels, and issues from a project description",
+      "agent": "orchestrator",
+      "template": "Bootstrap a new project.\n\n1. Create a new GitHub repository under the default organization.\n   - Repository name: lowercase, kebab-case, no spaces, descriptive but short.\n2. Clone or initialize the repo locally under ~/opencode/{repo-name}\n3. Create required labels: status/backlog, status/in-progress, status/review, status/review-passed, status/blocked, status/done\n4. Convert the project description into issues:\n   - Each issue must include clear acceptance criteria\n   - Apply status/backlog to all issues\n5. GitHub issues are the only source of truth — do not maintain task lists in chat context.\n6. Report: repository URL, local path, issues created, first recommended issue.\n\nProject description: $ARGUMENTS"
+    }
+  },
+
+  "mcp": {
+    "gitea": {
+      "type": "local",
+      "command": ["gitea-mcp"],
+      "enabled": false,
+      "environment": {
+        "GITEA_TOKEN": "{env:GITEA_TOKEN}",
+        "GITEA_BASE_URL": "http://10.0.0.98:3000"
+      }
+    },
+    "github": {
+      "type": "local",
+      "command": ["bash", "-c", "export PATH=\"$HOME/bin:$PATH\" && export GH_REPO=\"wcc118/beamfea\" && $*"],
+      "enabled": true,
+      "environment": {
+        "PATH": "/home/connellwc83/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      }
+    }
+  }
+}

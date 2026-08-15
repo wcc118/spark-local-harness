@@ -1,0 +1,39 @@
+{
+  "name": "candidate-v3",
+  "status": "qualified-opt-in-installed",
+  "inherits": "baseline-v2",
+  "hypotheses": {
+    "unconditional_preflight": false,
+    "selective_qwen_27b_critic": true,
+    "risk_classifier": true,
+    "maximum_correction_cycles": 1,
+    "mutation_checked_hidden_tests": true,
+    "reviewer_command_budget": false,
+    "retained_latency_metrics": true
+  },
+  "mandatory_shared_controls": [
+    "immutable_identity",
+    "structured_verdict_schema",
+    "deterministic_publication",
+    "stale_sha_rejection",
+    "tool_log_scope_audit",
+    "checkout_postflight",
+    "github_postconditions"
+  ],
+  "implemented_components": [
+    "deterministic-risk-classifier",
+    "codex-only-high-risk-routing",
+    "selective-critic-routing",
+    "one-cycle-correction-limit",
+    "structured-critic-transaction",
+    "candidate-pipeline-controller",
+    "deterministic-coder-postflight",
+    "harness-owned-critic-identity",
+    "bounded-reviewer-scratch"
+  ],
+  "pending_components": [
+    "generalized-mutation-checked-hidden-evaluator",
+    "automated-paired-runner",
+    "reviewer-command-budget"
+  ]
+}

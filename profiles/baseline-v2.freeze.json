@@ -1,0 +1,31 @@
+{
+  "name": "baseline-v2",
+  "frozen_at": "2026-08-15T12:40:58Z",
+  "shared_security_overlay": {
+    "reason": "mandatory post-incident control held constant across A/B conditions",
+    "inference_environment": "env-i allowlist with disposable HOME",
+    "remote_publication_owner": "deterministic coder postflight",
+    "shared_boundary_tests": "114 passed"
+  },
+  "qualification": {
+    "repository": "wcc118/codex-harness-benchmark",
+    "issue": 17,
+    "pull_request": 18,
+    "head_sha": "28bf7f901c2690ad2d065a5f0da7dfdc0d658ac1",
+    "run_id": "20260815T055752Z-3787525",
+    "tests": "45 passed",
+    "workflow_status": 0,
+    "durable_comment": "https://github.com/wcc118/codex-harness-benchmark/pull/18#issuecomment-5300833533",
+    "final_label": "status/review-passed"
+  },
+  "sha256": {
+    "bin/codex-local-worker": "37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415",
+    "src/codex_local_harness/coder.py": "91c25c096ad4e3223ac01ac292d2594eec78ade83e91953c7a268f68a2f8f8c8",
+    "src/codex_local_harness/review.py": "2dccd75f7f892c4694171b3d8610912bd875f00b606da73ab72a4fe8f8ea7a0f",
+    "installed/coder.md": "a4a2e651173b6c980eeffe9c30e5799aa72b6a0a51eb4dfa6720dc04a3f98a9d",
+    "installed/reviewer.md": "554b0ced560c2ebca6a95e67da0b91ce2becb2aeee2963d97e203bd716df66a9",
+    "installed/orchestrator.md": "49b46bc330d402b81c2b36a2ad43eb5c7475d8a81b0926791b006e1adf9dcb13",
+    "installed/opencode.json": "17efa2b30993b7a0c73eb6e62bef34b7a1fae2f69c279521a27168a67c7d59fe",
+    "installed/workers.json": "8370128712ba3ab874ed4c9bfc23ee4f0432f30f5e09f785130fad06723f95a7"
+  }
+}

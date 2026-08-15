@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: codex-local-worker ROLE REPOSITORY_PATH TASK..." >&2
+  echo "       codex-local-worker ROLE REPOSITORY_PATH --task-file FILE" >&2
+  echo "roles: helper, coder, reviewer" >&2
+  echo "routing: set CODEX_LOCAL_TIER or CODEX_LOCAL_MODEL to override the configured default" >&2
+  exit 2
+}
+
+(( $# >= 3 )) || usage
+
+worker_role=$1
+worker_repo_path=$2
+shift 2
+
+if [[ ${1:-} == --task-file ]]; then
+  (( $# == 2 )) || usage
+  [[ -r $2 ]] || {
+    echo "ERROR: task file is not readable: $2" >&2
+    exit 2
+  }
+  worker_task=$(<"$2")
+else
+  worker_task=$*
+fi
+
+[[ -n $worker_task ]] || {
+  echo "ERROR: task must not be empty" >&2
+  exit 2
+}
+
+case "$worker_role" in
+  helper|coder|reviewer) ;;
+  *) usage ;;
+esac
+
+[[ -d "$worker_repo_path" ]] || {
+  echo "ERROR: repository path is not a directory: $worker_repo_path" >&2
+  exit 2
+}
+
+worker_config=${CODEX_LOCAL_WORKER_CONFIG:-/home/connellwc83/.config/codex-local/workers.json}
+[[ -r "$worker_config" ]] || {
+  echo "ERROR: worker routing config is not readable: $worker_config" >&2
+  exit 2
+}
+
+jq -e '.routes and .defaults' "$worker_config" >/dev/null || {
+  echo "ERROR: invalid worker routing config: $worker_config" >&2
+  exit 2
+}
+
+worker_tier=${CODEX_LOCAL_TIER:-$(jq -er --arg role "$worker_role" '.defaults[$role]' "$worker_config")}
+worker_route="$worker_role/$worker_tier"
+worker_agent=$(jq -er --arg route "$worker_route" '.routes[$route].agent' "$worker_config") || {
+  echo "ERROR: no configured route for $worker_route" >&2
+  exit 2
+}
+worker_model=${CODEX_LOCAL_MODEL:-$(jq -er --arg route "$worker_route" '.routes[$route].model' "$worker_config")}
+
+if [[ "$worker_model" == lmstudio/* ]]; then
+  lmstudio_base_url=${LMSTUDIO_BASE_URL:-http://10.0.0.92:1234/v1}
+  curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 8)
+  if [[ -n ${LMSTUDIO_API_TOKEN:-} ]]; then
+    curl_args+=(--header "Authorization: Bearer $LMSTUDIO_API_TOKEN")
+  fi
+  model_catalog=$(curl "${curl_args[@]}" "$lmstudio_base_url/models") || {
+    echo "ERROR: LM Studio is unavailable at $lmstudio_base_url" >&2
+    exit 69
+  }
+  lmstudio_model=${worker_model#lmstudio/}
+  jq -e --arg model "$lmstudio_model" '.data[]? | select(.id == $model)' <<<"$model_catalog" >/dev/null || {
+    echo "ERROR: LM Studio model is unavailable: $lmstudio_model" >&2
+    exit 69
+  }
+fi
+
+if [[ ${CODEX_LOCAL_DRY_RUN:-0} == 1 ]]; then
+  printf 'role=%s\nagent=%s\nmodel=%s\ntier=%s\nrepo=%s\n' \
+    "$worker_role" "$worker_agent" "$worker_model" "$worker_tier" "$worker_repo_path"
+  exit 0
+fi
+
+worker_timeout=${CODEX_LOCAL_TIMEOUT_SECONDS:-1800}
+[[ "$worker_timeout" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: CODEX_LOCAL_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 2
+}
+
+echo "Starting local worker: role=$worker_role tier=$worker_tier model=$worker_model" >&2
+cd "$worker_repo_path"
+
+if [[ ${CODEX_LOCAL_RECORD_RUN:-0} == 1 ]]; then
+  worker_repository=${CODEX_LOCAL_REPOSITORY:-}
+  worker_issue=${CODEX_LOCAL_ISSUE:-}
+  [[ -n $worker_repository && -n $worker_issue ]] || {
+    echo "ERROR: recording requires CODEX_LOCAL_REPOSITORY and CODEX_LOCAL_ISSUE" >&2
+    exit 2
+  }
+  worker_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  worker_log_dir=/home/connellwc83/.local/share/opencode-orchestration/runs
+  install -d -m 700 "$worker_log_dir"
+  worker_log="$worker_log_dir/$worker_run_id.jsonl"
+  umask 077
+  set +e
+  timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+    opencode run --format json --agent "$worker_agent" --model "$worker_model" "$worker_task" >"$worker_log"
+  worker_status=$?
+  set -e
+  jq -r 'select(.type == "text") | .part.text' "$worker_log"
+  /home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh \
+    "$worker_repository" "$worker_issue" "$worker_role" "$worker_model" "$worker_log" "run_id=$worker_run_id status=$worker_status"
+  exit "$worker_status"
+fi
+
+exec timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+  opencode run --agent "$worker_agent" --model "$worker_model" "$worker_task"
