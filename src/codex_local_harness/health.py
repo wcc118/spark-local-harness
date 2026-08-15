@@ -58,6 +58,9 @@ class RunHealth:
     outcome: str = "unknown"
     scout_findings: int = 0
     useful_scout_findings: int = 0
+    turns: int = 0
+    tool_calls: int = 0
+    tool_errors: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -70,8 +73,8 @@ class RunHealth:
             raise ValueError("timing and correction counts must be non-negative")
         if self.intervention_depth not in INTERVENTION_DEPTHS:
             raise ValueError("invalid intervention depth")
-        if self.scout_findings < 0 or self.useful_scout_findings < 0:
-            raise ValueError("finding counts must be non-negative")
+        if min(self.scout_findings, self.useful_scout_findings, self.turns, self.tool_calls, self.tool_errors) < 0:
+            raise ValueError("finding and activity counts must be non-negative")
         if self.useful_scout_findings > self.scout_findings:
             raise ValueError("useful findings cannot exceed total findings")
         if self.schema_version != SCHEMA_VERSION:
@@ -142,6 +145,9 @@ def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
         "correction_cycles": sum(item.correction_cycle for item in items),
         "scout_findings": sum(item.scout_findings for item in items),
         "useful_scout_findings": sum(item.useful_scout_findings for item in items),
+        "turns": sum(item.turns for item in items),
+        "tool_calls": sum(item.tool_calls for item in items),
+        "tool_errors": sum(item.tool_errors for item in items),
         "median_wall_seconds": statistics.median(item.wall_seconds for item in items) if items else 0.0,
     }
 
