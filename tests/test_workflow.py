@@ -26,3 +26,13 @@ def test_workflow_preserves_correction_stop_reason():
     ])[0]
     assert operation["current_stage"] == "correction"
     assert operation["stop_reason"] == "elapsed-budget"
+
+
+def test_workflow_accepts_not_applicable_without_changing_pending_defaults():
+    operation = derive_operations([
+        event("one", "evidence", "passed", "2026-08-15T18:00:00Z"),
+        event("two", "correction", "not-applicable", "2026-08-15T18:01:00Z"),
+    ])[0]
+    states = {stage["stage"]: stage["state"] for stage in operation["stages"]}
+    assert states["correction"] == "not-applicable"
+    assert states["merge"] == "pending"

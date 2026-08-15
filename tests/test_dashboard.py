@@ -233,3 +233,13 @@ def test_non_active_stages_do_not_show_orbit_light(tmp_path):
     assert 'class="stage active"' in page
     assert 'class="stage pending"' in page
     assert ".stage.pending{color:var(--muted);border-color:#555b66;background:#22252d}" in page
+
+
+def test_not_applicable_stage_is_rendered_as_not_needed(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "correction", "not-applicable", "2026-08-15T18:00:00Z", 19))
+    page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
+    assert 'class="stage not-applicable"' in page
+    assert '<strong class="stage-state">not needed</strong>' in page
+    assert ".stage.not-applicable{color:#737b8c;border-color:#343946;background:transparent}" in page
