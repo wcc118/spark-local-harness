@@ -9,6 +9,7 @@ from codex_local_harness.roles import (
     ScoutResult,
     DesignedTestsResult,
     parse_result,
+    normalize_single_json_fence,
     role_contract,
 )
 
@@ -79,3 +80,9 @@ def test_scout_accepts_no_findings_but_rejects_bad_location():
 def test_parser_rejects_markdown_fences_and_extra_prose():
     with pytest.raises(ValueError, match="exactly one JSON"):
         parse_result(AdvisoryRole.SCOUT, "```json\n{}\n```")
+
+
+def test_normalizer_accepts_one_json_fence_but_no_surrounding_prose():
+    assert normalize_single_json_fence('```json\n{"findings": []}\n```') == '{"findings": []}'
+    with pytest.raises(ValueError, match="exactly one"):
+        normalize_single_json_fence('Here it is:\n```json\n{}\n```')
