@@ -40,6 +40,8 @@ class DashboardSource:
             runs, adjudications, lifecycle,
         )
         frontier = latest_status(frontier_records)
+        operations = derive_operations(workflow)
+        current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
         return {
             "schema_version": 1,
             "release": self.release,
@@ -49,7 +51,8 @@ class DashboardSource:
             "sources": statuses,
             "summary": summarize_views(views),
             "runs": [view.as_dict() for view in views],
-            "operations": list(derive_operations(workflow)),
+            "operations": current_operations,
+            "superseded_operations": sum(operation["current_state"] == "superseded" for operation in operations),
             "codex": frontier.as_dict() if frontier else FrontierStatus(
                 "unavailable", "1970-01-01T00:00:00Z", "unavailable", note_code="official-interface-unavailable"
             ).as_dict(),

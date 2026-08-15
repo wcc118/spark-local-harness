@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -7,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def digest(path):
-    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    content = subprocess.run(["git", "show", f"v0.1.1:{path}"], cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout
+    return hashlib.sha256(content).hexdigest()
 
 
 def test_v011_freeze_matches_realtime_artifacts():
@@ -26,6 +28,8 @@ def test_v011_freeze_matches_realtime_artifacts():
 
 
 def test_v011_version_and_baseline_nonreplacement():
-    assert 'version = "0.1.1"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'version = "0.1.2"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    tagged = subprocess.run(["git", "show", "v0.1.1:pyproject.toml"], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
+    assert 'version = "0.1.1"' in tagged
     freeze = json.loads((ROOT / "profiles/v0.1.1.freeze.json").read_text(encoding="utf-8"))
     assert freeze["shadow_install"]["baseline_replaced"] is False
