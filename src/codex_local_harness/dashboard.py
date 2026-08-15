@@ -186,6 +186,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
     context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
+    interactive_tokens = f"{codex['tokens_used']:,}" if codex["tokens_used"] is not None else "Unavailable"
     plan = f"{codex['plan_remaining_percent']:.1f}%" if codex["plan_remaining_percent"] is not None else "Unavailable"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -207,7 +208,7 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
 {source_banner}
 <div class="cards">{card_html}</div>
-<div class="telemetry"><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Newest source update</span><strong>{html.escape(newest_text)}</strong><small>{snapshot['freshness']['existing_files']} / {snapshot['freshness']['source_files']} sources present</small></section></div>
+<div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Newest source update</span><strong>{html.escape(newest_text)}</strong><small>{snapshot['freshness']['existing_files']} / {snapshot['freshness']['source_files']} sources present</small></section></div>
 <h2>Current workflow</h2>{operations}
 <h2>Run history</h2>
 <div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>

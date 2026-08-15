@@ -91,9 +91,11 @@ def test_snapshot_includes_workflow_and_explicitly_unavailable_codex_data(tmp_pa
     assert snapshot["operations"][0]["current_stage"] == "review"
     assert snapshot["codex"]["source"] == "unavailable"
     assert snapshot["codex"]["context_used"] is None
+    assert snapshot["codex"]["tokens_used"] is None
     page = render_dashboard(snapshot)
     assert "Current workflow" in page
     assert "Unavailable" in page
+    assert "Interactive Codex tokens" in page
 
 
 def test_sse_emits_snapshot_event(tmp_path):

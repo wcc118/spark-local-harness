@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     frontier.add_argument("--plan-remaining-percent", type=float)
     frontier.add_argument("--plan-refresh-at")
     frontier.add_argument("--note-code")
+    frontier.add_argument("--tokens-used", type=int)
 
     args = parser.parse_args(argv)
     try:
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             record = FrontierStatus(
                 args.status_id, args.observed_at, args.source, args.context_used, args.context_window,
                 args.plan_remaining_percent, args.plan_refresh_at, args.note_code,
+                args.tokens_used,
             )
         append_record(args.records, record)
     except (OSError, ValueError) as exc:

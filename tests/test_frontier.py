@@ -9,9 +9,16 @@ def test_unavailable_status_never_infers_context_or_plan():
     assert status.plan_remaining_percent is None
     with pytest.raises(ValueError, match="cannot contain inferred"):
         FrontierStatus("status-2", "2026-08-15T18:00:00Z", "unavailable", context_used=10)
+    with pytest.raises(ValueError, match="cannot contain inferred"):
+        FrontierStatus("status-3", "2026-08-15T18:00:00Z", "unavailable", tokens_used=10)
 
 
 def test_operator_report_is_timestamped_and_latest_is_derived():
     old = FrontierStatus("old", "2026-08-15T18:00:00Z", "operator-reported", context_used=100, context_window=1000)
     new = FrontierStatus("new", "2026-08-15T18:01:00Z", "operator-reported", plan_remaining_percent=90, plan_refresh_at="2026-08-16T00:00:00Z")
     assert latest_status([new, old]) == new
+
+
+def test_measured_status_can_report_interactive_tokens():
+    status = FrontierStatus("measured", "2026-08-15T18:00:00Z", "measured", tokens_used=1234)
+    assert status.tokens_used == 1234

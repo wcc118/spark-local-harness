@@ -40,6 +40,8 @@ shows whether displayed data is fresh.
   delivery, review, evidence, Codex decision, correction, merge, and post-merge.
 - **Recorded frontier tokens** include only frontier usage present in harness
   run records. They do not estimate this interactive Codex thread.
+- **Interactive Codex tokens** are separate and stay `Unavailable` unless an
+  authoritative measured or timestamped operator-reported value is supplied.
 - **Codex context and plan** show measured or timestamped operator-reported
   values. They remain `Unavailable` when no authoritative interface exists.
 
