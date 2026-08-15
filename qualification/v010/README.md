@@ -14,7 +14,10 @@ Launch the local read-only view from the repository root:
 PYTHONPATH=src python3 -m codex_local_harness.dashboard \
   --runs qualification/v010/replay-runs.jsonl \
   --adjudications qualification/v010/replay-adjudications.jsonl \
-  --lifecycle qualification/v010/replay-lifecycle.jsonl
+  --lifecycle qualification/v010/replay-lifecycle.jsonl \
+  --workflow qualification/v011/replay-workflow.jsonl \
+  --frontier qualification/v011/replay-frontier.jsonl \
+  --mode replay
 ```
 
 Then open `http://127.0.0.1:8765`. The server rejects non-GET methods and

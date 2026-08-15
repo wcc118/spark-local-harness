@@ -1,0 +1,36 @@
+{
+  "release": "v0.1.1",
+  "predecessor": "v0.1.0",
+  "hypothesis": "real-time live workflow visibility improves human diagnostic participation without changing orchestration",
+  "governance": {
+    "orchestrator": "codex",
+    "merge_authority": "codex",
+    "dashboard_authority": "read-only",
+    "browser_transport": "server-sent-events"
+  },
+  "codex_telemetry": {
+    "allowed_provenance": ["measured", "operator-reported", "unavailable"],
+    "context_estimation": false,
+    "plan_estimation": false
+  },
+  "validation": {
+    "tests_passed": 191,
+    "sse_initial_and_changed_events_observed": true,
+    "replay_workflow_current_stage": "correction",
+    "mutation_methods_allowed": false
+  },
+  "shadow_install": {
+    "backup": "/home/connellwc83/.local/share/codex-local-harness/backups/20260815T211426Z-708091",
+    "baseline_worker_sha256": "37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415",
+    "baseline_replaced": false
+  },
+  "sha256": {
+    "candidate_worker": "9851c1b20be44eca7c24bb7b73076a37cb8031e8ae1937e310196724125b7f73",
+    "dashboard": "36a564895674020d791747e79630c824090e3e2df360bba9509117a599caeac1",
+    "workflow": "c306d35cb5f6338efbf68abf8779c4e55644f5397030e6dff9382e460a223118",
+    "frontier": "dc6be64d8bfcddf1ff8a55464d9f796a92ab63f24d9b1d5998db399e4a2e04fd",
+    "observe_cli": "91e6fecf237ba8cb89d1ad165a236685e01669a88ec15dded61077b4b654131e",
+    "replay_workflow": "b83171db53277ec29f098f94824247970c3a7d8c8a3e63ce16ed852be393e8d8",
+    "replay_frontier": "fdb41e3861648455785976202432782706199bfb818ee585c040cb70ad8619a9"
+  }
+}
