@@ -129,3 +129,14 @@ def test_missing_and_malformed_sources_are_visible(tmp_path):
     page = render_dashboard(snapshot)
     assert "Source warning" in page
     assert "runs=malformed" in page
+
+
+def test_superseded_operation_is_retained_but_not_current(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("old-1", "old-chain", "local-work", "active", "2026-08-15T18:00:00Z", 19))
+    append_record(workflow, WorkflowEvent("old-2", "old-chain", "post-merge", "superseded", "2026-08-15T18:01:00Z", 19, stop_reason="canonical-operation-replaced"))
+    append_record(workflow, WorkflowEvent("new-1", "issue-19", "post-merge", "passed", "2026-08-15T18:02:00Z", 19))
+    snapshot = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot()
+    assert [operation["operation_id"] for operation in snapshot["operations"]] == ["issue-19"]
+    assert snapshot["superseded_operations"] == 1
