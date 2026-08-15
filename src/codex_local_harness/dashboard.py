@@ -268,12 +268,26 @@ def main(argv: list[str] | None = None) -> int:
 
 
 DASHBOARD_JS = """(() => {
-  const state = document.getElementById('connection');
   let initial = true;
   const events = new EventSource('/events');
-  events.addEventListener('open', () => { state.textContent = 'live'; state.style.color = 'var(--good)'; });
-  events.addEventListener('snapshot', () => { if (initial) { initial = false; } else { location.reload(); } });
-  events.addEventListener('error', () => { state.textContent = 'disconnected'; state.style.color = 'var(--bad)'; });
+  const connection = (text, color) => {
+    const state = document.getElementById('connection');
+    if (state) { state.textContent = text; state.style.color = color; }
+  };
+  const refresh = async () => {
+    const response = await fetch('/', {cache: 'no-store'});
+    if (!response.ok) { throw new Error('dashboard refresh failed'); }
+    const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const current = document.querySelector('main');
+    const replacement = parsed.querySelector('main');
+    if (current && replacement) { current.replaceWith(replacement); }
+    connection('live', 'var(--good)');
+  };
+  events.addEventListener('open', () => connection('live', 'var(--good)'));
+  events.addEventListener('snapshot', () => {
+    if (initial) { initial = false; } else { refresh().catch(() => connection('stale', 'var(--bad)')); }
+  });
+  events.addEventListener('error', () => connection('disconnected', 'var(--bad)'));
 })();
 """
 

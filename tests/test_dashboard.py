@@ -110,6 +110,14 @@ def test_sse_emits_snapshot_event(tmp_path):
         server.server_close()
 
 
+def test_browser_updates_dom_without_full_page_reload():
+    from codex_local_harness.dashboard import DASHBOARD_JS
+
+    assert "fetch('/', {cache: 'no-store'})" in DASHBOARD_JS
+    assert "replaceWith(replacement)" in DASHBOARD_JS
+    assert "location.reload" not in DASHBOARD_JS
+
+
 def test_missing_and_malformed_sources_are_visible(tmp_path):
     runs = tmp_path / "runs.jsonl"
     runs.write_text("not-json\n", encoding="utf-8")

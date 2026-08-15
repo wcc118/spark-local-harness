@@ -14,7 +14,7 @@
     "plan_estimation": false
   },
   "validation": {
-    "tests_passed": 189,
+    "tests_passed": 190,
     "sse_initial_and_changed_events_observed": true,
     "replay_workflow_current_stage": "correction",
     "mutation_methods_allowed": false
@@ -26,7 +26,7 @@
   },
   "sha256": {
     "candidate_worker": "9851c1b20be44eca7c24bb7b73076a37cb8031e8ae1937e310196724125b7f73",
-    "dashboard": "c57cc1d2b59bf65efbce1ec7920e4f187f45b5b5370d65080553ac8642f67393",
+    "dashboard": "4b2712c7afed48b9a30c56cbe4033e555eaea5af5992ab1fb2ce11546a1305c6",
     "workflow": "c306d35cb5f6338efbf68abf8779c4e55644f5397030e6dff9382e460a223118",
     "frontier": "4373a9b7609e6c89400bb50d6824ae81958cfc20827fc800cfc39fa2e5911506",
     "observe_cli": "9351d8d71e30837e0374ac035baca4d01be1091a2160e42c93b989b59a2e6048",
