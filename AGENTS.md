@@ -1,0 +1,47 @@
+# Codex-Governed Local Harness
+
+Codex is the architectural steward, escalation layer, final semantic reviewer,
+and merge authority. Local models perform bounded repository labor. OpenCode is
+a replaceable worker runtime, not a top-level orchestrator.
+
+## Workflow
+
+1. Work from one GitHub issue with explicit acceptance criteria.
+2. Use a dedicated branch and small, reviewable commits.
+3. Keep architecture, security boundaries, public API changes, migrations, and
+   merge decisions with Codex.
+4. Give local workers bounded role packets. They may not select work, redefine
+   acceptance criteria, publish approval, merge, or delegate orchestration.
+5. Establish facts with deterministic verification before model judgment.
+6. Bind every review and publication decision to the exact issue, PR, and head
+   SHA. Reject stale evidence.
+7. Record normalized run health without credentials or unnecessary raw prompt
+   content.
+8. Change production behavior only through a measured candidate and preserve a
+   tested rollback profile.
+
+## Merge policy
+
+Codex may merge when acceptance criteria are satisfied, required checks pass,
+the reviewed head is current, the diff is within scope, evidence is complete,
+and no unresolved material finding remains. A local model verdict alone never
+authorizes merge.
+
+Codex must block or request correction for ambiguous requirements, stale or
+contradictory evidence, weakened tests, unexplained failures, unexpected risk,
+or a broken harness invariant.
+
+## Recursive improvement
+
+The harness learns through controlled experiments:
+
+1. Observe normalized health evidence.
+2. Diagnose a repeated behavior.
+3. Record a falsifiable hypothesis in an issue or ADR.
+4. Change one bounded variable.
+5. Compare the candidate with a frozen baseline.
+6. Promote or roll back through a Codex merge decision.
+
+Telemetry never changes prompts, routes, permissions, or merge policy
+automatically.
+

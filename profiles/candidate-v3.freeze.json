@@ -1,0 +1,34 @@
+{
+  "name": "candidate-v3",
+  "frozen_at": "2026-08-15T12:40:58Z",
+  "shared_boundary_tests": "114 passed",
+  "security_boundary": {
+    "trigger_run": "20260815T085444Z-4038106",
+    "public_comments_removed": true,
+    "inference_environment": "env-i allowlist with disposable HOME",
+    "remote_publication_owner": "deterministic coder postflight",
+    "credential_rotation_required_before_inference": true
+  },
+  "qualification": {
+    "repository": "wcc118/codex-harness-benchmark",
+    "small_issue": 6,
+    "medium_issue": 10,
+    "complex_issue": 8,
+    "escalation_issue": 12,
+    "complex_final_head": "01b69cfc2e66461b6832cc613bd874a497cfc906",
+    "complex_final_reviewer_run": "20260815T081147Z-3975422",
+    "final_label": "status/review-passed"
+  },
+  "sha256": {
+    "bin/codex-local-worker": "37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415",
+    "bin/codex-local-critic": "027dc0219fe085f19bce43c09124457c71d778174eb200dd1cc4dcafe6be7550",
+    "review.py": "2dccd75f7f892c4694171b3d8610912bd875f00b606da73ab72a4fe8f8ea7a0f",
+    "coder.py": "91c25c096ad4e3223ac01ac292d2594eec78ade83e91953c7a268f68a2f8f8c8",
+    "critic.py": "e0594df75907aaf35ad6b847a061cb6eaa6076761538825950b09d7c73b7ec34",
+    "routing.py": "277c4e2128e5120262284a4490025a6ad118e7294f9d671497557d53ff93639d",
+    "pipeline.py": "1c3376106dc5e39f491e4b0c7229ca11d28f2b98c73d363f7109e246b2f13540",
+    "opencode.json": "17efa2b30993b7a0c73eb6e62bef34b7a1fae2f69c279521a27168a67c7d59fe",
+    "coder.md": "a4a2e651173b6c980eeffe9c30e5799aa72b6a0a51eb4dfa6720dc04a3f98a9d",
+    "reviewer.md": "554b0ced560c2ebca6a95e67da0b91ce2becb2aeee2963d97e203bd716df66a9"
+  }
+}

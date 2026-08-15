@@ -1,0 +1,448 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Sequence
+
+
+RESULT_PREFIX = "REVIEW_RESULT_JSON="
+VERDICTS = {"APPROVE", "REQUEST_CHANGES", "ESCALATE"}
+WORKFLOW_LABELS = {
+    "status/backlog",
+    "status/in-progress",
+    "status/review",
+    "status/review-passed",
+    "status/blocked",
+    "status/done",
+}
+
+
+class ReviewError(RuntimeError):
+    """A deterministic review-transaction failure."""
+
+
+Run = Callable[[Sequence[str], Path | None], str]
+
+
+def run_command(argv: Sequence[str], cwd: Path | None = None) -> str:
+    completed = subprocess.run(
+        list(argv),
+        cwd=cwd,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ReviewError(f"command failed ({completed.returncode}): {' '.join(argv)}: {detail}")
+    return completed.stdout
+
+
+def normalize_remote(remote: str) -> str:
+    value = remote.strip()
+    patterns = (
+        r"https://github\.com/(?P<repo>[^/]+/[^/]+?)(?:\.git)?$",
+        r"git@github\.com:(?P<repo>[^/]+/[^/]+?)(?:\.git)?$",
+        r"ssh://git@github\.com/(?P<repo>[^/]+/[^/]+?)(?:\.git)?$",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, value)
+        if match:
+            return match.group("repo")
+    raise ReviewError(f"unsupported GitHub remote: {value}")
+
+
+@dataclass(frozen=True)
+class Envelope:
+    schema_version: int
+    repository: str
+    issue: int
+    pull_request: int
+    checkout: str
+    branch: str
+    head_sha: str
+    base_sha: str
+    base_branch: str
+    publication_mode: str = "comment"
+    tracked_generated_artifacts: tuple[str, ...] = ()
+    tracked_generated_artifact_count: int = 0
+    scratch_dir: str | None = None
+    runtime_home: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.__dict__.copy()
+
+
+def _json_command(run: Run, argv: Sequence[str], cwd: Path | None = None) -> Any:
+    try:
+        return json.loads(run(argv, cwd))
+    except json.JSONDecodeError as exc:
+        raise ReviewError(f"invalid JSON from {' '.join(argv)}") from exc
+
+
+def build_envelope(
+    checkout: Path,
+    repository: str,
+    issue: int,
+    pull_request: int,
+    run: Run = run_command,
+    scratch_dir: Path | None = None,
+    runtime_home: Path | None = None,
+) -> Envelope:
+    canonical = checkout.resolve(strict=True)
+    root = Path(run(["git", "rev-parse", "--show-toplevel"], canonical).strip()).resolve()
+    if root != canonical:
+        raise ReviewError(f"checkout must be the Git root: expected {canonical}, observed {root}")
+    if run(["git", "status", "--porcelain=v1"], canonical).strip():
+        raise ReviewError("review checkout is not clean")
+
+    remote = normalize_remote(run(["git", "remote", "get-url", "origin"], canonical))
+    if remote.casefold() != repository.casefold():
+        raise ReviewError(f"remote mismatch: expected {repository}, observed {remote}")
+
+    branch = run(["git", "branch", "--show-current"], canonical).strip()
+    head_sha = run(["git", "rev-parse", "HEAD"], canonical).strip()
+    pr = _json_command(
+        run,
+        [
+            "gh", "pr", "view", str(pull_request), "--repo", repository,
+            "--json", "number,state,headRefName,headRefOid,baseRefName",
+        ],
+        canonical,
+    )
+    issue_data = _json_command(
+        run,
+        ["gh", "issue", "view", str(issue), "--repo", repository, "--json", "number,state,labels"],
+        canonical,
+    )
+    if pr.get("number") != pull_request or pr.get("state") != "OPEN":
+        raise ReviewError("pull request is missing or not open")
+    if issue_data.get("number") != issue or issue_data.get("state") != "OPEN":
+        raise ReviewError("issue is missing or not open")
+    if branch != pr.get("headRefName"):
+        raise ReviewError(f"branch mismatch: checkout={branch}, PR={pr.get('headRefName')}")
+    if head_sha != pr.get("headRefOid"):
+        raise ReviewError(f"head SHA mismatch: checkout={head_sha}, PR={pr.get('headRefOid')}")
+    base_branch = str(pr.get("baseRefName") or "")
+    if not base_branch:
+        raise ReviewError("pull request has no base branch")
+    base_sha = run(
+        ["gh", "api", f"repos/{repository}/git/ref/heads/{base_branch}", "--jq", ".object.sha"],
+        canonical,
+    ).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+        raise ReviewError("GitHub returned an invalid base SHA")
+    labels = {item["name"] for item in issue_data.get("labels", [])}
+    workflow = labels & WORKFLOW_LABELS
+    if workflow != {"status/review"}:
+        raise ReviewError(f"issue must have exactly status/review; observed {sorted(workflow)}")
+    tracked_files = run(["git", "ls-files"], canonical).splitlines()
+    generated = tuple(
+        path
+        for path in tracked_files
+        if re.search(r"(^|/)(?:__pycache__|\.pytest_cache)/|\.pyc$", path)
+    )
+
+    return Envelope(
+        schema_version=1,
+        repository=repository,
+        issue=issue,
+        pull_request=pull_request,
+        checkout=str(canonical),
+        branch=branch,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        base_branch=base_branch,
+        tracked_generated_artifacts=generated[:25],
+        tracked_generated_artifact_count=len(generated),
+        scratch_dir=str(scratch_dir.resolve(strict=True)) if scratch_dir else None,
+        runtime_home=str(runtime_home.resolve(strict=True)) if runtime_home else None,
+    )
+
+
+def prepare_prompt(envelope: Envelope, task: str) -> str:
+    identity = json.dumps(envelope.as_dict(), sort_keys=True, separators=(",", ":"))
+    return (
+        "IMMUTABLE_REVIEW_ENVELOPE=" + identity + "\n\n"
+        "Review only the checkout and commit identified above. Do not access another checkout. "
+        "Do not change GitHub state. End with exactly one single-line machine result prefixed "
+        f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
+        "coder findings; never delete, regenerate, or repair them. Test execution is configured "
+        "not to write bytecode or pytest caches. If temporary scripts or files are needed, write "
+        f"them only below the harness-owned scratch directory {envelope.scratch_dir}; never use "
+        f"another /tmp or external path. The disposable runtime home {envelope.runtime_home} is "
+        "also harness-owned and may contain interpreter or package-manager runtime files only.\n\n"
+        f"TASK:\n{task}"
+    )
+
+
+def parse_result(log_path: Path) -> dict[str, Any]:
+    candidates: list[str] = []
+    for line_number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ReviewError(f"invalid event JSON at line {line_number}") from exc
+        if event.get("type") != "text":
+            continue
+        text = str(event.get("part", {}).get("text", ""))
+        for output_line in text.splitlines():
+            if output_line.startswith(RESULT_PREFIX):
+                candidates.append(output_line[len(RESULT_PREFIX):])
+    if len(candidates) != 1:
+        raise ReviewError(f"expected exactly one structured result, observed {len(candidates)}")
+    try:
+        result = json.loads(candidates[0])
+    except json.JSONDecodeError as exc:
+        raise ReviewError("structured result is not valid JSON") from exc
+    if not isinstance(result, dict):
+        raise ReviewError("structured result must be an object")
+    return result
+
+
+def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
+    checkout = Path(envelope.checkout).resolve()
+    trusted_tool_roots = (Path.home() / ".local/bin", Path.home() / "bin")
+    forbidden_commands = re.compile(
+        r"(^|[;&|]\s*)(gh|git\s+(?:push|commit|checkout|switch|reset|clean|rm)|"
+        r"rm|rmdir|unlink|shred|sed\s+-i)(?:\s|$)"
+    )
+    absolute_path = re.compile(r"/(?:home|tmp|var|opt|srv)/[^\s'\";|&<>\\]+")
+    violations: list[str] = []
+    for line_number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ReviewError(f"invalid event JSON at line {line_number}") from exc
+        if event.get("type") != "tool_use":
+            continue
+        part = event.get("part", {})
+        tool = str(part.get("tool", ""))
+        state = part.get("state", {})
+        if state.get("status") not in {None, "completed"}:
+            continue
+        inputs = state.get("input", {})
+        if not isinstance(inputs, dict):
+            continue
+        if tool in {"github", "gitea"} or tool.startswith(("github_", "gitea_")):
+            violations.append(f"line {line_number}: prohibited GitHub/Gitea tool {tool}")
+        command = str(inputs.get("command", inputs.get("cmd", "")))
+        if command and forbidden_commands.search(command):
+            violations.append(f"line {line_number}: prohibited command")
+        values = [str(value) for value in inputs.values() if isinstance(value, str)]
+        for value in values:
+            for match in absolute_path.findall(value):
+                candidate = Path(match.rstrip(".,:)]}" )).resolve(strict=False)
+                harness_roots = [
+                    Path(path).resolve()
+                    for path in (envelope.scratch_dir, envelope.runtime_home)
+                    if path
+                ]
+                allowed_roots = [*harness_roots, *trusted_tool_roots]
+                if any(candidate == root or root in candidate.parents for root in allowed_roots):
+                    continue
+                try:
+                    candidate.relative_to(checkout)
+                except ValueError:
+                    violations.append(f"line {line_number}: path outside checkout: {candidate}")
+    if violations:
+        raise ReviewError("tool-scope audit failed: " + "; ".join(violations[:10]))
+
+
+def verify_checkout_unchanged(envelope: Envelope, run: Run = run_command) -> None:
+    checkout = Path(envelope.checkout)
+    root = Path(run(["git", "rev-parse", "--show-toplevel"], checkout).strip()).resolve()
+    if root != checkout.resolve():
+        raise ReviewError("checkout root changed during review")
+    if run(["git", "rev-parse", "HEAD"], checkout).strip() != envelope.head_sha:
+        raise ReviewError("checkout HEAD changed during review")
+    if run(["git", "branch", "--show-current"], checkout).strip() != envelope.branch:
+        raise ReviewError("checkout branch changed during review")
+    if run(["git", "status", "--porcelain=v1"], checkout).strip():
+        raise ReviewError("checkout was mutated during review")
+
+
+def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
+    result.setdefault("escalation_reason", None)
+    required = {
+        "schema_version", "verdict", "repository", "issue", "pull_request",
+        "reviewed_head_sha", "criteria", "findings", "tests", "confidence",
+        "summary", "escalation_reason",
+    }
+    missing = sorted(required - result.keys())
+    if missing:
+        raise ReviewError(f"structured result is missing fields: {missing}")
+    if result["schema_version"] != 1:
+        raise ReviewError("unsupported result schema version")
+    verdict = result["verdict"]
+    if verdict not in VERDICTS:
+        raise ReviewError(f"invalid verdict: {verdict}")
+    identities = {
+        "repository": envelope.repository,
+        "issue": envelope.issue,
+        "pull_request": envelope.pull_request,
+        "reviewed_head_sha": envelope.head_sha,
+    }
+    for field, expected in identities.items():
+        if result[field] != expected:
+            raise ReviewError(f"result identity mismatch for {field}")
+    for field in ("criteria", "findings", "tests"):
+        if not isinstance(result[field], list):
+            raise ReviewError(f"{field} must be a list")
+    blockers = [f for f in result["findings"] if isinstance(f, dict) and f.get("severity") == "blocker"]
+    if verdict == "APPROVE" and blockers:
+        raise ReviewError("APPROVE cannot contain blocker findings")
+    if verdict == "ESCALATE" and not result["escalation_reason"]:
+        raise ReviewError("ESCALATE requires an escalation reason")
+    return result
+
+
+def render_comment(result: dict[str, Any], envelope: Envelope, run_id: str) -> str:
+    marker = f"<!-- codex-review:{run_id}:{envelope.head_sha} -->"
+    lines = [
+        marker,
+        "## Automated independent review",
+        "",
+        f"**Verdict:** `{result['verdict']}`",
+        f"**Reviewed commit:** `{envelope.head_sha}`",
+        f"**Confidence:** `{result['confidence']}`",
+        "",
+        str(result["summary"]),
+    ]
+    findings = result.get("findings", [])
+    if findings:
+        lines.extend(["", "### Findings", ""])
+        for finding in findings:
+            if isinstance(finding, dict):
+                severity = finding.get("severity", "unspecified")
+                message = finding.get("message", finding.get("summary", "unspecified finding"))
+                lines.append(f"- **{severity}:** {message}")
+            else:
+                lines.append(f"- {finding}")
+    lines.extend(["", "_Published deterministically from a validated reviewer artifact._", ""])
+    return "\n".join(lines)
+
+
+def _current_pr_sha(envelope: Envelope, run: Run) -> str:
+    data = _json_command(
+        run,
+        ["gh", "pr", "view", str(envelope.pull_request), "--repo", envelope.repository, "--json", "headRefOid,state"],
+    )
+    if data.get("state") != "OPEN":
+        raise ReviewError("pull request is no longer open")
+    return str(data.get("headRefOid") or "")
+
+
+def publish_result(
+    result: dict[str, Any],
+    envelope: Envelope,
+    run_id: str,
+    run: Run = run_command,
+) -> dict[str, Any]:
+    if _current_pr_sha(envelope, run) != envelope.head_sha:
+        raise ReviewError("stale review: pull-request head changed")
+    existing = _json_command(
+        run,
+        ["gh", "pr", "view", str(envelope.pull_request), "--repo", envelope.repository, "--json", "comments"],
+    )
+    marker = f"<!-- codex-review:{run_id}:{envelope.head_sha} -->"
+    matches = [c for c in existing.get("comments", []) if marker in str(c.get("body", ""))]
+    if len(matches) > 1:
+        raise ReviewError("multiple comments already use this review marker")
+    comment_url = matches[0].get("url") if matches else None
+    if not matches:
+        body = render_comment(result, envelope, run_id)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write(body)
+            body_path = Path(handle.name)
+        try:
+            comment_url = run(
+                ["gh", "pr", "comment", str(envelope.pull_request), "--repo", envelope.repository, "--body-file", str(body_path)],
+            ).strip()
+        finally:
+            body_path.unlink(missing_ok=True)
+
+    target = "status/review-passed" if result["verdict"] == "APPROVE" else "status/blocked"
+    run(
+        [
+            "gh", "issue", "edit", str(envelope.issue), "--repo", envelope.repository,
+            "--remove-label", "status/review", "--add-label", target,
+        ],
+    )
+    issue_data = _json_command(
+        run,
+        ["gh", "issue", "view", str(envelope.issue), "--repo", envelope.repository, "--json", "labels"],
+    )
+    labels = {item["name"] for item in issue_data.get("labels", [])}
+    workflow = labels & WORKFLOW_LABELS
+    if workflow != {target}:
+        raise ReviewError(f"label postcondition failed: expected {target}, observed {sorted(workflow)}")
+    return {"comment_url": comment_url, "label": target, "head_sha": envelope.head_sha}
+
+
+def load_envelope(path: Path) -> Envelope:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return Envelope(**data)
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("--checkout", type=Path, required=True)
+    prepare.add_argument("--repository", required=True)
+    prepare.add_argument("--issue", type=int, required=True)
+    prepare.add_argument("--pr", type=int, required=True)
+    prepare.add_argument("--task-file", type=Path, required=True)
+    prepare.add_argument("--envelope-out", type=Path, required=True)
+    prepare.add_argument("--scratch-dir", type=Path)
+    prepare.add_argument("--runtime-home", type=Path)
+
+    finalize = sub.add_parser("finalize")
+    finalize.add_argument("--envelope", type=Path, required=True)
+    finalize.add_argument("--log", type=Path, required=True)
+    finalize.add_argument("--run-id", required=True)
+    finalize.add_argument("--result-out", type=Path, required=True)
+
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "prepare":
+            envelope = build_envelope(
+                args.checkout, args.repository, args.issue, args.pr,
+                scratch_dir=args.scratch_dir, runtime_home=args.runtime_home,
+            )
+            write_json(args.envelope_out, envelope.as_dict())
+            sys.stdout.write(prepare_prompt(envelope, args.task_file.read_text(encoding="utf-8")))
+        else:
+            envelope = load_envelope(args.envelope)
+            audit_tool_scope(args.log, envelope)
+            verify_checkout_unchanged(envelope)
+            result = validate_result(parse_result(args.log), envelope)
+            publication = publish_result(result, envelope, args.run_id)
+            write_json(args.result_out, {"result": result, "publication": publication})
+            print(json.dumps(publication, sort_keys=True))
+    except (OSError, ValueError, ReviewError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

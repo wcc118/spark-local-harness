@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( $# < 2 )); then
+  echo "usage: codex-local-critic CHECKOUT --task-file FILE [FOCUS...]" >&2
+  exit 2
+fi
+
+critic_checkout=$1
+shift
+[[ ${1:-} == --task-file && $# -ge 2 ]] || { echo "ERROR: --task-file is required" >&2; exit 2; }
+critic_task_file=$2
+shift 2
+
+critic_repository=${CODEX_LOCAL_REPOSITORY:-}
+critic_issue=${CODEX_LOCAL_ISSUE:-}
+critic_pr=${CODEX_LOCAL_PR:-}
+[[ -n $critic_repository && -n $critic_issue && -n $critic_pr ]] || {
+  echo "ERROR: critic requires CODEX_LOCAL_REPOSITORY, CODEX_LOCAL_ISSUE, and CODEX_LOCAL_PR" >&2
+  exit 2
+}
+
+critic_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+critic_log_dir=/home/connellwc83/.local/share/opencode-orchestration/runs
+install -d -m 700 "$critic_log_dir"
+critic_log="$critic_log_dir/$critic_run_id.jsonl"
+critic_envelope="$critic_log_dir/$critic_run_id.envelope.json"
+critic_result="$critic_log_dir/$critic_run_id.critic.json"
+critic_runtime_home=
+cleanup() {
+  if [[ -n $critic_runtime_home && -d $critic_runtime_home ]]; then
+    rm -rf -- "$critic_runtime_home"
+  fi
+}
+trap cleanup EXIT
+critic_cli=(env PYTHONPATH=/home/connellwc83/projects/codex/local-harness/src python3 -m codex_local_harness.critic)
+focus_args=()
+for focus in "$@"; do focus_args+=(--focus "$focus"); done
+
+critic_prompt=$("${critic_cli[@]}" prepare --checkout "$critic_checkout" \
+  --repository "$critic_repository" --issue "$critic_issue" --pr "$critic_pr" \
+  --task-file "$critic_task_file" --envelope-out "$critic_envelope" "${focus_args[@]}")
+
+critic_runtime_parent=/home/connellwc83/.local/share/opencode-orchestration/worker-homes
+install -d -m 700 "$critic_runtime_parent"
+critic_runtime_home=$(mktemp -d --tmpdir="$critic_runtime_parent")
+install -d -m 700 "$critic_runtime_home/.config/opencode/agents" \
+  "$critic_runtime_home/.local/share" "$critic_runtime_home/.cache"
+jq '.mcp.github.enabled = false' /home/connellwc83/.config/opencode/opencode.json \
+  >"$critic_runtime_home/.config/opencode/opencode.json"
+cp -a /home/connellwc83/.config/opencode/agents/. \
+  "$critic_runtime_home/.config/opencode/agents/"
+critic_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
+[[ -x $critic_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $critic_opencode" >&2; exit 2; }
+critic_path=/home/connellwc83/.local/bin:/home/connellwc83/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+echo "Starting local critic: model=lmstudio/qwen/qwen3.8-27b run_id=$critic_run_id" >&2
+set +e
+env -i HOME="$critic_runtime_home" USER="${USER:-worker}" LOGNAME="${LOGNAME:-worker}" \
+  PATH="$critic_path" XDG_CONFIG_HOME="$critic_runtime_home/.config" \
+  XDG_DATA_HOME="$critic_runtime_home/.local/share" XDG_CACHE_HOME="$critic_runtime_home/.cache" \
+  LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}" NO_COLOR=1 \
+  timeout --foreground --signal=TERM --kill-after=30s "${CODEX_LOCAL_TIMEOUT_SECONDS:-1800}" \
+  "$critic_opencode" run --format json --dir "$critic_checkout" --agent helper \
+  --model lmstudio/qwen/qwen3.8-27b "$critic_prompt" >"$critic_log"
+critic_inference_status=$?
+set -e
+jq -r 'select(.type == "text") | .part.text' "$critic_log"
+[[ $critic_inference_status == 0 ]] || exit "$critic_inference_status"
+"${critic_cli[@]}" finalize --envelope "$critic_envelope" --log "$critic_log" --result-out "$critic_result"
+if [[ ${CODEX_LOCAL_RECORD_RUN:-0} == 1 ]]; then
+  /home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh \
+    "$critic_repository" "$critic_issue" critic lmstudio/qwen/qwen3.8-27b "$critic_log" \
+    "run_id=$critic_run_id inference_status=0 workflow_status=0"
+fi

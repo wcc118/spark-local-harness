@@ -1,0 +1,21 @@
+{
+  "name": "baseline-v2",
+  "status": "installed-and-qualified",
+  "routing": {
+    "helper": "lmstudio/qwen/qwen3.8-27b",
+    "coder": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+    "reviewer": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+  },
+  "review_transaction": {
+    "immutable_identity": true,
+    "structured_verdict_schema": 1,
+    "reviewer_github_writes": false,
+    "publication_mode": "same-user-pr-comment",
+    "stale_sha_rejected": true,
+    "tool_log_scope_audit": true,
+    "checkout_postflight": true,
+    "github_postconditions": true
+  },
+  "experimental_stages": []
+}
+
