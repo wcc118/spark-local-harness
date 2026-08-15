@@ -191,3 +191,39 @@ def test_empty_sources_returns_no_data_state(tmp_path):
     assert snapshot["freshness"]["existing_files"] == 3
     page = render_dashboard(snapshot)
     assert "No data" in page
+
+
+def test_active_workflow_stage_has_spinner(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "active", "2026-08-15T18:00:00Z", 19))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+    snapshot = source.snapshot()
+    page = render_dashboard(snapshot)
+    assert 'class="stage active"' in page
+    assert 'class="stage-state"' in page
+    assert "spinner" in page.lower() or "animation" in page.lower() or "spin" in page
+
+
+def test_spinner_css_respects_prefers_reduced_motion(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "active", "2026-08-15T18:00:00Z", 19))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+    snapshot = source.snapshot()
+    page = render_dashboard(snapshot)
+    assert "@media (prefers-reduced-motion:no-preference){.stage.active .stage-state::after{animation:spin 1s linear infinite}" in page
+
+
+def test_non_active_stages_do_not_show_spinner(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    # Add a passed stage and an active stage
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "intake", "passed", "2026-08-15T17:55:00Z", 19))
+    append_record(workflow, WorkflowEvent("evt-2", "issue-19", "review", "active", "2026-08-15T18:00:00Z", 19))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+    snapshot = source.snapshot()
+    page = render_dashboard(snapshot)
+    # Should have both passed and active stages
+    assert 'class="stage passed"' in page
+    assert 'class="stage active"' in page
