@@ -193,7 +193,7 @@ def test_empty_sources_returns_no_data_state(tmp_path):
     assert "No data" in page
 
 
-def test_active_workflow_stage_has_spinner(tmp_path):
+def test_active_workflow_stage_has_orbiting_light(tmp_path):
     base = fixture_source(tmp_path)
     workflow = tmp_path / "workflow.jsonl"
     append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "active", "2026-08-15T18:00:00Z", 19))
@@ -201,19 +201,19 @@ def test_active_workflow_stage_has_spinner(tmp_path):
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
     assert 'class="stage active"' in page
-    assert 'class="stage-state"' in page
-    assert "orbit" in page.lower()
+    assert '.stage.active::after{content:""' in page
+    assert "animation:stage-orbit 4s linear infinite" in page
 
 
-def test_spinner_css_respects_prefers_reduced_motion(tmp_path):
+def test_orbiting_light_respects_prefers_reduced_motion(tmp_path):
     base = fixture_source(tmp_path)
     workflow = tmp_path / "workflow.jsonl"
     append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "active", "2026-08-15T18:00:00Z", 19))
     source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
-    assert "@media (prefers-reduced-motion:no-preference){.stage.active .stage-state::after{offset-path:rect" in page
-    assert "@media (prefers-reduced-motion:reduce){.stage.active .stage-state::after{outline:2px solid var(--good)" in page
+    assert "@media (prefers-reduced-motion:no-preference){.stage.active::after{animation:stage-orbit" in page
+    assert "@media (prefers-reduced-motion:reduce){.stage.active::after{top:-4px;right:-4px;left:auto}" in page
 
 
 def test_non_active_stages_do_not_show_orbit_light(tmp_path):
@@ -228,3 +228,5 @@ def test_non_active_stages_do_not_show_orbit_light(tmp_path):
     # Should have both passed and active stages
     assert 'class="stage passed"' in page
     assert 'class="stage active"' in page
+    assert 'class="stage pending"' in page
+    assert ".stage.pending{color:var(--muted);border-color:#38425a;background:#111725}" in page
