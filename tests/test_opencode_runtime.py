@@ -57,12 +57,14 @@ def test_cli_appends_health_record_without_event_content(tmp_path, capsys):
             "--log", str(log), "--records", str(records), "--run-id", "run-1",
             "--issue", "4", "--role", "helper", "--model", "qwen3.8-27b",
             "--profile", "codex-led-v4", "--task-class", "routine", "--status", "success",
+            "--inference-status", "0", "--workflow-status", "0", "--delivery-ready", "true",
         ]
     )
     assert result == 0
     health = read_jsonl(records)[0]
     assert health.tool_errors == 1
     assert health.usage.local_total == 255
+    assert health.delivery_ready is True
     assert "prompt and response" not in records.read_text()
     assert json.loads(capsys.readouterr().out)["turns"] == 2
 
@@ -72,4 +74,3 @@ def test_parser_reports_malformed_line(tmp_path):
     path.write_text('{}\n{"type":"step_finish","part":{"tokens":{"input":-1}}}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="line 2"):
         parse_log(path)
-

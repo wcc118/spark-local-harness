@@ -30,6 +30,11 @@ class OpenCodeStats:
         task_class: str,
         status: str,
         failure_class: str | None = None,
+        inference_status: int | None = None,
+        workflow_status: int | None = None,
+        delivery_ready: bool | None = None,
+        dirty_entries: int = 0,
+        generated_artifacts: int = 0,
     ) -> RunHealth:
         return RunHealth(
             run_id=run_id,
@@ -50,6 +55,11 @@ class OpenCodeStats:
             turns=self.turns,
             tool_calls=self.tool_calls,
             tool_errors=self.tool_errors,
+            inference_status=inference_status,
+            workflow_status=workflow_status,
+            delivery_ready=delivery_ready,
+            dirty_entries=dirty_entries,
+            generated_artifacts=generated_artifacts,
         )
 
 
@@ -110,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-class", required=True)
     parser.add_argument("--status", required=True)
     parser.add_argument("--failure-class")
+    parser.add_argument("--inference-status", type=int)
+    parser.add_argument("--workflow-status", type=int)
+    parser.add_argument("--delivery-ready", choices=("true", "false", "unknown"), default="unknown")
+    parser.add_argument("--dirty-entries", type=int, default=0)
+    parser.add_argument("--generated-artifacts", type=int, default=0)
     args = parser.parse_args(argv)
     try:
         health = parse_log(args.log).as_health(
@@ -121,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
             task_class=args.task_class,
             status=args.status,
             failure_class=args.failure_class,
+            inference_status=args.inference_status,
+            workflow_status=args.workflow_status,
+            delivery_ready={"true": True, "false": False, "unknown": None}[args.delivery_ready],
+            dirty_entries=args.dirty_entries,
+            generated_artifacts=args.generated_artifacts,
         )
         append_jsonl(args.records, health)
     except (OSError, ValueError) as exc:
@@ -131,4 +151,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

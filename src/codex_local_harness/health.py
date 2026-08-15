@@ -61,6 +61,11 @@ class RunHealth:
     turns: int = 0
     tool_calls: int = 0
     tool_errors: int = 0
+    inference_status: int | None = None
+    workflow_status: int | None = None
+    delivery_ready: bool | None = None
+    dirty_entries: int = 0
+    generated_artifacts: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -73,8 +78,19 @@ class RunHealth:
             raise ValueError("timing and correction counts must be non-negative")
         if self.intervention_depth not in INTERVENTION_DEPTHS:
             raise ValueError("invalid intervention depth")
-        if min(self.scout_findings, self.useful_scout_findings, self.turns, self.tool_calls, self.tool_errors) < 0:
+        if min(
+            self.scout_findings,
+            self.useful_scout_findings,
+            self.turns,
+            self.tool_calls,
+            self.tool_errors,
+            self.dirty_entries,
+            self.generated_artifacts,
+        ) < 0:
             raise ValueError("finding and activity counts must be non-negative")
+        for value in (self.inference_status, self.workflow_status):
+            if value is not None and value < 0:
+                raise ValueError("process statuses must be non-negative")
         if self.useful_scout_findings > self.scout_findings:
             raise ValueError("useful findings cannot exceed total findings")
         if self.schema_version != SCHEMA_VERSION:
@@ -130,6 +146,7 @@ def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
     locally_autonomous = sum(
         item.intervention_depth == "none" and item.usage.frontier_total == 0 for item in items
     )
+    delivery_observations = tuple(item for item in items if item.delivery_ready is not None)
     return {
         "schema_version": SCHEMA_VERSION,
         "runs": len(items),
@@ -148,6 +165,13 @@ def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
         "turns": sum(item.turns for item in items),
         "tool_calls": sum(item.tool_calls for item in items),
         "tool_errors": sum(item.tool_errors for item in items),
+        "delivery_ready_rate": (
+            sum(item.delivery_ready is True for item in delivery_observations) / len(delivery_observations)
+            if delivery_observations else 0.0
+        ),
+        "delivery_observations": len(delivery_observations),
+        "dirty_entries": sum(item.dirty_entries for item in items),
+        "generated_artifacts": sum(item.generated_artifacts for item in items),
         "median_wall_seconds": statistics.median(item.wall_seconds for item in items) if items else 0.0,
     }
 
