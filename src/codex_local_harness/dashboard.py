@@ -74,6 +74,59 @@ class DashboardSource:
     def paths(self) -> tuple[Path, ...]:
         return tuple(path for path in (self.runs, self.adjudications, self.lifecycle, self.workflow, self.frontier) if path is not None)
 
+    def _count_records_with_timestamps(self) -> int:
+        """Count total records across all sources that have observed_at timestamps."""
+        # Load all sources to get their records
+        statuses: list[dict[str, Any]] = []
+        adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
+        lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
+        workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
+        frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
+        
+        return len(adjudications) + len(lifecycle) + len(workflow) + len(frontier_records)
+
+    def _calc_newest_record_age(self) -> float | None:
+        """Calculate the age in seconds of the newest diagnostic record timestamp."""
+        now = datetime.now(timezone.utc)
+        
+        # Load all sources to get their records
+        statuses: list[dict[str, Any]] = []
+        adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
+        lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
+        workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
+        frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
+        
+        # Extract observed_at from each record type
+        timestamps = []
+        for record in adjudications:
+            timestamps.append(record.observed_at)
+        for record in lifecycle:
+            timestamps.append(record.observed_at)
+        for record in workflow:
+            timestamps.append(record.observed_at)
+        for record in frontier_records:
+            timestamps.append(record.observed_at)
+        
+        if not timestamps:
+            return None
+        
+        # Parse and find the newest timestamp
+        newest = None
+        for ts in timestamps:
+            try:
+                parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if newest is None or parsed > newest:
+                    newest = parsed
+            except (ValueError, TypeError):
+                continue
+        
+        if newest is None:
+            return None
+        
+        # Calculate age in seconds
+        delta = now - newest
+        return delta.total_seconds()
+
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
         result = []
         for path in self.paths():
@@ -85,9 +138,53 @@ class DashboardSource:
         return tuple(result)
 
     def freshness(self) -> dict[str, Any]:
-        existing = [path.stat().st_mtime for path in self.paths() if path.exists()]
-        newest = max(existing) if existing else None
-        return {"source_files": len(self.paths()), "existing_files": sum(path.exists() for path in self.paths()), "newest_mtime_epoch": newest}
+        # Calculate the newest diagnostic record timestamp across all sources
+        newest_record_age = self._calc_newest_record_age()
+        
+        # If we have records with timestamps, use the record-based age
+        if newest_record_age is not None:
+            return {
+                "source_files": len(self.paths()),
+                "existing_files": sum(path.exists() for path in self.paths()),
+                "newest_mtime_epoch": None,
+                "newest_record_age_seconds": newest_record_age,
+                "newest_record_timestamp": None,
+                "record_count": self._count_records_with_timestamps(),
+            }
+        
+        # No records with timestamps found - show no data state
+        return {
+            "source_files": len(self.paths()),
+            "existing_files": sum(path.exists() for path in self.paths()),
+            "newest_mtime_epoch": None,
+            "newest_record_age_seconds": None,
+            "newest_record_timestamp": None,
+            "record_count": 0,
+        }
+
+
+def _format_age(seconds: float) -> str:
+    """Format age in seconds to a human-readable string."""
+    if seconds < 0:
+        return "No data"
+    
+    # Use approximate values for common time units
+    units = [
+        ("year", 365.25 * 24 * 60 * 60),
+        ("month", 30 * 24 * 60 * 60),
+        ("day", 24 * 60 * 60),
+        ("hour", 60 * 60),
+        ("minute", 60),
+        ("second", 1),
+    ]
+    
+    for name, duration in units:
+        if seconds >= duration:
+            value = int(seconds / duration)
+            suffix = "s" if value != 1 else ""
+            return f"{value} {name}{suffix} ago"
+    
+    return "just now"
 
 
 def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
@@ -184,8 +281,16 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     rows = "".join(_run_row(view) for view in views) or '<tr><td colspan="10">No diagnostic runs recorded.</td></tr>'
     operations = "".join(_operation(item) for item in snapshot["operations"]) or '<p class="empty">No workflow events recorded.</p>'
     codex = snapshot["codex"]
-    newest_epoch = snapshot["freshness"]["newest_mtime_epoch"]
-    newest_text = datetime.fromtimestamp(newest_epoch, timezone.utc).isoformat().replace("+00:00", "Z") if newest_epoch else "No data"
+    freshness = snapshot["freshness"]
+    
+    # Use the machine-readable age if available, otherwise fall back to file mtime
+    age_seconds = freshness.get("newest_record_age_seconds")
+    if age_seconds is not None:
+        newest_text = _format_age(age_seconds)
+    else:
+        newest_epoch = freshness.get("newest_mtime_epoch")
+        newest_text = datetime.fromtimestamp(newest_epoch, timezone.utc).isoformat().replace("+00:00", "Z") if newest_epoch else "No data"
+    
     source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
     context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
@@ -211,7 +316,7 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
 {source_banner}
 <div class="cards">{card_html}</div>
-<div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Newest source update</span><strong>{html.escape(newest_text)}</strong><small>{snapshot['freshness']['existing_files']} / {snapshot['freshness']['source_files']} sources present</small></section></div>
+<div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Source update age</span><strong data-age-seconds="{age_seconds if age_seconds is not None else ''}">{html.escape(newest_text)}</strong><small>{freshness['existing_files']} / {freshness['source_files']} sources present</small></section></div>
 <h2>Current workflow</h2>{operations}
 <h2>Run history</h2>
 <div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>

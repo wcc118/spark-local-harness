@@ -140,3 +140,97 @@ def test_superseded_operation_is_retained_but_not_current(tmp_path):
     snapshot = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot()
     assert [operation["operation_id"] for operation in snapshot["operations"]] == ["issue-19"]
     assert snapshot["superseded_operations"] == 1
+
+
+def test_snapshot_includes_human_readable_source_update_age(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "failed", "2026-08-15T18:00:00Z", 19, stop_reason="hidden-test"))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+    snapshot = source.snapshot()
+    
+    # Machine-readable age should be present
+    assert snapshot["freshness"]["newest_record_age_seconds"] is not None
+    assert snapshot["freshness"]["newest_record_age_seconds"] >= 0
+    
+    # Human-readable age should be present in HTML
+    page = render_dashboard(snapshot)
+    assert "ago" in page
+    assert "Source update age" in page
+
+
+def test_snapshot_includes_machine_readable_age_value(tmp_path):
+    from datetime import datetime, timezone
+    
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    # Use a timestamp that's 300 seconds ago
+    recent_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "failed", recent_time, 19, stop_reason="test"))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+    snapshot = source.snapshot()
+    
+    # Verify machine-readable age is within reasonable bounds (should be < 10 seconds)
+    age_seconds = snapshot["freshness"]["newest_record_age_seconds"]
+    assert age_seconds is not None
+    assert 0 <= age_seconds < 10
+
+
+def test_no_sources_returns_no_data_state(tmp_path):
+    source = DashboardSource(
+        tmp_path / "missing-runs.jsonl",
+        tmp_path / "missing-adj.jsonl",
+        tmp_path / "missing-life.jsonl",
+    )
+    snapshot = source.snapshot()
+    
+    # Should have no data state
+    assert snapshot["freshness"]["newest_record_age_seconds"] is None
+    assert snapshot["freshness"]["newest_mtime_epoch"] is None
+    assert snapshot["freshness"]["record_count"] == 0
+    
+    page = render_dashboard(snapshot)
+    assert "No data" in page
+
+
+def test_empty_sources_returns_no_data_state(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text("", encoding="utf-8")
+    adjudications = tmp_path / "adjudications.jsonl"
+    adjudications.write_text("", encoding="utf-8")
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    lifecycle.write_text("", encoding="utf-8")
+    
+    source = DashboardSource(runs, adjudications, lifecycle)
+    snapshot = source.snapshot()
+    
+    # Even though files exist, no records with timestamps means no data
+    assert snapshot["freshness"]["newest_record_age_seconds"] is None
+    assert snapshot["freshness"]["record_count"] == 0
+    
+    page = render_dashboard(snapshot)
+    assert "No data" in page
+
+
+def test_source_update_age_with_frontier_status(tmp_path):
+    base = fixture_source(tmp_path)
+    frontier = tmp_path / "frontier.jsonl"
+    # Use a timestamp that's 5 seconds ago
+    import time
+    from datetime import datetime, timezone
+    recent_time = datetime.fromtimestamp(time.time() - 5, timezone.utc).isoformat().replace("+00:00", "Z")
+    append_record(frontier, FrontierStatus("status-1", recent_time, "unavailable", note_code="test"))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, frontier=frontier)
+    snapshot = source.snapshot()
+    
+    # Should use the frontier status timestamp
+    age_seconds = snapshot["freshness"]["newest_record_age_seconds"]
+    assert age_seconds is not None
+    assert age_seconds >= 0
+    assert age_seconds < 10  # Within 10 seconds
+    
+    page = render_dashboard(snapshot)
+    # Either "ago" or "just now" is acceptable
+    assert "ago" in page or "just now" in page
+    # Verify data attribute in HTML
+    assert 'data-age-seconds=' in page
