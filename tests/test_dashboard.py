@@ -202,6 +202,9 @@ def test_active_workflow_stage_has_orbiting_light(tmp_path):
     page = render_dashboard(snapshot)
     assert 'class="stage active"' in page
     assert '.stage.active::after{content:""' in page
+    assert ".stage.active{border-color:var(--warn)}" in page
+    assert "top:4px;left:4px;width:6px;height:6px" in page
+    assert "top:calc(100% - 10px);left:calc(100% - 10px)" in page
     assert "animation:stage-orbit 4s linear infinite" in page
 
 
@@ -213,7 +216,7 @@ def test_orbiting_light_respects_prefers_reduced_motion(tmp_path):
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
     assert "@media (prefers-reduced-motion:no-preference){.stage.active::after{animation:stage-orbit" in page
-    assert "@media (prefers-reduced-motion:reduce){.stage.active::after{top:-4px;right:-4px;left:auto}" in page
+    assert "@media (prefers-reduced-motion:reduce){.stage.active::after{top:4px;right:4px;left:auto}" in page
 
 
 def test_non_active_stages_do_not_show_orbit_light(tmp_path):
@@ -229,4 +232,4 @@ def test_non_active_stages_do_not_show_orbit_light(tmp_path):
     assert 'class="stage passed"' in page
     assert 'class="stage active"' in page
     assert 'class="stage pending"' in page
-    assert ".stage.pending{color:var(--muted);border-color:#38425a;background:#111725}" in page
+    assert ".stage.pending{color:var(--muted);border-color:#555b66;background:#22252d}" in page
