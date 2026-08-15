@@ -12,6 +12,9 @@ def test_v010_replay_explains_all_four_states():
         FIXTURES / "replay-runs.jsonl",
         FIXTURES / "replay-adjudications.jsonl",
         FIXTURES / "replay-lifecycle.jsonl",
+        ROOT / "qualification" / "v011" / "replay-workflow.jsonl",
+        ROOT / "qualification" / "v011" / "replay-frontier.jsonl",
+        mode="replay",
     ).snapshot()
     summary = snapshot["summary"]
     assert summary["runs"] == 4
@@ -21,6 +24,9 @@ def test_v010_replay_explains_all_four_states():
     assert summary["interrupted_runs"] == 1
     assert summary["effective_outcome_counts"] == {"failed": 1, "interrupted": 1, "passed": 2}
     assert summary["confirmed_local_autonomy_rate"] == 0.5
+    assert snapshot["mode"] == "replay"
+    assert snapshot["operations"][0]["current_stage"] == "correction"
+    assert snapshot["codex"]["source"] == "unavailable"
 
     by_id = {run["run_id"]: run for run in snapshot["runs"]}
     hidden = by_id["20260815T164648Z-402544"]

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -7,7 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def digest(relative):
-    return hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    content = subprocess.run(
+        ["git", "show", f"v0.1.0:{relative}"], cwd=ROOT, check=True, stdout=subprocess.PIPE,
+    ).stdout
+    return hashlib.sha256(content).hexdigest()
 
 
 def test_v010_freeze_matches_release_artifacts():
@@ -27,6 +31,10 @@ def test_v010_freeze_matches_release_artifacts():
     }
 
 
-def test_project_version_is_first_scaffold_release():
+def test_project_version_advances_without_rewriting_v010_tag():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.1.0"' in pyproject
+    assert 'version = "0.1.1"' in pyproject
+    tagged = subprocess.run(
+        ["git", "show", "v0.1.0:pyproject.toml"], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE,
+    ).stdout
+    assert 'version = "0.1.0"' in tagged

@@ -9,6 +9,8 @@ import pytest
 from codex_local_harness.dashboard import DashboardSource, make_handler, render_dashboard
 from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, append_record
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
+from codex_local_harness.frontier import FrontierStatus
+from codex_local_harness.workflow import WorkflowEvent
 
 
 def fixture_source(tmp_path):
@@ -76,3 +78,44 @@ def test_source_reads_without_modifying_ledgers(tmp_path):
     before = {path: path.read_bytes() for path in (source.runs, source.adjudications, source.lifecycle)}
     source.snapshot()
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_snapshot_includes_workflow_and_explicitly_unavailable_codex_data(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    frontier = tmp_path / "frontier.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "failed", "2026-08-15T18:00:00Z", 19, stop_reason="hidden-test"))
+    append_record(frontier, FrontierStatus("status-1", "2026-08-15T18:00:00Z", "unavailable", note_code="official-interface-unavailable"))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, frontier)
+    snapshot = source.snapshot()
+    assert snapshot["operations"][0]["current_stage"] == "review"
+    assert snapshot["codex"]["source"] == "unavailable"
+    assert snapshot["codex"]["context_used"] is None
+    page = render_dashboard(snapshot)
+    assert "Current workflow" in page
+    assert "Unavailable" in page
+
+
+def test_sse_emits_snapshot_event(tmp_path):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(fixture_source(tmp_path)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    response = urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/events", timeout=2)
+    try:
+        assert response.readline() == b"event: snapshot\n"
+        assert response.readline() == b'data: {"changed":true}\n'
+    finally:
+        response.close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_missing_and_malformed_sources_are_visible(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text("not-json\n", encoding="utf-8")
+    source = DashboardSource(runs, tmp_path / "missing-adj.jsonl", tmp_path / "missing-life.jsonl")
+    snapshot = source.snapshot()
+    assert {item["state"] for item in snapshot["sources"]} == {"malformed", "missing"}
+    page = render_dashboard(snapshot)
+    assert "Source warning" in page
+    assert "runs=malformed" in page

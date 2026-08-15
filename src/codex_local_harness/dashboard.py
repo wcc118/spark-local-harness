@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,8 +13,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .diagnostics import Adjudication, LifecycleEvent, read_records
+from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
 from .read_model import RunView, build_run_views, summarize_views
+from .workflow import WorkflowEvent, derive_operations
 
 
 @dataclass(frozen=True)
@@ -20,21 +24,67 @@ class DashboardSource:
     runs: Path
     adjudications: Path
     lifecycle: Path
-    release: str = "0.1.0-alpha.1"
+    workflow: Path | None = None
+    frontier: Path | None = None
+    release: str = "v0.1.1"
+    mode: str = "live"
 
     def snapshot(self) -> dict[str, Any]:
+        statuses: list[dict[str, Any]] = []
+        runs = self._load(self.runs, "runs", read_jsonl, statuses)
+        adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
+        lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
+        workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
+        frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
         views = build_run_views(
-            read_jsonl(self.runs),
-            read_records(self.adjudications, Adjudication),
-            read_records(self.lifecycle, LifecycleEvent),
+            runs, adjudications, lifecycle,
         )
+        frontier = latest_status(frontier_records)
         return {
             "schema_version": 1,
             "release": self.release,
             "read_only": True,
+            "mode": self.mode,
+            "freshness": self.freshness(),
+            "sources": statuses,
             "summary": summarize_views(views),
             "runs": [view.as_dict() for view in views],
+            "operations": list(derive_operations(workflow)),
+            "codex": frontier.as_dict() if frontier else FrontierStatus(
+                "unavailable", "1970-01-01T00:00:00Z", "unavailable", note_code="official-interface-unavailable"
+            ).as_dict(),
         }
+
+    @staticmethod
+    def _load(path: Path, name: str, reader: Any, statuses: list[dict[str, Any]]) -> tuple[Any, ...]:
+        if not path.exists():
+            statuses.append({"name": name, "state": "missing", "file": path.name})
+            return ()
+        try:
+            records = reader(path)
+        except (OSError, ValueError):
+            statuses.append({"name": name, "state": "malformed", "file": path.name})
+            return ()
+        statuses.append({"name": name, "state": "ok", "file": path.name, "records": len(records)})
+        return records
+
+    def paths(self) -> tuple[Path, ...]:
+        return tuple(path for path in (self.runs, self.adjudications, self.lifecycle, self.workflow, self.frontier) if path is not None)
+
+    def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
+        result = []
+        for path in self.paths():
+            try:
+                stat = path.stat()
+                result.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except FileNotFoundError:
+                result.append((str(path), 0, 0))
+        return tuple(result)
+
+    def freshness(self) -> dict[str, Any]:
+        existing = [path.stat().st_mtime for path in self.paths() if path.exists()]
+        newest = max(existing) if existing else None
+        return {"source_files": len(self.paths()), "existing_files": sum(path.exists() for path in self.paths()), "newest_mtime_epoch": newest}
 
 
 def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
@@ -50,6 +100,10 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
                 elif route == "/api/snapshot":
                     body = json.dumps(snapshot, indent=2, sort_keys=True).encode()
                     self._send(HTTPStatus.OK, "application/json; charset=utf-8", body)
+                elif route == "/dashboard.js":
+                    self._send(HTTPStatus.OK, "text/javascript; charset=utf-8", DASHBOARD_JS.encode())
+                elif route == "/events":
+                    self._events()
                 elif route == "/healthz":
                     self._send(HTTPStatus.OK, "application/json", b'{"status":"ok","read_only":true}\n')
                 else:
@@ -73,10 +127,33 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
+
+        def _events(self) -> None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            fingerprint = None
+            heartbeat = time.monotonic()
+            try:
+                while True:
+                    current = source.fingerprint()
+                    if current != fingerprint:
+                        self.wfile.write(b"event: snapshot\ndata: {\"changed\":true}\n\n")
+                        self.wfile.flush()
+                        fingerprint = current
+                    elif time.monotonic() - heartbeat >= 15:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        heartbeat = time.monotonic()
+                    time.sleep(0.5)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -94,7 +171,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         ("Contradictions", summary["contradictions"]),
         ("Interrupted", summary["interrupted_runs"]),
         ("Local tokens", f"{summary['local_tokens']:,}"),
-        ("Frontier tokens", f"{summary['frontier_tokens']:,}"),
+        ("Recorded frontier tokens", f"{summary['frontier_tokens']:,}"),
         ("Codex interventions", summary["codex_interventions"]),
     ]
     card_html = "".join(
@@ -102,6 +179,14 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         for label, value in cards
     )
     rows = "".join(_run_row(view) for view in views) or '<tr><td colspan="10">No diagnostic runs recorded.</td></tr>'
+    operations = "".join(_operation(item) for item in snapshot["operations"]) or '<p class="empty">No workflow events recorded.</p>'
+    codex = snapshot["codex"]
+    newest_epoch = snapshot["freshness"]["newest_mtime_epoch"]
+    newest_text = datetime.fromtimestamp(newest_epoch, timezone.utc).isoformat().replace("+00:00", "Z") if newest_epoch else "No data"
+    source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
+    source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
+    context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
+    plan = f"{codex['plan_remaining_percent']:.1f}%" if codex["plan_remaining_percent"] is not None else "Unavailable"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex agent harness diagnostics</title>
@@ -112,15 +197,31 @@ main{{max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-size:25px}} 
 .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:22px}} .card{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}}
 .card span{{display:block;color:var(--muted);font-size:12px}} .card strong{{display:block;font-size:21px;margin-top:3px}}
 .table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:10px}} table{{width:100%;border-collapse:collapse;background:var(--panel)}}
+.operation{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px}} .operation-head{{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}} .flow{{display:grid;grid-template-columns:repeat(10,minmax(110px,1fr));gap:6px;margin-top:12px;overflow:auto}} .stage{{border:1px solid var(--line);border-radius:8px;padding:9px;min-width:110px}} .stage.active{{outline:2px solid var(--warn)}} .stage.passed{{border-color:var(--good)}} .stage.failed,.stage.interrupted,.stage.blocked{{border-color:var(--bad)}} .stage-name{{display:block;font-size:11px;color:var(--muted)}}
+.telemetry{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0 0 22px}} .empty{{color:var(--muted)}} #connection{{color:var(--warn)}}
+.source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
 th,td{{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}} th{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
 tr.contradiction{{background:#3a1e2a}} .passed{{color:var(--good)}} .failed,.interrupted,.timed-out,.cancelled{{color:var(--bad)}} .unadjudicated,.unknown{{color:var(--warn)}}
 code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{color:var(--muted);margin-top:16px}}
 </style></head><body><main>
-<h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · read-only · claims and observations remain separate</p>
+<h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
+{source_banner}
 <div class="cards">{card_html}</div>
+<div class="telemetry"><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Newest source update</span><strong>{html.escape(newest_text)}</strong><small>{snapshot['freshness']['existing_files']} / {snapshot['freshness']['source_files']} sources present</small></section></div>
+<h2>Current workflow</h2>{operations}
+<h2>Run history</h2>
 <div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>
 <footer>Unknown and unadjudicated are first-class states. A contradiction means observed evidence disagrees with the worker claim.</footer>
-</main></body></html>"""
+</main><script src="/dashboard.js"></script></body></html>"""
+
+
+def _operation(operation: dict[str, Any]) -> str:
+    stages = "".join(
+        f'<div class="stage {html.escape(stage["state"])}"><span class="stage-name">{html.escape(stage["stage"])}</span><strong>{html.escape(stage["state"])}</strong></div>'
+        for stage in operation["stages"]
+    )
+    stop = f' · stopped: {html.escape(str(operation["stop_reason"]))}' if operation["stop_reason"] else ""
+    return f'<section class="operation"><div class="operation-head"><strong>{html.escape(operation["operation_id"])}</strong><span>issue {operation["issue"]} · {html.escape(operation["current_stage"])} / {html.escape(operation["current_state"])}{stop}</span></div><div class="flow">{stages}</div></section>'
 
 
 def _run_row(view: dict[str, Any]) -> str:
@@ -143,15 +244,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--adjudications", type=Path, required=True)
     parser.add_argument("--lifecycle", type=Path, required=True)
+    parser.add_argument("--workflow", type=Path)
+    parser.add_argument("--frontier", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--release", default="0.1.0-alpha.1")
+    parser.add_argument("--release", default="v0.1.1")
+    parser.add_argument("--mode", choices=("live", "replay"), default="live")
     args = parser.parse_args(argv)
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         parser.error("dashboard must bind to a loopback address")
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
-    source = DashboardSource(args.runs, args.adjudications, args.lifecycle, args.release)
+    source = DashboardSource(args.runs, args.adjudications, args.lifecycle, args.workflow, args.frontier, args.release, args.mode)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
     print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)
     try:
@@ -161,6 +265,17 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.server_close()
     return 0
+
+
+DASHBOARD_JS = """(() => {
+  const state = document.getElementById('connection');
+  let initial = true;
+  const events = new EventSource('/events');
+  events.addEventListener('open', () => { state.textContent = 'live'; state.style.color = 'var(--good)'; });
+  events.addEventListener('snapshot', () => { if (initial) { initial = false; } else { location.reload(); } });
+  events.addEventListener('error', () => { state.textContent = 'disconnected'; state.style.color = 'var(--bad)'; });
+})();
+"""
 
 
 if __name__ == "__main__":

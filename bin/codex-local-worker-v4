@@ -43,6 +43,12 @@ cleanup() {
       --dirty-entries "$diagnostic_dirty" --issue "$worker_issue" --role "$worker_role" \
       --model "$worker_model" --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" \
       >/dev/null 2>&1 || true
+    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+      --records "$workflow_records" --event-id "$worker_run_id:$diagnostic_event" \
+      --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state interrupted \
+      --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
+      --role "$worker_role" --model "$worker_model" --stop-reason "$diagnostic_event" \
+      >/dev/null 2>&1 || true
   fi
   if [[ -n $task_temp && -f $task_temp ]]; then
     rm -f -- "$task_temp"
@@ -70,6 +76,11 @@ fi
 
 [[ -n $worker_task ]] || { echo "ERROR: task must not be empty" >&2; exit 2; }
 case "$worker_role" in helper|coder|reviewer) ;; *) usage ;; esac
+case "$worker_role" in
+  coder) worker_workflow_stage=local-work ;;
+  reviewer) worker_workflow_stage=review ;;
+  helper) worker_workflow_stage=evidence ;;
+esac
 [[ -d "$worker_repo_path" ]] || { echo "ERROR: repository path is not a directory: $worker_repo_path" >&2; exit 2; }
 
 worker_config=${CODEX_LOCAL_WORKER_CONFIG:-/home/connellwc83/.config/codex-local/workers.json}
@@ -169,6 +180,8 @@ fi
 
 candidate_source=/home/connellwc83/projects/codex-local-harness/src
 lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/lifecycle.jsonl}
+workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/workflow.jsonl}
+worker_operation_id=${CODEX_LOCAL_OPERATION_ID:-issue-$worker_issue}
 review_cli=(
   env PYTHONPATH="$candidate_source"
   python3 -m codex_local_harness.review
@@ -205,6 +218,11 @@ if [[ $record_run == 1 ]]; then
     --run-id "$worker_run_id" --event started --observed-at "$diagnostic_now" \
     --issue "$worker_issue" --role "$worker_role" --model "$worker_model" \
     --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" >/dev/null
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    --records "$workflow_records" --event-id "$worker_run_id:local-work-started" \
+    --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state active \
+    --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
+    --role "$worker_role" --model "$worker_model" >/dev/null
   diagnostic_started=1
 fi
 set +e
@@ -313,6 +331,23 @@ if [[ $record_run == 1 ]]; then
     --dirty-entries "$dirty_entries" --issue "$worker_issue" --role "$worker_role" \
     --model "$worker_model" --profile codex-led-v4 --task-class "$task_class" >/dev/null || \
       echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
+  workflow_state=passed
+  (( workflow_status == 0 )) || workflow_state=failed
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    --records "$workflow_records" --event-id "$worker_run_id:local-work-$workflow_state" \
+    --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state "$workflow_state" \
+    --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
+    --role "$worker_role" --model "$worker_model" >/dev/null || \
+      echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
+  if [[ $worker_role == coder ]]; then
+    delivery_state=failed
+    [[ $delivery_ready == true ]] && delivery_state=passed
+    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+      --records "$workflow_records" --event-id "$worker_run_id:delivery-$delivery_state" \
+      --operation-id "$worker_operation_id" --stage delivery --state "$delivery_state" \
+      --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
+      --role "$worker_role" --model "$worker_model" >/dev/null || true
+  fi
   diagnostic_finalized=1
 fi
 
