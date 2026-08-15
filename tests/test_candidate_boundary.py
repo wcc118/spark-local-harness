@@ -30,6 +30,8 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "runtime.advisory_output" in content
     assert "select(.type == \"text\") | .part.text" in content
     assert "helper) default_worker_timeout=300" in content
+    assert "delivery-dirty-checkout" in content
+    assert "PYTHONDONTWRITEBYTECODE=1" in content
 
 
 def test_candidate_advisory_agent_is_read_only_and_machine_readable():

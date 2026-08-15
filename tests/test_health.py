@@ -53,6 +53,18 @@ def test_summary_separates_local_and_frontier_usage():
     assert result["correction_cycles"] == 1
 
 
+def test_summary_distinguishes_delivery_readiness_from_inference_success():
+    records = [
+        record(delivery_ready=True, inference_status=0, workflow_status=0),
+        record(run_id="run-2", status="degraded", delivery_ready=False, inference_status=0, workflow_status=0, dirty_entries=1, generated_artifacts=1),
+    ]
+    result = summarize(records)
+    assert result["delivery_ready_rate"] == 0.5
+    assert result["delivery_observations"] == 2
+    assert result["dirty_entries"] == 1
+    assert result["generated_artifacts"] == 1
+
+
 def test_health_rejects_impossible_values():
     with pytest.raises(ValueError, match="non-negative"):
         TokenUsage(local_input=-1)
@@ -67,4 +79,3 @@ def test_invalid_jsonl_reports_line(tmp_path):
     path.write_text("{}\nnot-json\n", encoding="utf-8")
     with pytest.raises(ValueError, match="line 1"):
         read_jsonl(path)
-

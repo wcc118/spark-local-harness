@@ -174,13 +174,16 @@ worker_env=(env -i HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="$
   PATH="$worker_path" XDG_CONFIG_HOME="$worker_runtime_home/.config"
   XDG_DATA_HOME="$worker_runtime_home/.local/share" XDG_CACHE_HOME="$worker_runtime_home/.cache"
   LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}" NO_COLOR=1)
-review_env=()
+execution_env=()
 if [[ $worker_role == reviewer ]]; then
-  review_env=(PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$review_runtime_tmp/pycache" \
+  execution_env=(PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$review_runtime_tmp/pycache" \
     PYTEST_ADDOPTS="-p no:cacheprovider" COVERAGE_FILE="$review_runtime_tmp/.coverage" \
     TMPDIR="$review_runtime_tmp" PYTHONPATH="$worker_repo_path")
+elif [[ $worker_role == coder ]]; then
+  execution_env=(PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$worker_runtime_home/.cache/pycache" \
+    PYTEST_ADDOPTS="-p no:cacheprovider" COVERAGE_FILE="$worker_runtime_home/.cache/.coverage")
 fi
-"${worker_env[@]}" "${review_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+"${worker_env[@]}" "${execution_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
   "$worker_opencode" run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
   --model "$worker_model" "$worker_task" >"$worker_log"
 inference_status=$?
@@ -218,18 +221,37 @@ if [[ $record_run == 1 ]]; then
   task_class=${CODEX_LOCAL_TASK_CLASS:-unclassified}
   health_status=success
   failure_class=
+  delivery_ready=true
+  dirty_entries=0
+  generated_artifacts=0
   if (( workflow_status != 0 )); then
     health_status=failure
+    delivery_ready=false
     if (( inference_status != 0 )); then
       failure_class=infrastructure-inference
     else
       failure_class=workflow-postflight
     fi
   fi
+  if [[ $worker_role == coder ]]; then
+    status_snapshot=$(git -C "$worker_repo_path" status --porcelain=v1)
+    if [[ -n $status_snapshot ]]; then
+      dirty_entries=$(grep -c '^' <<<"$status_snapshot")
+      generated_artifacts=$(grep -Ec '(\.venv|(^|/)venv|__pycache__|\.pytest_cache|\.egg-info|\.pyc|\.coverage)' <<<"$status_snapshot" || true)
+      delivery_ready=false
+      if (( workflow_status == 0 )); then
+        health_status=degraded
+        failure_class=delivery-dirty-checkout
+      fi
+    fi
+  fi
   health_args=(
     --log "$worker_log" --records "$health_records" --run-id "$worker_run_id"
     --issue "$worker_issue" --role "$worker_role" --model "$worker_model"
     --profile codex-led-v4 --task-class "$task_class" --status "$health_status"
+    --inference-status "$inference_status" --workflow-status "$workflow_status"
+    --delivery-ready "$delivery_ready" --dirty-entries "$dirty_entries"
+    --generated-artifacts "$generated_artifacts"
   )
   [[ -z $failure_class ]] || health_args+=(--failure-class "$failure_class")
   if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.opencode "${health_args[@]}" >/dev/null; then
