@@ -1,7 +1,8 @@
 # Codex Local Harness
 
-`baseline-v2` is the corrected issue-driven Codex/OpenCode boundary. Codex
-remains the primary orchestrator. Local workers perform one bounded task.
+The project is building toward the first diagnostic scaffold release,
+`v0.1.0`. Codex remains the primary orchestrator. Local workers perform one
+bounded task. See [the tracked release plan](docs/v0.1.0-plan.md).
 
 ## Reviewer transaction
 
@@ -42,4 +43,3 @@ codex-local-reviewer CHECKOUT --task-file PACKET.md
 `legacy-v1/` contains rollback artifacts. Experimental routing described by
 `profiles/candidate-v3.json` is not installed and must not be compared until
 the corrected baseline qualification suite remains green.
-

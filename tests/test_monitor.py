@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from codex_local_harness.diagnostics import Adjudication, append_record
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl, summarize
 from codex_local_harness.monitor import HealthPolicy, assess, main, report
 
@@ -66,7 +67,24 @@ def test_report_reads_jsonl_and_cli_emits_json(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["summary"]["runs"] == 2
 
 
+def test_report_exposes_adjudicated_truth_without_rewriting_health(tmp_path):
+    records = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    append_jsonl(records, run_health(0))
+    original = records.read_bytes()
+    append_record(adjudications, Adjudication(
+        adjudication_id="adj-1", run_id="run-0", verdict="failed", source="evaluator",
+        observed_at="2026-08-15T17:00:00Z", failure_class="test-hidden",
+    ))
+    result = report(records, adjudications_path=adjudications)
+    assert result["worker_claims"]["summary"]["status_counts"] == {"success": 1}
+    assert result["summary"]["effective_outcome_counts"] == {"failed": 1}
+    assert result["summary"]["contradictions"] == 1
+    assert result["assessment"]["status"] == "insufficient-data"
+    assert result["assessment"]["reasons"] == ["minimum-adjudicated-runs:1/10"]
+    assert records.read_bytes() == original
+
+
 def test_policy_rejects_inverted_thresholds():
     with pytest.raises(ValueError, match="frontier warning"):
         HealthPolicy(frontier_share_warning=0.3, frontier_share_critical=0.2)
-

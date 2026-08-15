@@ -6,7 +6,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import Adjudication, LifecycleEvent, read_records
 from .health import read_jsonl, summarize
+from .read_model import build_run_views, summarize_views
 
 
 @dataclass(frozen=True)
@@ -76,9 +78,62 @@ def assess(summary: dict[str, Any], policy: HealthPolicy = HealthPolicy()) -> di
     }
 
 
-def report(path: Path, policy: HealthPolicy = HealthPolicy()) -> dict[str, Any]:
+def report(
+    path: Path,
+    policy: HealthPolicy = HealthPolicy(),
+    adjudications_path: Path | None = None,
+    lifecycle_path: Path | None = None,
+) -> dict[str, Any]:
     summary = summarize(read_jsonl(path))
-    return {"summary": summary, "assessment": assess(summary, policy)}
+    result = {"summary": summary, "assessment": assess(summary, policy)}
+    if adjudications_path is not None or lifecycle_path is not None:
+        views = build_run_views(
+            read_jsonl(path),
+            read_records(adjudications_path, Adjudication) if adjudications_path else (),
+            read_records(lifecycle_path, LifecycleEvent) if lifecycle_path else (),
+        )
+        diagnostic_summary = summarize_views(views)
+        result = {
+            "summary": diagnostic_summary,
+            "assessment": assess_diagnostics(diagnostic_summary, policy),
+            "runs": [view.as_dict() for view in views],
+            "worker_claims": result,
+        }
+    return result
+
+
+def assess_diagnostics(summary: dict[str, Any], policy: HealthPolicy = HealthPolicy()) -> dict[str, Any]:
+    adjudicated = int(summary["adjudicated_runs"])
+    local_tokens = int(summary["local_tokens"])
+    frontier_tokens = int(summary["frontier_tokens"])
+    total_tokens = local_tokens + frontier_tokens
+    metrics = {
+        "frontier_token_share": frontier_tokens / total_tokens if total_tokens else 0.0,
+        "confirmed_local_autonomy_rate": summary["confirmed_local_autonomy_rate"],
+        "corrections_per_adjudicated_run": summary["correction_cycles"] / adjudicated if adjudicated else None,
+        "contradiction_rate": summary["contradictions"] / adjudicated if adjudicated else None,
+        "unadjudicated_runs": int(summary["unadjudicated_runs"]),
+    }
+    if adjudicated < policy.minimum_runs:
+        return {
+            "status": "insufficient-data",
+            "reasons": [f"minimum-adjudicated-runs:{adjudicated}/{policy.minimum_runs}"],
+            "metrics": metrics,
+            "policy": asdict(policy),
+        }
+    findings: list[tuple[str, str]] = []
+    _upper(findings, "frontier-token-share", metrics["frontier_token_share"], policy.frontier_share_warning, policy.frontier_share_critical)
+    autonomy = float(metrics["confirmed_local_autonomy_rate"])
+    _lower(findings, "confirmed-local-autonomy", autonomy, policy.autonomy_warning, policy.autonomy_critical)
+    corrections = float(metrics["corrections_per_adjudicated_run"])
+    _upper(findings, "corrections-per-adjudicated-run", corrections, policy.corrections_per_run_warning, policy.corrections_per_run_critical)
+    severity = "red" if any(level == "red" for level, _ in findings) else "yellow" if findings else "green"
+    return {
+        "status": severity,
+        "reasons": [reason for _, reason in findings],
+        "metrics": metrics,
+        "policy": asdict(policy),
+    }
 
 
 def _metrics(summary: dict[str, Any]) -> dict[str, float]:
@@ -114,10 +169,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report local harness architecture health")
     parser.add_argument("records", type=Path, help="normalized health JSONL")
     parser.add_argument("--policy", type=Path, help="JSON overrides for HealthPolicy")
+    parser.add_argument("--adjudications", type=Path, help="append-only adjudication JSONL")
+    parser.add_argument("--lifecycle", type=Path, help="append-only lifecycle JSONL")
     args = parser.parse_args(argv)
     try:
         overrides = json.loads(args.policy.read_text(encoding="utf-8")) if args.policy else {}
-        result = report(args.records, HealthPolicy(**overrides))
+        result = report(
+            args.records,
+            HealthPolicy(**overrides),
+            adjudications_path=args.adjudications,
+            lifecycle_path=args.lifecycle,
+        )
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
     print(json.dumps(result, indent=2, sort_keys=True))
@@ -126,4 +188,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
