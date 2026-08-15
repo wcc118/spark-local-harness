@@ -1,0 +1,51 @@
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_shadow_installer_preserves_baseline_and_creates_private_backup(tmp_path):
+    install_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    config = tmp_path / "config"
+    install_bin.mkdir()
+    config.mkdir()
+    baseline = install_bin / "codex-local-worker"
+    shutil.copy2(ROOT / "bin/codex-local-worker", baseline)
+    workers = config / "workers.json"
+    opencode = config / "opencode.json"
+    workers.write_text('{"routes":{},"defaults":{}}\n', encoding="utf-8")
+    opencode.write_text('{"permission":{}}\n', encoding="utf-8")
+    before = baseline.read_bytes()
+    environment = os.environ | {
+        "CODEX_LOCAL_INSTALL_BIN": str(install_bin),
+        "CODEX_LOCAL_BACKUP_ROOT": str(backup_root),
+        "CODEX_LOCAL_BASELINE_WORKER": str(baseline),
+        "CODEX_LOCAL_WORKERS_CONFIG": str(workers),
+        "CODEX_LOCAL_OPENCODE_CONFIG": str(opencode),
+    }
+    completed = subprocess.run(
+        [str(ROOT / "bin/install-shadow-v4")],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+    )
+    assert baseline.read_bytes() == before
+    for name in ("worker", "helper", "coder", "reviewer"):
+        assert (install_bin / f"codex-local-{name}-v4").stat().st_mode & 0o111
+    backup = Path(next(line.split("=", 1)[1] for line in completed.stdout.splitlines() if line.startswith("backup=")))
+    assert backup.parent == backup_root
+    assert backup.stat().st_mode & 0o077 == 0
+    manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["baseline_worker_sha256"] == "37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415"
+
+
+def test_v4_wrappers_have_valid_shell_syntax():
+    for path in (ROOT / "bin").glob("codex-local-*-v4"):
+        subprocess.run(["bash", "-n", str(path)], check=True)
+
