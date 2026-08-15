@@ -35,6 +35,16 @@ def test_interrupted_correction_exists_without_worker_health_record():
     view = build_run_views([], [], [event])[0]
     assert view.claimed_status is None
     assert (view.lifecycle_state, view.effective_outcome, view.wall_seconds) == ("interrupted", "interrupted", 681)
+    assert (view.lifecycle_exit_status, view.lifecycle_dirty_entries) == (130, 1)
+
+
+def test_successful_adjudication_can_contradict_worker_failure():
+    judgment = Adjudication(
+        adjudication_id="adj-pass", run_id="recovered", verdict="passed", source="evaluator",
+        observed_at="2026-08-15T17:00:00Z",
+    )
+    view = build_run_views([run("recovered", status="failure", delivery_ready=False)], [judgment])[0]
+    assert view.contradiction is True
 
 
 def test_unadjudicated_success_does_not_inflate_confirmed_autonomy():

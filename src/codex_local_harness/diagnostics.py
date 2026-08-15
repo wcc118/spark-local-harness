@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ ADJUDICATION_VERDICTS = {"passed", "failed", "interrupted", "cancelled", "timed-
 ADJUDICATION_SOURCES = {"evaluator", "codex", "operator", "reviewer"}
 LIFECYCLE_EVENTS = {"started", "completed", "interrupted", "cancelled", "timed-out"}
 INTERVENTION_DEPTHS = {"none", "audit", "targeted", "takeover"}
+SAFE_ATOM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/#@+\-]{0,255}\Z")
 
 
 def _required(value: str, name: str) -> None:
@@ -23,15 +25,17 @@ def _required(value: str, name: str) -> None:
 
 def _timestamp(value: str) -> None:
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("observed_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("observed_at must include a timezone")
 
 
 def _safe_atom(value: str, name: str) -> None:
     _required(value, name)
-    if any(character in value for character in "\r\n\0"):
-        raise ValueError(f"{name} must be a single-line identifier")
+    if not SAFE_ATOM.fullmatch(value):
+        raise ValueError(f"{name} must be a bounded identifier")
 
 
 @dataclass(frozen=True)

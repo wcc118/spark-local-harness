@@ -22,6 +22,8 @@ class RunView:
     claimed_outcome: str | None
     delivery_ready: bool | None
     lifecycle_state: str
+    lifecycle_exit_status: int | None
+    lifecycle_dirty_entries: int | None
     observed_outcome: str
     effective_outcome: str
     adjudicated: bool
@@ -98,7 +100,10 @@ def _build_view(run_id: str, run: RunHealth | None, adjudication: Adjudication |
     else:
         observed, effective = "unknown", "unadjudicated"
     claimed_success = bool(run and run.status == "success" and run.delivery_ready is not False)
-    contradiction = claimed_success and effective in {"failed", "interrupted", "cancelled", "timed-out"}
+    claimed_failure = bool(run and run.status == "failure")
+    contradiction = (
+        claimed_success and effective in {"failed", "interrupted", "cancelled", "timed-out"}
+    ) or (claimed_failure and effective == "passed")
     wall_seconds = run.wall_seconds if run else (terminal.wall_seconds if terminal and terminal.wall_seconds else 0.0)
     return RunView(
         run_id=run_id,
@@ -111,6 +116,8 @@ def _build_view(run_id: str, run: RunHealth | None, adjudication: Adjudication |
         claimed_outcome=run.outcome if run else None,
         delivery_ready=run.delivery_ready if run else None,
         lifecycle_state=lifecycle_state,
+        lifecycle_exit_status=terminal.exit_status if terminal else None,
+        lifecycle_dirty_entries=terminal.dirty_entries if terminal else None,
         observed_outcome=observed,
         effective_outcome=effective,
         adjudicated=adjudication is not None,

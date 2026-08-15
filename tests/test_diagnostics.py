@@ -65,8 +65,12 @@ def test_lifecycle_represents_interrupted_run_without_prompt_content(tmp_path):
 
 
 def test_diagnostic_identifiers_reject_multiline_or_freeform_content():
-    with pytest.raises(ValueError, match="single-line"):
+    with pytest.raises(ValueError, match="bounded identifier"):
         adjudication(evidence_refs=("safe", "prompt\nsecret"))
+    with pytest.raises(ValueError, match="bounded identifier"):
+        adjudication(evidence_refs=("this is freeform prompt content",))
+    with pytest.raises(ValueError, match="timezone"):
+        adjudication(observed_at="2026-08-15T17:00:00")
 
 
 def test_cli_appends_hidden_failure_and_interrupted_lifecycle(tmp_path, capsys):
