@@ -26,6 +26,19 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "codex_harness.runtime.opencode" not in content
     assert "codex_local_harness.runtime.opencode" in content
     assert "CODEX_LOCAL_HEALTH_RECORDS" in content
+    assert "CODEX_LOCAL_AGENT" in content
+    assert 'last // ""' in content
+    assert "helper) default_worker_timeout=300" in content
+
+
+def test_candidate_advisory_agent_is_read_only_and_machine_readable():
+    content = (ROOT / "agents/advisory.md").read_text(encoding="utf-8")
+    assert "edit: deny" in content
+    assert "bash: deny" in content
+    assert "task: deny" in content
+    assert "steps: 12" in content
+    assert "final response must be only" in content
+    assert "no analysis" in content
 
 
 def test_candidate_profile_retains_qwen38_without_claiming_qualification():
@@ -35,4 +48,3 @@ def test_candidate_profile_retains_qwen38_without_claiming_qualification():
     assert "pending" in profile["routes"]["scout"]["qualification"]
     assert profile["routes"]["complex_coder"]["model"] == "Qwen/Qwen3-Coder-Next-FP8"
     assert profile["governance"]["merge_authority"] == "codex"
-

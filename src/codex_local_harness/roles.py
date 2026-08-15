@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
@@ -9,6 +10,7 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 MAX_ITEMS = 100
+JSON_FENCE = re.compile(r"\A```json\s*\n(?P<object>\{.*\})\s*\n```\s*\Z", re.DOTALL)
 
 
 class AdvisoryRole(str, Enum):
@@ -172,6 +174,14 @@ def parse_result(role: AdvisoryRole, text: str) -> MapperResult | DesignedTestsR
     except (KeyError, TypeError) as exc:
         raise ValueError(f"invalid {role.value} result: {exc}") from exc
     raise ValueError(f"unsupported advisory role: {role}")
+
+
+def normalize_single_json_fence(text: str) -> str:
+    """Remove one exact JSON fence while refusing surrounding prose or multiple blocks."""
+    match = JSON_FENCE.fullmatch(text.strip())
+    if not match:
+        raise ValueError("result is not exactly one JSON fence")
+    return match.group("object")
 
 
 def _tuples(payload: dict[str, Any], fields: set[str]) -> dict[str, Any]:

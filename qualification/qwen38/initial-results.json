@@ -1,0 +1,93 @@
+{
+  "model": "qwen/qwen3.8-27b",
+  "endpoint": "lm-studio",
+  "serving_profile": {
+    "context": 16384,
+    "reasoning_budget": 4000,
+    "reasoning_level": "low",
+    "temperature": 0.2
+  },
+  "warmup": {
+    "content": "READY",
+    "prompt_tokens": 53,
+    "completion_tokens": 17,
+    "reasoning_tokens": 17,
+    "total_tokens": 70
+  },
+  "roles": {
+    "mapper": {
+      "promoted": false,
+      "trials": [
+        {
+          "interface": "existing-opencode-helper",
+          "raw_schema_valid": false,
+          "expected_evidence_present": true,
+          "local_tokens": 78205,
+          "turns": 10,
+          "tool_calls": 21,
+          "wall_seconds": 211.862,
+          "failure": "helper contract required prose and wrapper emitted every text event"
+        },
+        {
+          "interface": "v4-strict-advisory-opencode",
+          "raw_schema_valid": false,
+          "expected_evidence_present": null,
+          "local_tokens": 152011,
+          "turns": 18,
+          "tool_calls": 54,
+          "wall_seconds": 291.552,
+          "failure": "Codex circuit-breaker stop after excessive runtime and tool loop"
+        }
+      ]
+    },
+    "test-designer": {
+      "promoted": false,
+      "interface": "direct-lm-studio",
+      "raw_schema_valid": false,
+      "single_fence_normalized_schema_valid": true,
+      "expected_finding_recalled": true,
+      "prompt_tokens": 334,
+      "completion_tokens": 1799,
+      "reasoning_tokens": 859,
+      "total_tokens": 2133,
+      "wall_seconds": null
+    },
+    "failure-analyst": {
+      "promoted": false,
+      "interface": "direct-lm-studio",
+      "raw_schema_valid": false,
+      "single_fence_normalized_schema_valid": true,
+      "expected_finding_recalled": true,
+      "prompt_tokens": 312,
+      "completion_tokens": 1045,
+      "reasoning_tokens": 375,
+      "total_tokens": 1357,
+      "wall_seconds": null
+    },
+    "scout": {
+      "promoted": false,
+      "interface": "direct-lm-studio",
+      "raw_schema_valid": false,
+      "single_fence_normalized_schema_valid": true,
+      "expected_finding_recalled": true,
+      "prompt_tokens": 349,
+      "completion_tokens": 540,
+      "reasoning_tokens": 241,
+      "total_tokens": 889,
+      "wall_seconds": null
+    }
+  },
+  "conclusion": {
+    "role_promotions": [],
+    "mapper": "requires a cheaper retrieval/tool-loop design before retrial",
+    "other_roles": "promising content recall; repeat trials must measure timing, false positives, and normalized schema reliability",
+    "architecture_changes": [
+      "candidate prints only the final OpenCode text event",
+      "candidate supports an explicit advisory agent override",
+      "advisory agent is capped at 12 steps",
+      "helper default timeout is reduced to 300 seconds",
+      "one exact JSON fence may be normalized while surrounding prose remains rejected"
+    ]
+  }
+}
+
