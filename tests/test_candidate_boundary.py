@@ -36,6 +36,7 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "codex_local_harness.diagnostic_cli lifecycle" in content
     assert "130|143) diagnostic_event=interrupted" in content
     assert "124|137) diagnostic_event=timed-out" in content
+    assert "execution-timeout" in content
 
 
 def test_candidate_advisory_agent_is_read_only_and_machine_readable():

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-local-harness"
-version = "0.1.0a1"
+version = "0.1.0"
 description = "Deterministic boundary around local OpenCode workers"
 requires-python = ">=3.11"
 
@@ -14,6 +14,7 @@ codex-harness-health = "codex_local_harness.monitor:main"
 codex-harness-ingest-opencode = "codex_local_harness.runtime.opencode:main"
 codex-harness-publish-merge = "codex_local_harness.merge_publish:main"
 codex-harness-diagnostic = "codex_local_harness.diagnostic_cli:main"
+codex-harness-dashboard = "codex_local_harness.dashboard:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,41 @@
+{
+  "release": "v0.1.0",
+  "profile": "codex-led-v4",
+  "baseline": "baseline-v2-extracted",
+  "governance": {
+    "orchestrator": "codex",
+    "merge_authority": "codex",
+    "worker_runtime": "opencode",
+    "dashboard_authority": "read-only"
+  },
+  "routes": {
+    "helper": "lmstudio/qwen/qwen3.8-27b",
+    "complex_coder": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+    "reviewer": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+  },
+  "settings": {
+    "health_schema": 1,
+    "diagnostic_schema": 1,
+    "dashboard_bind": "127.0.0.1",
+    "dashboard_mutations": false
+  },
+  "shadow_install": {
+    "backup": "/home/connellwc83/.local/share/codex-local-harness/backups/20260815T175508Z-486553",
+    "baseline_worker_sha256": "37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415",
+    "baseline_replaced": false
+  },
+  "validation": {
+    "tests_passed": 179,
+    "replay_runs": 4,
+    "replay_adjudicated": 4,
+    "replay_contradictions": 1,
+    "replay_interrupted": 1,
+    "replay_frontier_tokens": 0
+  },
+  "sha256": {
+    "candidate_worker": "ebe20c2da94709cd83352740a87fd2469a9bcce2a26d1f84c446e492687afe0b",
+    "replay_runs": "c2b84e7ec0ca079a570a9b976de56d605df2258b2ef8e8405a9b81761a5e279a",
+    "replay_adjudications": "5549003b79a9d9d280dcae8152a2536a8d078d60849cca7a5abae64ffd96cca8",
+    "replay_lifecycle": "25c249deb48dabb401f4fa11bad9863b5a70e7aa2d92e9fe05295614aa8419d4"
+  }
+}

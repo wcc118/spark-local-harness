@@ -34,6 +34,11 @@ def main(argv: list[str] | None = None) -> int:
     lifecycle.add_argument("--wall-seconds", type=float)
     lifecycle.add_argument("--exit-status", type=int)
     lifecycle.add_argument("--dirty-entries", type=int)
+    lifecycle.add_argument("--issue", type=int)
+    lifecycle.add_argument("--role")
+    lifecycle.add_argument("--model")
+    lifecycle.add_argument("--profile")
+    lifecycle.add_argument("--task-class")
 
     args = parser.parse_args(argv)
     try:
@@ -60,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
                 wall_seconds=args.wall_seconds,
                 exit_status=args.exit_status,
                 dirty_entries=args.dirty_entries,
+                issue=args.issue,
+                role=args.role,
+                model=args.model,
+                profile=args.profile,
+                task_class=args.task_class,
             )
         append_record(args.records, record)
     except (OSError, ValueError) as exc:
