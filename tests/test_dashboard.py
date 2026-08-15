@@ -212,9 +212,7 @@ def test_spinner_css_respects_prefers_reduced_motion(tmp_path):
     source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
-    # The CSS should include a @media query for prefers-reduced-motion
-    assert "@media" in page
-    assert "prefers-reduced-motion" in page
+    assert "@media (prefers-reduced-motion:no-preference){.stage.active .stage-state::after{animation:spin 1s linear infinite}" in page
 
 
 def test_non_active_stages_do_not_show_spinner(tmp_path):
