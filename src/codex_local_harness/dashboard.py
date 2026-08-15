@@ -28,6 +28,10 @@ class DashboardSource:
     frontier: Path | None = None
     release: str = "v0.1.1"
     mode: str = "live"
+    now: datetime | None = None
+
+    def _current_time(self) -> datetime:
+        return self.now if self.now is not None else datetime.now(timezone.utc)
 
     def snapshot(self) -> dict[str, Any]:
         statuses: list[dict[str, Any]] = []
@@ -47,7 +51,7 @@ class DashboardSource:
             "release": self.release,
             "read_only": True,
             "mode": self.mode,
-            "freshness": self.freshness(),
+            "freshness": self._freshness(statuses),
             "sources": statuses,
             "summary": summarize_views(views),
             "runs": [view.as_dict() for view in views],
@@ -65,10 +69,11 @@ class DashboardSource:
             return ()
         try:
             records = reader(path)
+            mtime_epoch = path.stat().st_mtime if records else None
         except (OSError, ValueError):
             statuses.append({"name": name, "state": "malformed", "file": path.name})
             return ()
-        statuses.append({"name": name, "state": "ok", "file": path.name, "records": len(records)})
+        statuses.append({"name": name, "state": "ok", "file": path.name, "records": len(records), "mtime_epoch": mtime_epoch})
         return records
 
     def paths(self) -> tuple[Path, ...]:
@@ -84,10 +89,38 @@ class DashboardSource:
                 result.append((str(path), 0, 0))
         return tuple(result)
 
-    def freshness(self) -> dict[str, Any]:
-        existing = [path.stat().st_mtime for path in self.paths() if path.exists()]
-        newest = max(existing) if existing else None
-        return {"source_files": len(self.paths()), "existing_files": sum(path.exists() for path in self.paths()), "newest_mtime_epoch": newest}
+    def _freshness(self, statuses: list[dict[str, Any]]) -> dict[str, Any]:
+        mtimes = [status["mtime_epoch"] for status in statuses if status.get("mtime_epoch") is not None]
+        newest_mtime_epoch = max(mtimes) if mtimes else None
+        age_seconds = None if newest_mtime_epoch is None else max(
+            0.0, self._current_time().timestamp() - newest_mtime_epoch
+        )
+        return {
+            "source_files": len(self.paths()),
+            "existing_files": sum(path.exists() for path in self.paths()),
+            "newest_mtime_epoch": newest_mtime_epoch,
+            "newest_age_seconds": age_seconds,
+        }
+
+
+def _format_age(seconds: float) -> str:
+    """Format a non-negative age without implying false precision."""
+    units = [
+        ("year", 365.25 * 24 * 60 * 60),
+        ("month", 30 * 24 * 60 * 60),
+        ("day", 24 * 60 * 60),
+        ("hour", 60 * 60),
+        ("minute", 60),
+        ("second", 1),
+    ]
+
+    for name, duration in units:
+        if seconds >= duration:
+            value = int(seconds / duration)
+            suffix = "s" if value != 1 else ""
+            return f"{value} {name}{suffix} ago"
+
+    return "just now"
 
 
 def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
@@ -184,8 +217,9 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     rows = "".join(_run_row(view) for view in views) or '<tr><td colspan="10">No diagnostic runs recorded.</td></tr>'
     operations = "".join(_operation(item) for item in snapshot["operations"]) or '<p class="empty">No workflow events recorded.</p>'
     codex = snapshot["codex"]
-    newest_epoch = snapshot["freshness"]["newest_mtime_epoch"]
-    newest_text = datetime.fromtimestamp(newest_epoch, timezone.utc).isoformat().replace("+00:00", "Z") if newest_epoch else "No data"
+    freshness = snapshot["freshness"]
+    age_seconds = freshness["newest_age_seconds"]
+    newest_text = _format_age(age_seconds) if age_seconds is not None else "No data"
     source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
     context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
@@ -211,7 +245,7 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
 {source_banner}
 <div class="cards">{card_html}</div>
-<div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Newest source update</span><strong>{html.escape(newest_text)}</strong><small>{snapshot['freshness']['existing_files']} / {snapshot['freshness']['source_files']} sources present</small></section></div>
+<div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Source update age</span><strong data-age-seconds="{age_seconds if age_seconds is not None else ''}">{html.escape(newest_text)}</strong><small>{freshness['existing_files']} / {freshness['source_files']} sources present</small></section></div>
 <h2>Current workflow</h2>{operations}
 <h2>Run history</h2>
 <div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>

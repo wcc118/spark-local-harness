@@ -1,7 +1,9 @@
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -140,3 +142,52 @@ def test_superseded_operation_is_retained_but_not_current(tmp_path):
     snapshot = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot()
     assert [operation["operation_id"] for operation in snapshot["operations"]] == ["issue-19"]
     assert snapshot["superseded_operations"] == 1
+
+
+def test_snapshot_includes_human_readable_source_update_age(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "failed", "2026-08-15T18:00:00Z", 19, stop_reason="hidden-test"))
+    now = datetime(2026, 8, 15, 22, 0, tzinfo=timezone.utc)
+    for path in (base.runs, base.adjudications, base.lifecycle, workflow):
+        os.utime(path, (now.timestamp() - 300, now.timestamp() - 300))
+
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, now=now)
+    snapshot = source.snapshot()
+
+    assert snapshot["freshness"]["newest_age_seconds"] == 300
+    assert snapshot["freshness"]["newest_mtime_epoch"] == now.timestamp() - 300
+    page = render_dashboard(snapshot)
+    assert "5 minutes ago" in page
+    assert "Source update age" in page
+
+
+def test_no_sources_returns_no_data_state(tmp_path):
+    source = DashboardSource(
+        tmp_path / "missing-runs.jsonl",
+        tmp_path / "missing-adj.jsonl",
+        tmp_path / "missing-life.jsonl",
+    )
+    snapshot = source.snapshot()
+
+    assert snapshot["freshness"]["newest_age_seconds"] is None
+    assert snapshot["freshness"]["newest_mtime_epoch"] is None
+    page = render_dashboard(snapshot)
+    assert "No data" in page
+
+
+def test_empty_sources_returns_no_data_state(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text("", encoding="utf-8")
+    adjudications = tmp_path / "adjudications.jsonl"
+    adjudications.write_text("", encoding="utf-8")
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    lifecycle.write_text("", encoding="utf-8")
+
+    source = DashboardSource(runs, adjudications, lifecycle)
+    snapshot = source.snapshot()
+
+    assert snapshot["freshness"]["newest_age_seconds"] is None
+    assert snapshot["freshness"]["existing_files"] == 3
+    page = render_dashboard(snapshot)
+    assert "No data" in page
