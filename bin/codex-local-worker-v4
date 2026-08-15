@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: codex-local-worker ROLE REPOSITORY_PATH TASK..." >&2
+  echo "       codex-local-worker ROLE REPOSITORY_PATH --task-file FILE" >&2
+  echo "roles: helper, coder, reviewer" >&2
+  exit 2
+}
+
+(( $# >= 3 )) || usage
+worker_role=$1
+worker_repo_path=$2
+shift 2
+
+task_temp=
+review_runtime_tmp=
+worker_runtime_home=
+cleanup() {
+  if [[ -n $task_temp && -f $task_temp ]]; then
+    rm -f -- "$task_temp"
+  fi
+  if [[ -n $review_runtime_tmp && -d $review_runtime_tmp ]]; then
+    rm -rf -- "$review_runtime_tmp"
+  fi
+  if [[ -n $worker_runtime_home && -d $worker_runtime_home ]]; then
+    rm -rf -- "$worker_runtime_home"
+  fi
+}
+trap cleanup EXIT
+
+if [[ ${1:-} == --task-file ]]; then
+  (( $# == 2 )) || usage
+  [[ -r $2 ]] || { echo "ERROR: task file is not readable: $2" >&2; exit 2; }
+  worker_task_file=$2
+  worker_task=$(<"$2")
+else
+  worker_task=$*
+  task_temp=$(mktemp)
+  printf '%s\n' "$worker_task" >"$task_temp"
+  worker_task_file=$task_temp
+fi
+
+[[ -n $worker_task ]] || { echo "ERROR: task must not be empty" >&2; exit 2; }
+case "$worker_role" in helper|coder|reviewer) ;; *) usage ;; esac
+[[ -d "$worker_repo_path" ]] || { echo "ERROR: repository path is not a directory: $worker_repo_path" >&2; exit 2; }
+
+worker_config=${CODEX_LOCAL_WORKER_CONFIG:-/home/connellwc83/.config/codex-local/workers.json}
+[[ -r "$worker_config" ]] || { echo "ERROR: worker routing config is not readable: $worker_config" >&2; exit 2; }
+jq -e '.routes and .defaults' "$worker_config" >/dev/null || { echo "ERROR: invalid worker routing config" >&2; exit 2; }
+
+worker_tier=${CODEX_LOCAL_TIER:-$(jq -er --arg role "$worker_role" '.defaults[$role]' "$worker_config")}
+worker_route="$worker_role/$worker_tier"
+worker_agent=$(jq -er --arg route "$worker_route" '.routes[$route].agent' "$worker_config") || {
+  echo "ERROR: no configured route for $worker_route" >&2; exit 2;
+}
+worker_model=${CODEX_LOCAL_MODEL:-$(jq -er --arg route "$worker_route" '.routes[$route].model' "$worker_config")}
+
+if [[ "$worker_model" == lmstudio/* ]]; then
+  lmstudio_base_url=${LMSTUDIO_BASE_URL:-http://10.0.0.92:1234/v1}
+  curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 8)
+  [[ -z ${LMSTUDIO_API_TOKEN:-} ]] || curl_args+=(--header "Authorization: Bearer $LMSTUDIO_API_TOKEN")
+  model_catalog=$(curl "${curl_args[@]}" "$lmstudio_base_url/models") || {
+    echo "ERROR: LM Studio is unavailable at $lmstudio_base_url" >&2; exit 69;
+  }
+  lmstudio_model=${worker_model#lmstudio/}
+  jq -e --arg model "$lmstudio_model" '.data[]? | select(.id == $model)' <<<"$model_catalog" >/dev/null || {
+    echo "ERROR: LM Studio model is unavailable: $lmstudio_model" >&2; exit 69;
+  }
+fi
+
+if [[ ${CODEX_LOCAL_DRY_RUN:-0} == 1 ]]; then
+  printf 'role=%s\nagent=%s\nmodel=%s\ntier=%s\nrepo=%s\n' \
+    "$worker_role" "$worker_agent" "$worker_model" "$worker_tier" "$worker_repo_path"
+  exit 0
+fi
+
+worker_timeout=${CODEX_LOCAL_TIMEOUT_SECONDS:-1800}
+[[ "$worker_timeout" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: CODEX_LOCAL_TIMEOUT_SECONDS must be a positive integer" >&2; exit 2;
+}
+
+worker_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+worker_log_dir=/home/connellwc83/.local/share/opencode-orchestration/runs
+install -d -m 700 "$worker_log_dir"
+worker_log="$worker_log_dir/$worker_run_id.jsonl"
+worker_envelope="$worker_log_dir/$worker_run_id.envelope.json"
+worker_result="$worker_log_dir/$worker_run_id.result.json"
+umask 077
+
+# Inference must never inherit the operator's authenticated home or ambient
+# credentials.  Build a disposable OpenCode home containing only the runtime
+# configuration and agent prompts, then launch with an explicit environment.
+worker_runtime_parent=/home/connellwc83/.local/share/opencode-orchestration/worker-homes
+install -d -m 700 "$worker_runtime_parent"
+worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
+install -d -m 700 "$worker_runtime_home/.config/opencode/agents" \
+  "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
+jq '.permission.bash as $global_bash
+    | .mcp.github.enabled = false
+    | .agent.coder.permission = ((.agent.coder.permission // {}) + {
+        "github_*": "deny", "gitea_*": "deny",
+        "bash": ($global_bash + {
+          "*": "allow", "gh": "deny", "gh *": "deny", "* gh *": "deny",
+          "git push": "deny", "git push *": "deny",
+          "curl": "deny", "curl *": "deny", "wget": "deny", "wget *": "deny"
+        })
+      })' /home/connellwc83/.config/opencode/opencode.json \
+  >"$worker_runtime_home/.config/opencode/opencode.json"
+cp -a /home/connellwc83/.config/opencode/agents/. \
+  "$worker_runtime_home/.config/opencode/agents/"
+worker_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
+[[ -x $worker_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $worker_opencode" >&2; exit 2; }
+worker_path=/home/connellwc83/.local/bin:/home/connellwc83/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Local commits need an identity, but not the operator's credential-bearing
+# global Git configuration.
+if [[ $worker_role == coder ]]; then
+  git -C "$worker_repo_path" config user.name "$(git config --global user.name)"
+  git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
+fi
+
+worker_repository=${CODEX_LOCAL_REPOSITORY:-}
+worker_issue=${CODEX_LOCAL_ISSUE:-}
+worker_pr=${CODEX_LOCAL_PR:-}
+record_run=${CODEX_LOCAL_RECORD_RUN:-0}
+
+if [[ $record_run == 1 && ( -z $worker_repository || -z $worker_issue ) ]]; then
+  echo "ERROR: recording requires CODEX_LOCAL_REPOSITORY and CODEX_LOCAL_ISSUE" >&2
+  exit 2
+fi
+
+candidate_source=/home/connellwc83/projects/codex-local-harness/src
+review_cli=(
+  env PYTHONPATH="$candidate_source"
+  python3 -m codex_local_harness.review
+)
+coder_cli=(
+  env PYTHONPATH="$candidate_source"
+  python3 -m codex_local_harness.coder
+)
+
+if [[ $worker_role == reviewer ]]; then
+  [[ -n $worker_repository && -n $worker_issue && -n $worker_pr ]] || {
+    echo "ERROR: reviewer requires CODEX_LOCAL_REPOSITORY, CODEX_LOCAL_ISSUE, and CODEX_LOCAL_PR" >&2
+    exit 2
+  }
+  review_scratch_parent=/home/connellwc83/.local/share/opencode-orchestration/reviewer-scratch
+  install -d -m 700 "$review_scratch_parent"
+  review_runtime_tmp=$(mktemp -d --tmpdir="$review_scratch_parent")
+  worker_task=$("${review_cli[@]}" prepare \
+    --checkout "$worker_repo_path" --repository "$worker_repository" \
+    --issue "$worker_issue" --pr "$worker_pr" --task-file "$worker_task_file" \
+    --envelope-out "$worker_envelope" --scratch-dir "$review_runtime_tmp" \
+    --runtime-home "$worker_runtime_home") || exit 65
+fi
+if [[ $worker_role == coder && ${CODEX_LOCAL_CODER_POSTFLIGHT:-0} == 1 ]]; then
+  worker_task=$'HARNESS DELIVERY BOUNDARY: Work only in the local checkout. Do not push, use gh, create a PR, comment, or change labels. Commit the verified implementation on a clean local issue branch; the deterministic harness owns all remote publication.\n\n'"$worker_task"
+fi
+
+echo "Starting local worker: role=$worker_role tier=$worker_tier model=$worker_model run_id=$worker_run_id" >&2
+set +e
+worker_env=(env -i HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="${LOGNAME:-worker}"
+  PATH="$worker_path" XDG_CONFIG_HOME="$worker_runtime_home/.config"
+  XDG_DATA_HOME="$worker_runtime_home/.local/share" XDG_CACHE_HOME="$worker_runtime_home/.cache"
+  LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}" NO_COLOR=1)
+review_env=()
+if [[ $worker_role == reviewer ]]; then
+  review_env=(PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$review_runtime_tmp/pycache" \
+    PYTEST_ADDOPTS="-p no:cacheprovider" COVERAGE_FILE="$review_runtime_tmp/.coverage" \
+    TMPDIR="$review_runtime_tmp" PYTHONPATH="$worker_repo_path")
+fi
+"${worker_env[@]}" "${review_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+  "$worker_opencode" run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
+  --model "$worker_model" "$worker_task" >"$worker_log"
+inference_status=$?
+set -e
+
+jq -r 'select(.type == "text") | .part.text' "$worker_log"
+workflow_status=$inference_status
+if [[ $worker_role == reviewer && $inference_status == 0 ]]; then
+  set +e
+  "${review_cli[@]}" finalize --envelope "$worker_envelope" --log "$worker_log" \
+    --run-id "$worker_run_id" --result-out "$worker_result"
+  finalize_status=$?
+  set -e
+  [[ $finalize_status == 0 ]] || workflow_status=65
+fi
+if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-0} == 1 ]]; then
+  set +e
+  "${coder_cli[@]}" --checkout "$worker_repo_path" --repository "$worker_repository" \
+    --issue "$worker_issue" --result-out "$worker_result" --publish
+  finalize_status=$?
+  set -e
+  [[ $finalize_status == 0 ]] || workflow_status=65
+fi
+
+if [[ $record_run == 1 ]]; then
+  /home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh \
+    "$worker_repository" "$worker_issue" "$worker_role" "$worker_model" "$worker_log" \
+    "run_id=$worker_run_id inference_status=$inference_status workflow_status=$workflow_status"
+
+  health_records=${CODEX_LOCAL_HEALTH_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/runs.jsonl}
+  task_class=${CODEX_LOCAL_TASK_CLASS:-unclassified}
+  health_status=success
+  failure_class=
+  if (( workflow_status != 0 )); then
+    health_status=failure
+    if (( inference_status != 0 )); then
+      failure_class=infrastructure-inference
+    else
+      failure_class=workflow-postflight
+    fi
+  fi
+  health_args=(
+    --log "$worker_log" --records "$health_records" --run-id "$worker_run_id"
+    --issue "$worker_issue" --role "$worker_role" --model "$worker_model"
+    --profile codex-led-v4 --task-class "$task_class" --status "$health_status"
+  )
+  [[ -z $failure_class ]] || health_args+=(--failure-class "$failure_class")
+  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.opencode "${health_args[@]}" >/dev/null; then
+    echo "WARN: health telemetry ingestion failed for run $worker_run_id" >&2
+  fi
+fi
+
+exit "$workflow_status"
