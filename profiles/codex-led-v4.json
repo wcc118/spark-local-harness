@@ -1,0 +1,43 @@
+{
+  "name": "codex-led-v4",
+  "status": "scaffold-not-installed",
+  "baseline": "baseline-v2-extracted",
+  "objective": {
+    "primary": "high local capability per frontier token with Codex merge authority",
+    "frontier_token_share_hypothesis": "0.05-0.10",
+    "quality_target": "approach frontier reference quality; parity is not required",
+    "final_gate": "frozen baseline-v2 versus final candidate smoke test"
+  },
+  "governance": {
+    "architecture_steward": "codex",
+    "merge_authority": "codex",
+    "local_model_merge_authority": false,
+    "telemetry_mutates_policy": false
+  },
+  "routes": {
+    "helper": {
+      "runtime": "opencode-lm-studio",
+      "model": "qwen/qwen3.8-27b",
+      "authority": "advisory",
+      "qualification": "pending-role-specific-evaluation"
+    },
+    "complex_coder": {
+      "runtime": "opencode-vllm-spark",
+      "model": "Qwen/Qwen3-Coder-Next-FP8",
+      "authority": "bounded-implementation",
+      "qualification": "existing-route; v4-product-qualification-pending"
+    },
+    "scout": {
+      "runtime": "opencode-lm-studio",
+      "model": "qwen/qwen3.8-27b",
+      "authority": "advisory-only",
+      "qualification": "pending"
+    }
+  },
+  "health": {
+    "schema_version": 1,
+    "automatic_ingestion": true,
+    "stores_prompt_content": false,
+    "automatic_architecture_changes": false
+  }
+}
