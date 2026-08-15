@@ -34,6 +34,10 @@
   },
   "sha256": {
     "candidate_worker": "ebe20c2da94709cd83352740a87fd2469a9bcce2a26d1f84c446e492687afe0b",
+    "routing_profile": "9032152bc3ee59ee0e3698dd9a940f6c3af432504354cd21739bc27e64ba55bd",
+    "dashboard": "1b0b37ae130a2fb562ee203f23f43536676988855f669a0e4aebccc00de90f21",
+    "diagnostics": "5784539d961b956e968d976add242a719bc45c6fdf448db7407692aba0f2b330",
+    "read_model": "a3aff4554b02ad636ad7370985e2fcaa655005a0111289731aabccb14b6eab5d",
     "replay_runs": "c2b84e7ec0ca079a570a9b976de56d605df2258b2ef8e8405a9b81761a5e279a",
     "replay_adjudications": "5549003b79a9d9d280dcae8152a2536a8d078d60849cca7a5abae64ffd96cca8",
     "replay_lifecycle": "25c249deb48dabb401f4fa11bad9863b5a70e7aa2d92e9fe05295614aa8419d4"
