@@ -119,7 +119,7 @@ def _format_age(seconds: float) -> str:
             value = int(seconds / duration)
             suffix = "s" if value != 1 else ""
             return f"{value} {name}{suffix} ago"
-    
+
     return "just now"
 
 
