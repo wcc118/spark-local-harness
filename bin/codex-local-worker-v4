@@ -186,7 +186,11 @@ fi
 inference_status=$?
 set -e
 
-jq -sr '[.[] | select(.type == "text") | .part.text] | last // ""' "$worker_log"
+if [[ $worker_agent == advisory ]]; then
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.advisory_output --log "$worker_log"
+else
+  jq -r 'select(.type == "text") | .part.text' "$worker_log"
+fi
 workflow_status=$inference_status
 if [[ $worker_role == reviewer && $inference_status == 0 ]]; then
   set +e

@@ -27,7 +27,8 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "codex_local_harness.runtime.opencode" in content
     assert "CODEX_LOCAL_HEALTH_RECORDS" in content
     assert "CODEX_LOCAL_AGENT" in content
-    assert 'last // ""' in content
+    assert "runtime.advisory_output" in content
+    assert "select(.type == \"text\") | .part.text" in content
     assert "helper) default_worker_timeout=300" in content
 
 
