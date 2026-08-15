@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+install_bin=${CODEX_LOCAL_INSTALL_BIN:-/home/connellwc83/.local/bin}
+backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
+baseline_worker=${CODEX_LOCAL_BASELINE_WORKER:-$install_bin/codex-local-worker}
+workers_config=${CODEX_LOCAL_WORKERS_CONFIG:-/home/connellwc83/.config/codex-local/workers.json}
+opencode_config=${CODEX_LOCAL_OPENCODE_CONFIG:-/home/connellwc83/.config/opencode/opencode.json}
+expected_baseline=37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415
+
+for required in "$baseline_worker" "$workers_config" "$opencode_config"; do
+  [[ -f $required ]] || { echo "ERROR: required installed file is missing: $required" >&2; exit 2; }
+done
+observed_baseline=$(sha256sum "$baseline_worker" | cut -d' ' -f1)
+[[ $observed_baseline == "$expected_baseline" ]] || {
+  echo "ERROR: installed baseline worker hash is not qualified: $observed_baseline" >&2
+  exit 65
+}
+
+backup_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+backup_dir=$backup_root/$backup_id
+install -d -m 700 "$install_bin" "$backup_root" "$backup_dir"
+install -m 600 "$baseline_worker" "$backup_dir/codex-local-worker"
+install -m 600 "$workers_config" "$backup_dir/workers.json"
+install -m 600 "$opencode_config" "$backup_dir/opencode.json"
+
+jq -n \
+  --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg baseline_worker_sha256 "$observed_baseline" \
+  --arg workers_sha256 "$(sha256sum "$workers_config" | cut -d' ' -f1)" \
+  --arg opencode_sha256 "$(sha256sum "$opencode_config" | cut -d' ' -f1)" \
+  '{schema_version:1,created_at:$created_at,baseline_worker_sha256:$baseline_worker_sha256,workers_sha256:$workers_sha256,opencode_sha256:$opencode_sha256}' \
+  >"$backup_dir/manifest.json"
+chmod 600 "$backup_dir/manifest.json"
+
+install -m 755 "$script_dir/codex-local-worker-v4" "$install_bin/codex-local-worker-v4"
+install -m 755 "$script_dir/codex-local-helper-v4" "$install_bin/codex-local-helper-v4"
+install -m 755 "$script_dir/codex-local-coder-v4" "$install_bin/codex-local-coder-v4"
+install -m 755 "$script_dir/codex-local-reviewer-v4" "$install_bin/codex-local-reviewer-v4"
+
+printf 'backup=%s\n' "$backup_dir"
+printf 'worker_sha256=%s\n' "$(sha256sum "$install_bin/codex-local-worker-v4" | cut -d' ' -f1)"
+
