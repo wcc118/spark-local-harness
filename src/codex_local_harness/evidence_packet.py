@@ -42,6 +42,7 @@ class ReviewerEvidencePacket:
     test_executables: tuple[tuple[str, str], ...]
     verification_command: str = "git diff --check <comparison-base>..<head>"
     verification_exit_code: int = 0
+    verification_output: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION or self.provenance != "harness-observed":
@@ -65,7 +66,8 @@ class ReviewerEvidencePacket:
         if len(set(name for name, _ in self.test_executables)) != len(self.test_executables):
             raise ValueError("duplicate test executable")
         if self.verification_exit_code != 0:
-            raise ValueError("review preflight verification did not pass")
+            output = self.verification_output.strip() if self.verification_output else "no details"
+            raise ValueError(f"review preflight verification did not pass: {output}")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,7 +111,17 @@ def build_reviewer_evidence_packet(
             raise ValueError("Git returned an unsafe changed-file path")
     diff_stat_raw = run(["git", "diff", "--stat", "--compact-summary", revision], checkout).strip()
     patch_raw = run(["git", "diff", "--no-ext-diff", "--unified=40", revision], checkout)
-    run(["git", "diff", "--check", revision], checkout)
+    
+    # Capture git diff --check output and exit code
+    diff_check_result = run(["git", "diff", "--check", revision], checkout)
+    diff_check_output = diff_check_result if diff_check_result.strip() else ""
+    
+    # Check for unexpected untracked scratch artifacts
+    status_result = run(["git", "status", "--porcelain=v1"], checkout)
+    unexpected_artifacts = _detect_unexpected_scratch_artifacts(status_result)
+    if unexpected_artifacts:
+        raise ValueError(f"unexpected untracked scratch artifacts: {unexpected_artifacts}")
+    
     if not diff_stat_raw or not patch_raw:
         raise ValueError("Git returned empty review evidence")
     diff_stat, stat_truncated = _bounded(diff_stat_raw, MAX_DIFF_STAT_CHARS, "\n...[diff stat truncated]")
@@ -132,9 +144,36 @@ def build_reviewer_evidence_packet(
         patch_truncated=patch_truncated,
         patch_sha256=hashlib.sha256(patch_raw.encode("utf-8")).hexdigest(),
         test_executables=tuple(sorted(test_executables.items())),
+        verification_exit_code=0,
+        verification_output=diff_check_output,
     )
     packet.compact_json()
     return packet
+
+
+# Regex to match known generated runtime artifacts that are expected
+# Matches: __pycache__/, .pytest_cache/, .pyc files, .coverage, etc.
+GENERATED_ARTIFACT_PATTERN = re.compile(
+    r"(^|/)(?:__pycache__|\.pytest_cache)(?:/|$)|\.pyc$|(^|/)\.coverage(?:\.|$)"
+)
+
+
+def _detect_unexpected_scratch_artifacts(status_output: str) -> list[str]:
+    """Detect unexpected untracked scratch artifacts from git status output.
+    
+    Expected runtime artifacts (like __pycache__, .pytest_cache, .pyc, .coverage)
+    are filtered out. Any other untracked files/dirs are considered unexpected.
+    """
+    unexpected: list[str] = []
+    for line in status_output.splitlines():
+        if not line.startswith("??"):
+            continue
+        path = line[2:].strip()
+        if not path:
+            continue
+        if not GENERATED_ARTIFACT_PATTERN.search(path):
+            unexpected.append(path)
+    return unexpected
 
 
 def _bounded(value: str, limit: int, marker: str) -> tuple[str, bool]:

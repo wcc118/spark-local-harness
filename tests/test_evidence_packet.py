@@ -12,6 +12,7 @@ from codex_local_harness.evidence_packet import (
     MAX_PATCH_CHARS,
     ReviewerEvidencePacket,
     build_reviewer_evidence_packet,
+    _detect_unexpected_scratch_artifacts,
 )
 
 
@@ -95,3 +96,96 @@ def test_packet_json_escapes_observed_text():
     serialized = value.compact_json()
     assert '\\"quoted\\"' in serialized
     assert "<script>" in json.loads(serialized)["patch"]
+
+
+class DiffCheckRun:
+    """Fake run that supports git diff --check output and status."""
+    def __init__(self, files=("src/value.py", "tests/test_value.py"), stat="2 files changed",
+                 patch="diff --git a/value.py b/value.py\n", diff_check_output="",
+                 status_output=""):
+        self.files = files
+        self.stat = stat
+        self.patch = patch
+        self.diff_check_output = diff_check_output
+        self.status_output = status_output
+
+    def __call__(self, argv, cwd=None):
+        if argv[:2] == ["git", "merge-base"]:
+            return BASE + "\n"
+        if argv[:3] == ["git", "diff", "--name-only"]:
+            return "\n".join(self.files) + "\n"
+        if argv[:3] == ["git", "diff", "--stat"]:
+            return self.stat + "\n"
+        if argv[:3] == ["git", "diff", "--no-ext-diff"]:
+            return self.patch
+        if argv[:3] == ["git", "diff", "--check"]:
+            return self.diff_check_output
+        if argv[:3] == ["git", "status", "--porcelain=v1"]:
+            return self.status_output
+        raise AssertionError(argv)
+
+
+def test_packet_clean_checkout_passes_verification():
+    """Test that a clean checkout with no diff-check failures passes."""
+    value = packet(DiffCheckRun(diff_check_output="", status_output=""))
+    assert value.verification_exit_code == 0
+    assert value.verification_output == ""
+    assert json.loads(value.compact_json())["verification_exit_code"] == 0
+
+
+def test_packet_diff_check_failure_raises_with_detailed_output():
+    """Test that git diff --check failures are captured and reported."""
+    from codex_local_harness.evidence_packet import _detect_unexpected_scratch_artifacts
+    
+    diff_check_output = "src/value.py:15: trailing whitespace.\n"
+    status_output = ""
+    
+    with pytest.raises(ValueError, match="trailing whitespace"):
+        packet(DiffCheckRun(diff_check_output=diff_check_output, status_output=status_output))
+
+
+def test_packet_captures_diff_check_output_in_packet():
+    """Test that git diff --check output is captured even on success."""
+    diff_check_output = "src/value.py:5: whitespace error.\n"
+    status_output = ""
+    
+    with pytest.raises(ValueError, match="whitespace error"):
+        packet(DiffCheckRun(diff_check_output=diff_check_output, status_output=status_output))
+
+
+def test_generated_artifacts_are_expected_in_status():
+    """Test that known generated runtime artifacts are filtered from unexpected list."""
+    status_output = "?? issuebench/__pycache__/\n?? .pytest_cache/\n?? .coverage\n"
+    assert _detect_unexpected_scratch_artifacts(status_output) == []
+
+
+def test_unexpected_scratch_artifacts_are_detected():
+    """Test that unknown scratch artifacts are detected as failures."""
+    from codex_local_harness.evidence_packet import _detect_unexpected_scratch_artifacts
+    
+    status_output = "?? issuebench/__pycache__/\n?? .pytest_cache/\n?? .coverage\n?? scratch.tmp\n"
+    unexpected = _detect_unexpected_scratch_artifacts(status_output)
+    assert unexpected == ["scratch.tmp"]
+
+
+def test_unexpected_scratch_artifacts_raise_value_error():
+    """Test that unexpected scratch artifacts cause packet build to fail."""
+    status_output = "?? issuebench/__pycache__/\n?? .pytest_cache/\n?? .coverage\n?? scratch.tmp\n"
+    
+    with pytest.raises(ValueError, match="scratch.tmp"):
+        packet(DiffCheckRun(diff_check_output="", status_output=status_output))
+
+
+def test_packet_detects_multiple_unexpected_artifacts():
+    """Test that multiple unexpected artifacts are all reported."""
+    status_output = "?? temp_file.txt\n?? other.tmp\n?? issuebench/__pycache__/\n"
+    unexpected = _detect_unexpected_scratch_artifacts(status_output)
+    assert set(unexpected) == {"temp_file.txt", "other.tmp"}
+
+
+def test_packet_with_trailing_whitespace_diff_check_failure():
+    """Test specific whitespace error detection from git diff --check."""
+    diff_check_output = "src/model.py:42: trailing whitespace.\nsrc/model.py:100: whitespace error before EOF.\n"
+    
+    with pytest.raises(ValueError, match="trailing whitespace"):
+        packet(DiffCheckRun(diff_check_output=diff_check_output, status_output=""))
