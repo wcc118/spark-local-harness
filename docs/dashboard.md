@@ -30,6 +30,24 @@ shows whether displayed data is fresh.
 
 ## What to look for
 
+- **Run history defaults to triage.** The table opens on "Needs judgment · N",
+  the same bucket used to compute `unadjudicated_runs`. Switch to
+  "Contradictions" or "All" with the tabs above the table; a text filter and
+  click-to-sort column headers work within whichever tab is active. This is
+  all client-side filtering over the already-fetched read-only snapshot — no
+  new endpoint, no mutation.
+- **The session picker** narrows every section below it to one session.
+  Options are labeled `repository#issue` (or the operation ID, or "Legacy
+  (no session ID)" for events recorded before session tracking existed) plus
+  a status and the operation count, not the bare session UUID. Picking a
+  session submits the form via a real `change` listener in `dashboard.js` —
+  earlier releases used an inline `onchange` attribute, which the page's own
+  `script-src 'self'` CSP silently blocks in a standards-compliant browser,
+  so the selector looked interactive but never actually changed the page.
+- **The freshness chip** next to the connection indicator reports the age of
+  the newest source file, independent of the SSE socket state: green under 5
+  minutes, amber under 30, red beyond that, grey when there is no data yet.
+  A live socket does not mean fresh data — check both.
 - **Claim** is what worker execution reported.
 - **Observed** is the latest independent evaluator, Codex, operator, or
   reviewer adjudication.
@@ -39,9 +57,23 @@ shows whether displayed data is fresh.
   when normal worker telemetry was never finalized.
 - **Evidence references** are bounded identifiers into durable evidence, not
   captured prompt or response text.
-- **Current workflow** shows durable delivery milestones. Evidence is attached
-  as activity, correction is a numbered loop to implementation, and missing
-  observations remain `pending` rather than being inferred as passed.
+- **Current workflow** shows durable delivery milestones, collapsed by default
+  into a dot rail (one glance, colored by state) with the current milestone
+  named beside it. Click the rail to expand the full milestone grid. Evidence
+  is attached as activity, correction is a numbered loop to implementation,
+  and missing observations remain `pending` rather than being inferred as
+  passed.
+- **A malformed or missing source** gets its own chip in the warning banner
+  with a one-line cause (e.g. "unreadable — check the last line for
+  truncated or invalid JSON"), not just a bare filename.
+- **Telemetry publication failures** expand in place under the summary count
+  to the sanitized failure list already written to
+  `publication-failures.jsonl`, rather than leaving the count with nowhere
+  to go.
+- **Scroll position and any open evidence/history panels survive a live
+  refresh.** The SSE-triggered reload still swaps the whole page, but the
+  client remembers what was open and where you were before replacing the
+  DOM, then restores both.
 - **Running plan** shows the latest concise public plan revision beside its
   matching workflow. It includes objective, ordered step states, progress,
   evidence references, and revision history. It never stores or displays
@@ -51,6 +83,12 @@ shows whether displayed data is fresh.
   run records. They do not estimate this interactive Codex thread.
 - **Local tokens** include finalized normalized worker runs. The total updates
   when a run finishes; it does not estimate tokens during active inference.
+  The "Processed context" card carries a small sparkline of local tokens
+  across the most recent runs so a volume shift is visible at a glance.
+- **Cached input** is not a first-class card — most local worker profiles
+  don't report it yet, so it lives as a footnote under Division of Labor
+  instead of occupying a card slot that would otherwise always read "Not
+  reported (unsupported)."
 - **Interactive Codex tokens** are separate and stay `Unavailable` unless an
   authoritative measured or timestamped operator-reported value is supplied.
 - **Codex context and plan** show measured or timestamped operator-reported

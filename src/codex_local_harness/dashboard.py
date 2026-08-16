@@ -167,6 +167,31 @@ def _format_age(seconds: float) -> str:
     return "just now"
 
 
+def _freshness_severity(age_seconds: float | None) -> str:
+    """Classify data age so staleness can be escalated visually, independent of socket health."""
+    if age_seconds is None:
+        return "unknown"
+    if age_seconds < 300:
+        return "good"
+    if age_seconds < 1800:
+        return "warn"
+    return "critical"
+
+
+_SOURCE_HINTS = {
+    "missing": "not created yet — no records have been written",
+    "malformed": "unreadable — check the last line for truncated or invalid JSON",
+}
+
+
+def _triage_bucket(view: dict[str, Any]) -> str:
+    if view["contradiction"]:
+        return "contradiction"
+    if view["effective_outcome"] == "unadjudicated":
+        return "needs-judgment"
+    return "clean"
+
+
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="14" fill="#0b1020"/>
 <circle cx="32" cy="32" r="21" fill="none" stroke="#2a3552" stroke-width="4"/>
@@ -272,6 +297,16 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         for label, value in cards
     )
     rows = "".join(_run_row(view) for view in views) or '<tr><td colspan="10">No diagnostic runs recorded.</td></tr>'
+    needs_judgment_count = sum(1 for view in views if _triage_bucket(view) == "needs-judgment")
+    contradiction_count = sum(1 for view in views if _triage_bucket(view) == "contradiction")
+    triage_toolbar = (
+        '<div class="triage-toolbar">'
+        f'<button type="button" class="triage-tab" data-filter="needs-judgment">Needs judgment · {needs_judgment_count}</button>'
+        f'<button type="button" class="triage-tab" data-filter="contradiction">Contradictions · {contradiction_count}</button>'
+        f'<button type="button" class="triage-tab" data-filter="all">All · {len(views)}</button>'
+        '<input type="search" class="run-filter" id="run-filter" placeholder="Filter by run, role, model, task…" aria-label="Filter run history">'
+        '</div>'
+    )
     plans_by_identity = {
         (item["session_id"], item["repository"], item["operation_id"], item["issue"]): item
         for item in snapshot.get("plans", ())
@@ -292,10 +327,28 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     freshness = snapshot["freshness"]
     age_seconds = freshness["newest_age_seconds"]
     newest_text = _format_age(age_seconds) if age_seconds is not None else "No data"
+    freshness_severity = _freshness_severity(age_seconds)
     source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
-    source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
+    source_banner = ""
+    if source_problems:
+        problem_items = "".join(
+            f'<li><span class="sev-chip {html.escape(source["state"])}">{html.escape(source["name"])} · {html.escape(source["state"])}</span>'
+            f'<span class="source-hint">{html.escape(_SOURCE_HINTS.get(source["state"], "check the source file"))}</span></li>'
+            for source in source_problems
+        )
+        source_banner = f'<section class="source-warning"><strong>Source warning</strong><ul class="source-warning-list">{problem_items}</ul></section>'
     if snapshot["publication_failures"]:
-        source_banner += f'<section class="source-warning"><strong>Telemetry publication failures:</strong> {len(snapshot["publication_failures"])}</section>'
+        failures = snapshot["publication_failures"]
+        failure_items = "".join(
+            f'<li><code>{html.escape(str(item["run_id"]))}</code> · {html.escape(str(item["phase"]))} → {html.escape(str(item["target"]))}'
+            f' · {html.escape(str(item["error_class"]))} · {html.escape(str(item["observed_at"]))}</li>'
+            for item in failures
+        )
+        source_banner += (
+            '<details class="source-warning publication-failures">'
+            f'<summary><strong>Telemetry publication failures:</strong> {len(failures)}</summary>'
+            f'<ul class="failure-list">{failure_items}</ul></details>'
+        )
     telemetry_cards = []
     if codex["tokens_used"] is not None:
         telemetry_cards.append(("Interactive Codex tokens", f"{codex['tokens_used']:,}", codex["source"]))
@@ -311,11 +364,17 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         for label, value, note in telemetry_cards
     )
     session_options = ['<option value="">All sessions</option>'] + [
-        f'<option value="{html.escape(item["session_id"])}"{" selected" if snapshot["selected_session"] == item["session_id"] else ""}>{html.escape(item["session_id"])} · {html.escape(item["status"])}</option>'
+        f'<option value="{html.escape(item["session_id"])}"{" selected" if snapshot["selected_session"] == item["session_id"] else ""}>'
+        f'{html.escape(item["label"])} · {html.escape(item["status"])} · {item["operations"]} ops'
+        f'{"" if item["session_id"] == "legacy" else " · " + html.escape(item["session_id"][:8])}</option>'
         for item in snapshot["sessions"]
     ]
-    session_picker = f'<form class="session-picker" method="get"><label>Session <select name="session" onchange="this.form.submit()">{"".join(session_options)}</select></label></form>'
-    accounting_html = _accounting_html(snapshot["accounting"])
+    session_picker = (
+        '<form class="session-picker" method="get"><label>Session '
+        f'<select name="session" id="session-select">{"".join(session_options)}</select></label> '
+        '<button type="submit" class="session-submit">Go</button></form>'
+    )
+    accounting_html = _accounting_html(snapshot["accounting"], views)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -330,13 +389,31 @@ main{{width:100%;max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-s
 .operation{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px;overflow:hidden}} .operation-head{{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}} .flow{{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px;margin-top:12px;padding:2px;min-width:0}} .milestone{{position:relative;border:1px solid var(--line);border-radius:8px;padding:9px;min-width:0;overflow-wrap:anywhere}} .milestone.pending{{color:#626b7c;border-color:#343946;background:#181b22}} .milestone.not-applicable{{color:#737b8c;border-color:#343946;background:transparent}} .milestone.active{{border-color:var(--warn)}} .milestone.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px 1px rgba(243,201,105,.5);pointer-events:none}} @media (prefers-reduced-motion:no-preference){{.milestone.active::after{{animation:milestone-orbit 4s linear infinite}}@keyframes milestone-orbit{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}}@media (prefers-reduced-motion:reduce){{.milestone.active::after{{top:4px;right:4px;left:auto}}}} .milestone.passed{{border-color:var(--good)}} .milestone.failed,.milestone.interrupted,.milestone.blocked,.milestone.conflicting{{border-color:var(--bad)}} .milestone-name{{display:block;font-size:11px;color:var(--muted)}} .milestone-activities{{margin-top:6px}} .milestone-activity{{display:inline-block;background:var(--line);color:var(--ink);border-radius:4px;padding:2px 6px;font-size:9px;margin-right:4px;margin-bottom:4px}} .unassigned-activities{{margin:9px 2px 0;padding:7px 10px;border:1px dashed var(--warn);border-radius:5px;color:var(--warn)}} .correction-loop{{margin:9px 2px 0;padding:7px 10px;border-left:3px solid var(--warn);background:#272417;color:var(--warn);border-radius:4px}} .workflow-diagnostic{{display:inline-block;margin-top:8px;padding:3px 7px;border:1px solid var(--bad);color:var(--bad);border-radius:5px;font-size:11px}} @media (max-width:1000px){{.flow{{grid-template-columns:repeat(4,minmax(0,1fr))}}}} @media (max-width:560px){{main{{padding:16px}}.flow{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
 .telemetry{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0 0 22px}} .empty{{color:var(--muted)}} #connection{{color:var(--warn)}}
 .operation-pair{{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:14px;min-width:0}} .operation-pair .operation{{margin:0}} .running-plan{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}} .plan-head{{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}} .plan-objective{{margin:9px 0;color:var(--ink)}} .plan-steps{{list-style:none;padding:0;margin:10px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px}} .plan-step{{position:relative;border:1px solid var(--line);border-radius:7px;padding:8px;min-width:0;overflow-wrap:anywhere}} .plan-step.pending{{color:#626b7c;border-color:#343946;background:#181b22}} .plan-step.active{{border-color:var(--warn)}} .plan-step.completed,.plan-step.skipped{{color:var(--muted)}} .plan-step.blocked{{border-color:var(--bad)}} .plan-step.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px rgba(243,201,105,.5)}} @media (prefers-reduced-motion:no-preference){{.plan-step.active::after{{animation:plan-focus 4s linear infinite}}@keyframes plan-focus{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}} @media (prefers-reduced-motion:reduce){{.plan-step.active::after{{top:4px;right:4px;left:auto}}}} .plan-state{{display:block;font-size:10px;text-transform:uppercase;color:var(--muted)}} .plan-diagnostic{{display:inline-block;margin:7px 5px 0 0;color:var(--bad);font-size:11px}} .plan-change{{border-left:3px solid var(--warn);padding-left:8px;color:var(--warn)}} .plan-history{{margin-top:10px;color:var(--muted)}}
-.session-picker{{margin:0 0 14px}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px}}
+.session-picker{{margin:0 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px;font:inherit;max-width:100%}}
+.session-submit{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer}} .session-submit:hover{{color:var(--ink)}}
 .source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
 th,td{{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}} th{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
 tr.contradiction{{background:#3a1e2a}} .passed{{color:var(--good)}} .failed,.interrupted,.timed-out,.cancelled{{color:var(--bad)}} .unadjudicated,.unknown{{color:var(--warn)}}
 code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{color:var(--muted);margin-top:16px}}
+.freshness{{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}} .freshness.good{{color:var(--good);background:#173327}} .freshness.warn{{color:var(--warn);background:#332a13}} .freshness.critical{{color:var(--bad);background:#3a1e2a}} .freshness.unknown{{color:var(--muted);background:#1b2338}}
+.source-warning-list{{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}} .source-warning-list li{{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}}
+.sev-chip{{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;background:#3a1e2a;color:var(--bad)}} .sev-chip.missing{{background:#332a13;color:var(--warn)}}
+.source-hint{{color:var(--muted);font-size:12px}}
+.publication-failures summary{{cursor:pointer}} .publication-failures[open]{{padding-bottom:10px}} .failure-list{{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px;font-size:12px;color:var(--muted);max-width:none}}
+.triage-toolbar{{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}}
+.triage-tab{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12px;cursor:pointer;font:inherit}}
+.triage-tab.active{{color:var(--ink);border-color:var(--good);background:#173327}}
+.run-filter{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:12px;min-width:220px;font:inherit}}
+th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--ink)}} th.sortable::after{{content:"↕";opacity:.4;margin-left:4px}} th.sortable.sort-asc::after{{content:"↑";opacity:1}} th.sortable.sort-desc::after{{content:"↓";opacity:1}}
+.table-empty-note{{color:var(--muted);padding:14px 4px}}
+.flow-toggle{{border:none;padding:0;margin-top:12px}} .flow-summary{{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:2px 0}} .flow-summary::-webkit-details-marker{{display:none}} .flow-summary::before{{content:"▸";color:var(--muted);font-size:10px;width:8px}} details[open]>.flow-summary::before{{content:"▾"}} details[open]>.flow-summary+.flow{{margin-top:10px}}
+.rail-dots{{display:inline-flex;gap:4px}} .rail-dot{{width:9px;height:9px;border-radius:50%;background:#343946;display:inline-block}}
+.rail-dot.not-applicable{{background:transparent;border:1px solid #343946}} .rail-dot.active{{background:var(--warn)}} .rail-dot.passed{{background:var(--good)}} .rail-dot.failed,.rail-dot.interrupted,.rail-dot.blocked,.rail-dot.conflicting{{background:var(--bad)}}
+.rail-current{{color:var(--muted);font-size:12px}}
+.accounting-footnote{{color:var(--muted);font-size:12px;margin:8px 2px 0}}
+.card-spark{{margin-top:8px}} .sparkline{{display:block}}
 </style></head><body><main>
-<h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
+<h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
 {source_banner}
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>
@@ -344,7 +421,9 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <h2>Division of labor</h2>{accounting_html}
 <h2>Current operations</h2>{operations}
 <h2>Run history</h2>
-<div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>
+{triage_toolbar}
+<div class="table-wrap"><table><thead><tr><th class="sortable" data-sort="text">Run</th><th class="sortable" data-sort="text">Role / model</th><th class="sortable" data-sort="text">Task</th><th class="sortable" data-sort="text">Claim</th><th class="sortable" data-sort="text">Observed</th><th class="sortable" data-sort="text">Lifecycle</th><th class="sortable" data-sort="text">Delivery</th><th class="sortable" data-sort="num">Time</th><th class="sortable" data-sort="num">Tokens L/F</th><th>Evidence</th></tr></thead><tbody id="run-history-body">{rows}</tbody></table></div>
+<p class="table-empty-note" id="run-empty-note" hidden>No runs match this filter.</p>
 <footer>Unknown and unadjudicated are first-class states. A contradiction means observed evidence disagrees with the worker claim.</footer>
 </main><script src="/dashboard.js"></script></body></html>"""
 
@@ -384,9 +463,13 @@ def _running_plan(plan: dict[str, Any] | None) -> str:
         f'<p class="plan-objective">{html.escape(plan["objective"])}</p>'
         f'<p><small>{issue} · current: {html.escape(current)} · updated {age} · source {html.escape(plan["source"])}</small></p>'
         f'{changed}{_plan_refs(plan["evidence_refs"])}{diagnostics}<ol class="plan-steps">{steps}</ol>'
-        f'<details class="plan-history"><summary>Revision history ({len(plan["history"])})</summary><ol>{history}</ol></details>'
+        f'<details class="plan-history" data-details-id="{_plan_details_id(plan)}"><summary>Revision history ({len(plan["history"])})</summary><ol>{history}</ol></details>'
         '</section>'
     )
+
+
+def _plan_details_id(plan: dict[str, Any]) -> str:
+    return html.escape("plan:" + "|".join(str(plan.get(key) or "") for key in ("session_id", "repository", "operation_id", "issue")))
 
 
 def _plan_refs(references: list[str]) -> str:
@@ -400,6 +483,11 @@ def _operation(operation: dict[str, Any]) -> str:
         f'<div class="milestone {html.escape(m["state"])}"><span class="milestone-name">{html.escape(m["label"])}</span><strong class="milestone-state">{html.escape("not needed" if m["state"] == "not-applicable" else m["state"])}</strong>{_milestone_activities_html(m["activities"])}</div>'
         for m in operation["milestones"]
     )
+    rail_dots = "".join(
+        f'<span class="rail-dot {html.escape(m["state"])}" title="{html.escape(m["label"])}: {html.escape(m["state"])}"></span>'
+        for m in operation["milestones"]
+    )
+    flow_id = html.escape("flow:" + "|".join(str(operation.get(key) or "") for key in ("session_id", "operation_id", "issue")))
     stop = f' · stopped: {html.escape(str(operation["stop_reason"]))}' if operation["stop_reason"] else ""
     issue_text = f"issue {operation['issue']}"
     title = html.escape(operation["operation_id"])
@@ -422,7 +510,12 @@ def _operation(operation: dict[str, Any]) -> str:
     if corrections:
         latest = max(corrections, key=lambda item: (item["correction_cycle"], item["observed_at"]))
         loop = f'<div class="correction-loop" aria-label="Correction loop cycle {latest["correction_cycle"]}">↩ correction cycle {latest["correction_cycle"]} → implementation · {html.escape(latest["state"])}</div>'
-    return f'<section class="operation"><h3>Current workflow</h3><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span></div>{diagnostics}<div class="flow" aria-label="Delivery milestones">{milestones}</div>{unassigned_html}{loop}</section>'
+    flow_summary = (
+        f'<summary class="flow-summary"><span class="rail-dots">{rail_dots}</span>'
+        f'<span class="rail-current">{html.escape(operation["current_milestone"])} · {html.escape(operation["current_state"])}</span></summary>'
+    )
+    flow = f'<details class="flow-toggle" data-details-id="{flow_id}">{flow_summary}<div class="flow" aria-label="Delivery milestones">{milestones}</div></details>'
+    return f'<section class="operation"><h3>Current workflow</h3><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span></div>{diagnostics}{flow}{unassigned_html}{loop}</section>'
 
 
 def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
@@ -433,6 +526,22 @@ def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
         for item in activities
     )
     return f'<div class="milestone-activities">{activity_html}</div>'
+
+
+def _session_label(session_id: str, sample: dict[str, Any]) -> str:
+    """Give the session picker something a human can tell apart at a glance."""
+    if session_id == "legacy":
+        return "Legacy (no session ID)"
+    repository = sample.get("repository")
+    issue = sample.get("issue")
+    if repository and issue:
+        return f"{repository}#{issue}"
+    if issue:
+        return f"issue {issue}"
+    operation_id = sample.get("operation_id")
+    if operation_id:
+        return str(operation_id)
+    return session_id[:8]
 
 
 def _derive_sessions(
@@ -452,7 +561,10 @@ def _derive_sessions(
             status = "completed"
         else:
             status = "idle"
-        sessions.append({"session_id": session_id, "status": status, "updated_at": newest["updated_at"], "operations": len(items)})
+        sessions.append({
+            "session_id": session_id, "status": status, "updated_at": newest["updated_at"],
+            "operations": len(items), "label": _session_label(session_id, newest),
+        })
     known = set(grouped)
     plan_groups: dict[str, list[dict[str, Any]]] = {}
     for plan in plans:
@@ -465,6 +577,7 @@ def _derive_sessions(
         sessions.append({
             "session_id": session_id, "status": status,
             "updated_at": newest["observed_at"], "operations": 0,
+            "label": _session_label(session_id, newest),
         })
     return sorted(sessions, key=lambda item: (item["updated_at"], item["session_id"]), reverse=True)
 
@@ -498,7 +611,31 @@ def _accounting(
     }
 
 
-def _accounting_html(accounting: dict[str, Any]) -> str:
+def _sparkline_svg(values: list[float], label: str, width: int = 150, height: int = 30) -> str:
+    finite = [value for value in values if value is not None]
+    if len(finite) < 2 or max(finite) <= 0:
+        return ""
+    vmax, vmin = max(finite), min(finite)
+    span = (vmax - vmin) or 1
+    step = width / (len(finite) - 1)
+    points = [
+        (i * step, height - ((value - vmin) / span) * (height - 4) - 2)
+        for i, value in enumerate(finite)
+    ]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    area = f"0,{height} {line} {width},{height}"
+    last_x, last_y = points[-1]
+    return (
+        f'<svg class="sparkline" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+        f'role="img" aria-label="{html.escape(label)}">'
+        f'<polygon points="{area}" fill="var(--line)" opacity="0.6"></polygon>'
+        f'<polyline points="{line}" fill="none" stroke="var(--good)" stroke-width="1.5"></polyline>'
+        f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.2" fill="var(--good)"></circle>'
+        "</svg>"
+    )
+
+
+def _accounting_html(accounting: dict[str, Any], views: list[dict[str, Any]]) -> str:
     processed = accounting["local_input"] + accounting["codex_input"] if accounting["codex_input"] is not None else None
     generated = accounting["local_generated"] + accounting["codex_generated"] if accounting["codex_generated"] is not None else None
     local_processed_share = f'{accounting["local_input"] / processed * 100:.1f}%' if processed else "Not available"
@@ -516,13 +653,22 @@ def _accounting_html(accounting: dict[str, Any]) -> str:
         if accounting["local_uncached"] is not None and accounting["codex_uncached"] is not None
         else "Not fully reported"
     )
+    recent = views[-24:]
+    spark = _sparkline_svg(
+        [view["local_tokens"] for view in recent],
+        f"Local tokens across the last {len(recent)} runs",
+    )
+    spark_html = f'<div class="card-spark">{spark}</div>' if spark else ""
+    footnote = (
+        '<p class="accounting-footnote">Cached input (not shown as a card above — local worker '
+        f'profiles do not all report it yet): local {cached} · Codex {codex_cached} · uncached {uncached}</p>'
+    )
     return (
         '<div class="cards">'
-        f'<section class="card"><span>Processed context · local share</span><strong>{local_processed_share}</strong><small>local {accounting["local_input"]:,} / Codex {accounting["codex_input"] if accounting["codex_input"] is not None else "not reported"}</small></section>'
+        f'<section class="card"><span>Processed context · local share</span><strong>{local_processed_share}</strong><small>local {accounting["local_input"]:,} / Codex {accounting["codex_input"] if accounting["codex_input"] is not None else "not reported"}</small>{spark_html}</section>'
         f'<section class="card"><span>Generated + reasoning · local share</span><strong>{local_generated_share}</strong><small>local {accounting["local_generated"]:,} / Codex {accounting["codex_generated"] if accounting["codex_generated"] is not None else "not reported"}</small></section>'
-        f'<section class="card"><span>Cached input</span><strong>local {cached}</strong><small>Codex {codex_cached} · uncached {uncached}</small></section>'
         f'<section class="card"><span>Operational contribution</span><strong>{accounting["worker_runs"]} local runs</strong><small>{accounting["codex_interventions"]} Codex interventions · {accounting["corrections"]} corrections · {accounting["takeovers"]} takeovers</small></section>'
-        '</div>'
+        f'</div>{footnote}'
     )
 
 
@@ -531,13 +677,20 @@ def _run_row(view: dict[str, Any]) -> str:
     outcome = html.escape(str(view["effective_outcome"]))
     evidence = "<br>".join(html.escape(str(item)) for item in view["evidence_refs"]) or "—"
     role_model = f"{html.escape(str(view['role'] or 'unknown'))}<br><code>{html.escape(str(view['model'] or 'unknown'))}</code>"
+    triage = _triage_bucket(view)
+    search_fields = (
+        view["run_id"], view["issue"], view["role"], view["model"], view["task_class"],
+        view["claimed_status"], view["effective_outcome"], view["lifecycle_state"],
+    )
+    search = html.escape(" ".join(str(field).lower() for field in search_fields if field is not None))
+    run_id = html.escape(str(view["run_id"]))
     return (
-        f'<tr class="{css}"><td><code>{html.escape(str(view["run_id"]))}</code><br>issue {view["issue"] or "—"}</td>'
+        f'<tr class="{css}" data-triage="{triage}" data-search="{search}"><td><code>{run_id}</code><br>issue {view["issue"] or "—"}</td>'
         f'<td>{role_model}</td><td>{html.escape(str(view["task_class"] or "unknown"))}</td>'
         f'<td>{html.escape(str(view["claimed_status"] or "none"))}</td><td class="{outcome}">{outcome}</td>'
         f'<td>{html.escape(str(view["lifecycle_state"]))}</td><td>{html.escape(str(view["delivery_ready"]))}</td>'
-        f'<td>{view["wall_seconds"]:.1f}s</td><td>{view["local_tokens"]:,} / {view["frontier_tokens"]:,}</td>'
-        f'<td><details><summary>{len(view["evidence_refs"])} refs</summary>{evidence}</details></td></tr>'
+        f'<td data-value="{view["wall_seconds"]}">{view["wall_seconds"]:.1f}s</td><td data-value="{view["local_tokens"]}">{view["local_tokens"]:,} / {view["frontier_tokens"]:,}</td>'
+        f'<td><details data-details-id="run:{run_id}"><summary>{len(view["evidence_refs"])} refs</summary>{evidence}</details></td></tr>'
     )
 
 
@@ -585,18 +738,121 @@ def main(argv: list[str] | None = None) -> int:
 
 DASHBOARD_JS = """(() => {
   let initial = true;
+  let activeFilter = null;
+  let searchTerm = '';
+  let sortState = null;
+  const openDetailIds = new Set();
+
   const events = new EventSource('/events' + window.location.search);
   const connection = (text, color) => {
     const state = document.getElementById('connection');
     if (state) { state.textContent = text; state.style.color = color; }
   };
+
+  const countByTriage = (value) =>
+    document.querySelectorAll('#run-history-body tr[data-triage="' + value + '"]').length;
+
+  const applyFilters = () => {
+    const tbody = document.getElementById('run-history-body');
+    if (!tbody) { return; }
+    const term = searchTerm.trim().toLowerCase();
+    let visible = 0;
+    tbody.querySelectorAll('tr[data-triage]').forEach((row) => {
+      const matchesFilter = activeFilter === 'all' || row.dataset.triage === activeFilter;
+      const matchesSearch = !term || (row.dataset.search || '').includes(term);
+      const show = matchesFilter && matchesSearch;
+      row.style.display = show ? '' : 'none';
+      if (show) { visible += 1; }
+    });
+    const note = document.getElementById('run-empty-note');
+    if (note) { note.hidden = visible !== 0; }
+    document.querySelectorAll('.triage-tab').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.filter === activeFilter);
+    });
+  };
+
+  const initFilter = () => {
+    if (activeFilter === null) {
+      activeFilter = countByTriage('needs-judgment') > 0 ? 'needs-judgment'
+        : countByTriage('contradiction') > 0 ? 'contradiction' : 'all';
+    }
+    applyFilters();
+  };
+
+  const sortRows = () => {
+    if (!sortState) { return; }
+    const tbody = document.getElementById('run-history-body');
+    const table = tbody && tbody.closest('table');
+    if (!tbody || !table) { return; }
+    table.querySelectorAll('th.sortable').forEach((th, index) => {
+      th.classList.remove('sort-asc', 'sort-desc');
+      if (index === sortState.index) { th.classList.add(sortState.dir === 1 ? 'sort-asc' : 'sort-desc'); }
+    });
+    const rows = Array.from(tbody.querySelectorAll('tr[data-triage]'));
+    rows.sort((a, b) => {
+      const cellA = a.children[sortState.index];
+      const cellB = b.children[sortState.index];
+      const rawA = (cellA.dataset.value !== undefined) ? cellA.dataset.value : cellA.textContent.trim();
+      const rawB = (cellB.dataset.value !== undefined) ? cellB.dataset.value : cellB.textContent.trim();
+      if (sortState.type === 'num') { return (parseFloat(rawA) - parseFloat(rawB)) * sortState.dir; }
+      return rawA.localeCompare(rawB) * sortState.dir;
+    });
+    rows.forEach((row) => tbody.appendChild(row));
+  };
+
+  const applyState = () => {
+    initFilter();
+    sortRows();
+    document.querySelectorAll('.run-filter').forEach((input) => { input.value = searchTerm; });
+    document.querySelectorAll('details[data-details-id]').forEach((el) => {
+      if (openDetailIds.has(el.dataset.detailsId)) { el.open = true; }
+    });
+  };
+
+  document.addEventListener('click', (event) => {
+    const tab = event.target.closest('.triage-tab');
+    if (tab) { activeFilter = tab.dataset.filter; applyFilters(); return; }
+    const header = event.target.closest('th.sortable');
+    if (header) {
+      const index = Array.from(header.parentElement.children).indexOf(header);
+      const type = header.dataset.sort === 'num' ? 'num' : 'text';
+      const dir = (sortState && sortState.index === index) ? sortState.dir * -1 : 1;
+      sortState = {index, dir, type};
+      sortRows();
+    }
+  });
+
+  document.addEventListener('input', (event) => {
+    if (event.target.classList.contains('run-filter')) {
+      searchTerm = event.target.value;
+      applyFilters();
+    }
+  });
+
+  document.addEventListener('change', (event) => {
+    if (event.target.id === 'session-select' && event.target.form) {
+      event.target.form.submit();
+    }
+  });
+
+  document.addEventListener('toggle', (event) => {
+    const details = event.target;
+    if (details && details.dataset && details.dataset.detailsId) {
+      if (details.open) { openDetailIds.add(details.dataset.detailsId); }
+      else { openDetailIds.delete(details.dataset.detailsId); }
+    }
+  }, true);
+
   const refresh = async () => {
+    const scrollY = window.scrollY;
     const response = await fetch('/' + window.location.search, {cache: 'no-store'});
     if (!response.ok) { throw new Error('dashboard refresh failed'); }
     const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
     const current = document.querySelector('main');
     const replacement = parsed.querySelector('main');
     if (current && replacement) { current.replaceWith(replacement); }
+    applyState();
+    window.scrollTo(0, scrollY);
     connection('live', 'var(--good)');
   };
   events.addEventListener('open', () => connection('live', 'var(--good)'));
@@ -604,6 +860,12 @@ DASHBOARD_JS = """(() => {
     if (initial) { initial = false; } else { refresh().catch(() => connection('stale', 'var(--bad)')); }
   });
   events.addEventListener('error', () => connection('disconnected', 'var(--bad)'));
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyState);
+  } else {
+    applyState();
+  }
 })();
 """
 

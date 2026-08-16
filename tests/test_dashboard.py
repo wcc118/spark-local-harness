@@ -141,7 +141,8 @@ def test_missing_and_malformed_sources_are_visible(tmp_path):
     assert {item["state"] for item in snapshot["sources"]} == {"malformed", "missing"}
     page = render_dashboard(snapshot)
     assert "Source warning" in page
-    assert "runs=malformed" in page
+    assert "runs · malformed" in page
+    assert "check the last line for truncated or invalid JSON" in page
 
 
 def test_superseded_operation_is_retained_but_not_current(tmp_path):
@@ -425,7 +426,7 @@ def test_missing_plan_is_omitted_and_malformed_source_is_warning(tmp_path):
     malformed = tmp_path / "plans.jsonl"
     malformed.write_text("not-json\n", encoding="utf-8")
     malformed_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, plans=malformed).snapshot())
-    assert "plans=malformed" in malformed_page
+    assert "plans · malformed" in malformed_page
 
 
 def test_plan_source_participates_in_sse_fingerprint(tmp_path):
@@ -453,3 +454,107 @@ def test_plan_only_session_is_selectable_without_fabricating_workflow(tmp_path):
     assert [item["session_id"] for item in snapshot["plans"]] == ["plan-session"]
     assert any(item["session_id"] == "plan-session" and item["operations"] == 0 for item in snapshot["sessions"])
     assert "Workflow unavailable for this plan." in render_dashboard(snapshot)
+
+
+def test_run_rows_carry_triage_bucket_and_search_attributes(tmp_path):
+    base = fixture_source(tmp_path)  # run-hidden: claimed success, observed failed -> contradiction
+    append_jsonl(base.runs, RunHealth(
+        run_id="run-open", issue=21, role="reviewer", runtime="opencode", model="qwen",
+        profile="v4", task_class="easy", status="success", wall_seconds=4,
+        usage=TokenUsage(local_input=50), delivery_ready=True,
+    ))
+    snapshot = base.snapshot()
+    page = render_dashboard(snapshot)
+    assert 'data-triage="contradiction"' in page
+    assert 'data-triage="needs-judgment"' in page
+    assert 'data-search="run-open 21 reviewer qwen easy success unadjudicated' in page
+    assert "Needs judgment · 1" in page
+    assert "Contradictions · 1" in page
+    assert "All · 2" in page
+    assert 'data-details-id="run:run-hidden"' in page
+
+
+def test_freshness_chip_escalates_from_source_age(tmp_path):
+    base = fixture_source(tmp_path)
+    now = datetime(2026, 8, 15, 22, 0, tzinfo=timezone.utc)
+    fresh_time = now.timestamp() - 30
+    for path in (base.runs, base.adjudications, base.lifecycle):
+        os.utime(path, (fresh_time, fresh_time))
+    fresh_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, now=now).snapshot())
+    assert 'class="freshness good"' in fresh_page
+
+    stale_time = now.timestamp() - 3600
+    for path in (base.runs, base.adjudications, base.lifecycle):
+        os.utime(path, (stale_time, stale_time))
+    stale_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, now=now).snapshot())
+    assert 'class="freshness critical"' in stale_page
+
+    empty_page = render_dashboard(DashboardSource(
+        tmp_path / "missing-runs.jsonl", tmp_path / "missing-adj.jsonl", tmp_path / "missing-life.jsonl",
+    ).snapshot())
+    assert 'class="freshness unknown"' in empty_page
+
+
+def test_current_workflow_collapses_milestones_into_a_dot_rail(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evt-1", "issue-19", "review", "active", "2026-08-15T18:00:00Z", 19))
+    page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
+    assert '<details class="flow-toggle" data-details-id="flow:' in page
+    assert 'class="flow-summary"' in page
+    assert 'class="rail-dot active"' in page
+    assert 'class="flow" aria-label="Delivery milestones"' in page  # unchanged, still present inside the toggle
+
+
+def test_publication_failures_expand_in_place_with_details(tmp_path):
+    base = fixture_source(tmp_path)
+    failures = tmp_path / "publication-failures.jsonl"
+    append_record(failures, PublicationFailure(
+        "run-1:finish:health", "run-1", "finish", "health", "ingestion-failed", "2026-08-16T00:00:00Z",
+    ))
+    snapshot = DashboardSource(base.runs, base.adjudications, base.lifecycle, publication_failures=failures).snapshot()
+    page = render_dashboard(snapshot)
+    assert '<details class="source-warning publication-failures">' in page
+    assert "Telemetry publication failures:</strong> 1" in page
+    assert "finish → health" in page
+    assert "ingestion-failed" in page
+
+
+def test_accounting_footnote_replaces_cached_card_and_sparkline_renders(tmp_path):
+    base = fixture_source(tmp_path)
+    append_jsonl(base.runs, RunHealth(
+        run_id="run-open", issue=21, role="reviewer", runtime="opencode", model="qwen",
+        profile="v4", task_class="easy", status="success", wall_seconds=4,
+        usage=TokenUsage(local_input=5000), delivery_ready=True,
+    ))
+    page = render_dashboard(base.snapshot())
+    assert '<p class="accounting-footnote">' in page
+    assert "Not reported (unsupported)" in page
+    assert "<span>Cached input</span>" not in page
+    assert '<svg class="sparkline"' in page
+
+
+def test_session_picker_has_no_csp_blocked_inline_handler(tmp_path):
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+    assert "onchange" not in page
+    assert '<select name="session" id="session-select">' in page
+    assert '<button type="submit" class="session-submit">Go</button>' in page
+    from codex_local_harness.dashboard import DASHBOARD_JS
+    assert "event.target.id === 'session-select'" in DASHBOARD_JS
+    assert "event.target.form.submit()" in DASHBOARD_JS
+
+
+def test_session_options_show_a_readable_label_not_a_bare_id(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent(
+        "a", "issue-19", "local-work", "active", "2026-08-16T00:00:00Z", 19,
+        run_id="run-1", session_id="thread-a", repository="owner/repo",
+    ))
+    append_record(workflow, WorkflowEvent(
+        "b", "issue-19", "post-merge", "passed", "2026-08-16T00:01:00Z", 19,
+    ))  # no session_id -> falls into the "legacy" bucket
+    page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
+    assert "owner/repo#19 · active · 1 ops · thread-a" in page
+    assert "Legacy (no session ID) · completed · 1 ops</option>" in page

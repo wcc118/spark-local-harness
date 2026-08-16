@@ -1,0 +1,26 @@
+{
+  "release": "v0.4.3",
+  "predecessor": "v0.4.2",
+  "issue": null,
+  "scope": "dashboard-triage-and-signal-legibility",
+  "origin": "direct dashboard UX review (no tracked issue) — see docs/dashboard.md",
+  "governance": {
+    "dashboard_authority": "read-only"
+  },
+  "validation": {
+    "session_picker_no_longer_relies_on_csp_blocked_inline_onchange": true,
+    "session_options_show_repository_issue_or_legacy_label_not_bare_id": true,
+    "run_table_defaults_to_needs_judgment_and_contradictions": true,
+    "freshness_escalates_independent_of_socket_state": true,
+    "source_warnings_render_per_source_with_remediation_hint": true,
+    "milestone_grid_collapses_to_dot_rail_by_default": true,
+    "sse_refresh_preserves_scroll_and_open_details": true,
+    "publication_failures_expand_in_place": true,
+    "cached_input_moved_to_footnote_not_a_dead_card": true,
+    "local_token_sparkline_added_to_division_of_labor": true
+  },
+  "sha256": {
+    "dashboard": "f11ec15713e1f8e97df3bc2bcd839d73d7a58a3cc9c2091b2251f05688c44040",
+    "dashboard_unit": "3a3d0d382f9b8063edc00f7435132ee0561c61a3002536d1f1ffe9682e2952b3"
+  }
+}
