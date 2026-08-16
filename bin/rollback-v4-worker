@@ -5,6 +5,12 @@ set -euo pipefail
 backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
 stable_worker=${CODEX_LOCAL_STABLE_WORKER:-/home/connellwc83/.local/bin/codex-local-worker}
 runtime_root=${CODEX_LOCAL_RUNTIME_ROOT:-/home/connellwc83/.local/share/codex-local-harness/runtime}
+user_unit_dir=${CODEX_LOCAL_USER_UNIT_DIR:-/home/connellwc83/.config/systemd/user}
+systemctl_bin=${CODEX_LOCAL_SYSTEMCTL:-systemctl}
+install_units=${CODEX_LOCAL_INSTALL_UNITS:-}
+if [[ -z $install_units ]]; then
+  [[ $stable_worker == /home/connellwc83/.local/bin/codex-local-worker ]] && install_units=1 || install_units=0
+fi
 backup_dir=$(realpath -- "$1")
 resolved_root=$(realpath -- "$backup_root")
 [[ $backup_dir == "$resolved_root"/* ]] || { echo "ERROR: backup is outside the configured root" >&2; exit 2; }
@@ -22,5 +28,11 @@ if [[ -f $backup_dir/runtime-target ]]; then
   }
   ln -s "$previous_runtime" "$runtime_root/current.new"
   mv -Tf "$runtime_root/current.new" "$runtime_root/current"
+fi
+if [[ $install_units == 1 && -f $backup_dir/dashboard-backend.service ]]; then
+  install -d -m 700 "$user_unit_dir"
+  install -m 644 "$backup_dir/dashboard-backend.service" "$user_unit_dir/dashboard-backend.service"
+  "$systemctl_bin" --user daemon-reload
+  "$systemctl_bin" --user try-restart dashboard-backend.service
 fi
 printf 'status=rolled-back\nworker_sha256=%s\n' "$(sha256sum "$stable_worker" | cut -d' ' -f1)"
