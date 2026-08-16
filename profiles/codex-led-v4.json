@@ -19,7 +19,7 @@
       "runtime": "opencode-lm-studio",
       "model": "qwen/qwen3.8-27b",
       "authority": "advisory",
-      "qualification": "useful-bounded-advisory; opencode-tool-loop-efficiency-unresolved"
+      "qualification": "not-promoted: three mapper trials were schema-incompatible and tool-loop inefficient"
     },
     "complex_coder": {
       "runtime": "opencode-vllm-spark",
@@ -28,10 +28,22 @@
       "qualification": "routine-and-moderate-pass; difficult-concurrency-requires-codex"
     },
     "scout": {
-      "runtime": "opencode-lm-studio",
+      "runtime": "direct-lm-studio",
       "model": "qwen/qwen3.8-27b",
       "authority": "advisory-only",
-      "qualification": "initial-direct-trial-useful; repeated-qualification-pending"
+      "qualification": "qualified for supplied-evidence scouting with exact single-JSON-fence normalization"
+    },
+    "test_designer": {
+      "runtime": "direct-lm-studio",
+      "model": "qwen/qwen3.8-27b",
+      "authority": "advisory-only",
+      "qualification": "not-promoted: negative control violated the role schema"
+    },
+    "failure_analyst": {
+      "runtime": "direct-lm-studio",
+      "model": "qwen/qwen3.8-27b",
+      "authority": "advisory-only",
+      "qualification": "not-promoted: current schema cannot represent a supported no-failure result"
     }
   },
   "health": {

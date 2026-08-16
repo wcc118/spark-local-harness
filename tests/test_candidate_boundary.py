@@ -57,10 +57,14 @@ def test_candidate_advisory_agent_is_read_only_and_machine_readable():
     assert "no analysis" in content
 
 
-def test_candidate_profile_retains_qwen38_without_claiming_qualification():
+def test_candidate_profile_limits_qwen38_to_qualified_advisory_scope():
     profile = json.loads((ROOT / "profiles/codex-led-v4.json").read_text(encoding="utf-8"))
     assert profile["routes"]["helper"]["model"] == "qwen/qwen3.8-27b"
+    assert profile["routes"]["helper"]["qualification"].startswith("not-promoted")
     assert profile["routes"]["scout"]["authority"] == "advisory-only"
-    assert "pending" in profile["routes"]["scout"]["qualification"]
+    assert profile["routes"]["scout"]["runtime"] == "direct-lm-studio"
+    assert "qualified" in profile["routes"]["scout"]["qualification"]
+    assert profile["routes"]["test_designer"]["qualification"].startswith("not-promoted")
+    assert profile["routes"]["failure_analyst"]["qualification"].startswith("not-promoted")
     assert profile["routes"]["complex_coder"]["model"] == "Qwen/Qwen3-Coder-Next-FP8"
     assert profile["governance"]["merge_authority"] == "codex"
