@@ -5,15 +5,14 @@ After=network.target
 
 [Service]
 Type=simple
-User=%i
-Environment=PYTHONPATH=/home/%i/.local/bin
+Environment=PYTHONPATH=%h/.local/share/codex-local-harness/runtime/current/src
 ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
-    --runs /home/%i/.local/share/codex-local-harness/health/runs.jsonl \
-    --adjudications /home/%i/.local/share/codex-local-harness/health/adjudications.jsonl \
-    --lifecycle /home/%i/.local/share/codex-local-harness/health/lifecycle.jsonl \
-    --workflow /home/%i/.local/share/codex-local-harness/health/workflow.jsonl \
-    --frontier /home/%i/.local/share/codex-local-harness/health/frontier.jsonl \
-    --publication-failures /home/%i/.local/share/codex-local-harness/health/publication-failures.jsonl \
+    --runs %h/.local/share/codex-local-harness/health/runs.jsonl \
+    --adjudications %h/.local/share/codex-local-harness/health/adjudications.jsonl \
+    --lifecycle %h/.local/share/codex-local-harness/health/lifecycle.jsonl \
+    --workflow %h/.local/share/codex-local-harness/health/workflow.jsonl \
+    --frontier %h/.local/share/codex-local-harness/health/frontier.jsonl \
+    --publication-failures %h/.local/share/codex-local-harness/health/publication-failures.jsonl \
     --host 127.0.0.1 \
     --port 8765 \
     --release v0.1.3 \
@@ -35,8 +34,6 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RemoveIPC=yes
-# Network restrictions - loopback only
-PrivateNetwork=yes
 # Logging
 StandardOutput=journal
 StandardError=journal

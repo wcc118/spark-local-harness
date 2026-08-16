@@ -1,12 +1,12 @@
 # Codex Local Harness — Deployment
 
-This directory contains systemd user-unit templates for persistent deployments.
+This directory contains systemd user units for persistent deployments.
 
 ## Prerequisites
 
 - systemd with user session support
 - Python 3.11+ installed at `/usr/bin/python3`
-- opencode installed and configured
+- Codex Local Harness installed at `%h/.local/share/codex-local-harness/runtime/current/`
 
 ## Units
 
@@ -14,11 +14,13 @@ This directory contains systemd user-unit templates for persistent deployments.
 
 The loopback-only dashboard backend. It:
 - Binds to `127.0.0.1:8765` (loopback)
-- Reads health data from `~/.local/share/codex-local-harness/health/`
+- Reads health data from `%h/.local/share/codex-local-harness/health/`
 - Is GET-only and read-only
 - Requires no external network access
 
 **IMPORTANT**: The dashboard must remain loopback-only. LAN exposure is handled by a separate socat proxy.
+
+**NOTE**: This unit does not use `User=` or `PrivateNetwork=` directives. It runs as the current user with access to the host network namespace.
 
 ### socat-lan-proxy.service
 
@@ -109,7 +111,7 @@ Check logs: `journalctl --user -u dashboard-backend -n 50`
 
 Common issues:
 - Missing health directory: `mkdir -p ~/.local/share/codex-local-harness/health/`
-- Python path mismatch: Edit `ExecStart` to use the correct Python path
+- Python path mismatch: Ensure the harness is installed at `%h/.local/share/codex-local-harness/runtime/current/`
 - Permission denied: Ensure the user owns `~/.config/systemd/user/`
 
 ### Dashboard not responding

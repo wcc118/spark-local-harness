@@ -47,20 +47,31 @@ def test_dashboard_backend_port_is_8765():
     assert "--port 8765" in content
 
 
-def test_dashboard_backend_health_paths():
-    """Verify dashboard-backend.service uses correct health paths."""
+def test_dashboard_backend_health_paths_use_h_specifier():
+    """Verify dashboard-backend.service uses %h for user home paths."""
     content = read_unit("dashboard-backend.service")
-    health_base = "/home/%i/.local/share/codex-local-harness/health/"
+    health_base = "%h/.local/share/codex-local-harness/health/"
     assert f"{health_base}runs.jsonl" in content
     assert f"{health_base}adjudications.jsonl" in content
     assert f"{health_base}lifecycle.jsonl" in content
     assert f"{health_base}workflow.jsonl" in content
     assert f"{health_base}frontier.jsonl" in content
     assert f"{health_base}publication-failures.jsonl" in content
+    # Should NOT contain /home/%i/ pattern
+    assert "/home/%i/" not in content
 
 
-def test_dashboard_backend_python_path():
-    """Verify dashboard-backend.service uses correct Python path."""
+def test_dashboard_backend_python_path_points_to_runtime_source():
+    """Verify dashboard-backend.service uses correct PYTHONPATH to installed runtime source."""
+    content = read_unit("dashboard-backend.service")
+    # PYTHONPATH should point to the installed runtime source
+    assert "PYTHONPATH=%h/.local/share/codex-local-harness/runtime/current/src" in content
+    # Should NOT contain the old /home/%i/.local/bin pattern
+    assert "/home/%i/.local/bin" not in content
+
+
+def test_dashboard_backend_exec_start():
+    """Verify dashboard-backend.service uses correct ExecStart."""
     content = read_unit("dashboard-backend.service")
     assert "ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard" in content
 
@@ -74,10 +85,27 @@ def test_dashboard_backend_security_hardening():
     assert "PrivateTmp=yes" in content
 
 
-def test_dashboard_backend_private_network():
-    """Verify dashboard-backend.service uses PrivateNetwork for loopback enforcement."""
+def test_dashboard_backend_does_not_use_private_network():
+    """Verify dashboard-backend.service does not use PrivateNetwork=yes (removes network isolation)."""
     content = read_unit("dashboard-backend.service")
-    assert "PrivateNetwork=yes" in content
+    # PrivateNetwork=yes should NOT be present
+    assert "PrivateNetwork=yes" not in content
+
+
+def test_dashboard_backend_does_not_use_user_directive():
+    """Verify dashboard-backend.service does not use User= directive."""
+    content = read_unit("dashboard-backend.service")
+    # User= directive should NOT be present
+    assert re.search(r"^\s*User\s*=", content, re.MULTILINE) is None
+
+
+def test_socat_lan_proxy_does_not_use_user_root():
+    """Verify socat-lan-proxy.service does not use User=root (invalid for user manager)."""
+    content = read_unit("socat-lan-proxy.service")
+    # User=root should NOT be present
+    assert "User=root" not in content
+    # User= directive should NOT be present for user units
+    assert re.search(r"^\s*User\s*=", content, re.MULTILINE) is None
 
 
 def test_socat_lan_proxy_has_warning():
@@ -156,19 +184,6 @@ def test_dashboard_backend_live_mode():
     assert "--mode live" in content
 
 
-def test_socat_lan_proxy_uses_root_user():
-    """Verify socat-lan-proxy.service runs as root for binding."""
-    content = read_unit("socat-lan-proxy.service")
-    assert "User=root" in content
-
-
-def test_dashboard_backend_uses_user_i():
-    """Verify dashboard-backend.service uses %i for user context."""
-    content = read_unit("dashboard-backend.service")
-    assert "User=%i" in content
-    assert "/home/%i/" in content
-
-
 def test_units_have_standard_output_redirection():
     """Verify units have proper logging configuration."""
     for name in ("dashboard-backend.service", "socat-lan-proxy.service"):
@@ -237,5 +252,3 @@ def test_units_do_not_expose_dashboard_directly_to_lan():
     assert "--host 127.0.0.1" in content
     # Should NOT have any LAN bind address
     assert "bind=" not in content
-    # PrivateNetwork=yes ensures no external network access
-    assert "PrivateNetwork=yes" in content
