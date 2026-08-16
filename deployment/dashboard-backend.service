@@ -1,0 +1,48 @@
+[Unit]
+Description=Codex Local Harness - Read-only diagnostic dashboard (loopback-only)
+Documentation=https://github.com/wcc118/codex-local-harness/blob/main/docs/mvp-quickstart.md
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+Environment=PYTHONPATH=/home/%i/.local/bin
+ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
+    --runs /home/%i/.local/share/codex-local-harness/health/runs.jsonl \
+    --adjudications /home/%i/.local/share/codex-local-harness/health/adjudications.jsonl \
+    --lifecycle /home/%i/.local/share/codex-local-harness/health/lifecycle.jsonl \
+    --workflow /home/%i/.local/share/codex-local-harness/health/workflow.jsonl \
+    --frontier /home/%i/.local/share/codex-local-harness/health/frontier.jsonl \
+    --publication-failures /home/%i/.local/share/codex-local-harness/health/publication-failures.jsonl \
+    --host 127.0.0.1 \
+    --port 8765 \
+    --release v0.1.3 \
+    --mode live
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectRuntimeDirectory=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+# Network restrictions - loopback only
+PrivateNetwork=yes
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codex-dashboard
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
