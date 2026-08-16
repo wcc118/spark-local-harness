@@ -5,23 +5,27 @@ import json
 import pytest
 
 from codex_local_harness.coder import _unexpected_status, finalize_coder
+from codex_local_harness.diagnostics import PublicationFailure
 from codex_local_harness.review import ReviewError, WORKFLOW_LABELS
 
 
 REPO = "wcc118/example"
 SHA = "a" * 40
+STALE = "b" * 40
 
 
 class CoderRun:
-    def __init__(self, checkout, *, prs=1, status="", workflow=("status/review",)):
+    def __init__(self, checkout, *, prs=1, heads=None, status="", workflow=("status/review",)):
         self.checkout = checkout
         self.prs = prs
+        self.heads = list(heads or [])
         self.status = status
         self.workflow = set(workflow)
         self.edits = []
         self.pushed = False
         self.created = False
         self.commented = False
+        self.pr_reads = 0
 
     def __call__(self, argv, cwd=None):
         command = tuple(argv)
@@ -39,8 +43,10 @@ class CoderRun:
             self.pushed = True
             return ""
         if command[:3] == ("gh", "pr", "list"):
-            item = {"number": 11, "headRefName": "issue-7-fix", "headRefOid": SHA, "baseRefName": "main"}
+            self.pr_reads += 1
             count = 1 if self.created else self.prs
+            head = self.heads.pop(0) if self.heads else SHA
+            item = {"number": 11, "headRefName": "issue-7-fix", "headRefOid": head, "baseRefName": "main"}
             return json.dumps([item] * count)
         if command[:3] == ("gh", "pr", "create"):
             self.created = True
@@ -85,12 +91,52 @@ def test_coder_postflight_rejects_unexpected_dirty_file(tmp_path):
 
 def test_coder_publisher_owns_push_pr_comment_and_label(tmp_path):
     runner = CoderRun(tmp_path, prs=0, workflow=("status/in-progress",))
-    result = finalize_coder(tmp_path, REPO, 7, runner, publish=True)
+    result = finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
     assert result["published"] is True
     assert runner.pushed and runner.created and runner.commented
     assert runner.workflow == {"status/review"}
+    assert result["publication_verification"]["attempts"] == 1
 
 
 def test_generated_runtime_artifacts_are_not_unexpected():
     status = "?? issuebench/__pycache__/\n?? .pytest_cache/\n?? .coverage\n"
     assert _unexpected_status(status) == []
+
+
+def test_publisher_immediate_exact_head_does_not_retry(tmp_path):
+    runner = CoderRun(tmp_path)
+    result = finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
+    assert runner.pr_reads == 1
+    assert result["publication_verification"] == {
+        "attempts": 1, "initial": SHA, "retry": None, "outcome": "matched",
+    }
+
+
+def test_publisher_retries_one_stale_head_and_records_recovery(tmp_path):
+    records = tmp_path / "publication.jsonl"
+    runner = CoderRun(tmp_path, heads=[STALE, SHA])
+    result = finalize_coder(
+        tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None,
+        publication_failure_records=records, run_id="run-85",
+    )
+    assert runner.pr_reads == 2
+    assert result["publication_verification"] == {
+        "attempts": 2, "initial": STALE, "retry": SHA, "outcome": "recovered",
+    }
+    event = PublicationFailure.from_dict(json.loads(records.read_text().strip()))
+    assert event.error_class == "recovered"
+    assert STALE in event.target and SHA in event.target
+
+
+def test_publisher_fails_after_one_retry_and_records_both_observations(tmp_path):
+    records = tmp_path / "publication.jsonl"
+    runner = CoderRun(tmp_path, heads=[STALE, STALE])
+    with pytest.raises(ReviewError, match="retry failed"):
+        finalize_coder(
+            tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None,
+            publication_failure_records=records, run_id="run-85",
+        )
+    assert runner.pushed and runner.pr_reads == 2 and not runner.created
+    event = PublicationFailure.from_dict(json.loads(records.read_text().strip()))
+    assert event.error_class == "persistent-mismatch"
+    assert event.target.count(STALE) == 2 and SHA in event.target

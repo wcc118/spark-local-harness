@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .diagnostics import PublicationFailure, append_record
 from .review import WORKFLOW_LABELS, ReviewError, normalize_remote, run_command
 
 
@@ -32,6 +36,88 @@ def _unexpected_status(status: str) -> list[str]:
     return unexpected
 
 
+def _list_prs(run: Run, canonical: Path, repository: str, branch: str) -> list[dict[str, Any]]:
+    prs = _json(
+        run,
+        ["gh", "pr", "list", "--repo", repository, "--state", "open", "--head", branch,
+         "--json", "number,headRefName,headRefOid,baseRefName"],
+        canonical,
+    )
+    if not isinstance(prs, list) or not all(isinstance(item, dict) for item in prs):
+        raise ReviewError("invalid PR list response")
+    return prs
+
+
+def _pr_observation(prs: list[dict[str, Any]]) -> str:
+    if len(prs) != 1:
+        return f"count-{len(prs)}"
+    return str(prs[0].get("headRefOid") or "missing")
+
+
+def _exact_pr(prs: list[dict[str, Any]], branch: str, head_sha: str) -> dict[str, Any]:
+    if len(prs) != 1:
+        raise ReviewError(f"expected exactly one open PR for branch {branch}")
+    pr = prs[0]
+    if pr.get("headRefName") != branch or pr.get("baseRefName") != "main" or pr.get("headRefOid") != head_sha:
+        raise ReviewError("coder PR identity does not match checkout or main base")
+    return pr
+
+
+def _record_retry(
+    records: Path | None,
+    run_id: str | None,
+    pr_number: int | None,
+    expected: str,
+    initial: str,
+    retry: str,
+    outcome: str,
+) -> None:
+    if records is None or run_id is None:
+        return
+    target = f"pr-{pr_number or 0}:{expected}:{initial}:{retry}"
+    identity = hashlib.sha256(f"{run_id}:{target}:{outcome}".encode()).hexdigest()[:32]
+    append_record(
+        records,
+        PublicationFailure(
+            failure_id=identity,
+            run_id=run_id,
+            phase="coder-pr-head-retry",
+            target=target,
+            error_class=outcome,
+            observed_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+
+def _verify_with_one_retry(
+    initial_prs: list[dict[str, Any]],
+    canonical: Path,
+    repository: str,
+    branch: str,
+    head_sha: str,
+    run: Run,
+    records: Path | None,
+    run_id: str | None,
+    delay: Callable[[float], None],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    initial = _pr_observation(initial_prs)
+    try:
+        pr = _exact_pr(initial_prs, branch, head_sha)
+        return pr, {"attempts": 1, "initial": initial, "retry": None, "outcome": "matched"}
+    except ReviewError as first_error:
+        delay(1.0)
+        retry_prs = _list_prs(run, canonical, repository, branch)
+        retry = _pr_observation(retry_prs)
+        pr_number = next((item.get("number") for item in retry_prs if isinstance(item.get("number"), int)), None)
+        try:
+            pr = _exact_pr(retry_prs, branch, head_sha)
+        except ReviewError as retry_error:
+            _record_retry(records, run_id, pr_number, head_sha, initial, retry, "persistent-mismatch")
+            raise ReviewError(f"{first_error}; retry failed: {retry_error}") from retry_error
+        _record_retry(records, run_id, pr_number, head_sha, initial, retry, "recovered")
+        return pr, {"attempts": 2, "initial": initial, "retry": retry, "outcome": "recovered"}
+
+
 def finalize_coder(
     checkout: Path,
     repository: str,
@@ -39,6 +125,9 @@ def finalize_coder(
     run: Run = run_command,
     *,
     publish: bool = False,
+    publication_failure_records: Path | None = None,
+    run_id: str | None = None,
+    delay: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     canonical = checkout.resolve(strict=True)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], canonical).strip()).resolve()
@@ -58,14 +147,7 @@ def finalize_coder(
     if publish:
         run(["git", "push", "--set-upstream", "origin", branch], canonical)
 
-    prs = _json(
-        run,
-        ["gh", "pr", "list", "--repo", repository, "--state", "open", "--head", branch,
-         "--json", "number,headRefName,headRefOid,baseRefName"],
-        canonical,
-    )
-    if not isinstance(prs, list):
-        raise ReviewError("invalid PR list response")
+    prs = _list_prs(run, canonical, repository, branch)
     created_pr = False
     if publish and not prs:
         issue_identity = _json(
@@ -82,17 +164,16 @@ def finalize_coder(
             canonical,
         )
         created_pr = True
-        prs = _json(
-            run,
-            ["gh", "pr", "list", "--repo", repository, "--state", "open", "--head", branch,
-             "--json", "number,headRefName,headRefOid,baseRefName"],
-            canonical,
+        prs = _list_prs(run, canonical, repository, branch)
+
+    verification: dict[str, Any] | None = None
+    if publish:
+        pr, verification = _verify_with_one_retry(
+            prs, canonical, repository, branch, head_sha, run,
+            publication_failure_records, run_id, delay,
         )
-    if len(prs) != 1:
-        raise ReviewError(f"expected exactly one open PR for branch {branch}")
-    pr = prs[0]
-    if pr.get("headRefName") != branch or pr.get("headRefOid") != head_sha or pr.get("baseRefName") != "main":
-        raise ReviewError("coder PR identity does not match checkout or main base")
+    else:
+        pr = _exact_pr(prs, branch, head_sha)
 
     labels = _json(run, ["gh", "label", "list", "--repo", repository, "--limit", "100", "--json", "name"], canonical)
     available = {item.get("name") for item in labels if isinstance(item, dict)}
@@ -136,6 +217,7 @@ def finalize_coder(
         "head_sha": head_sha,
         "label": "status/review",
         "published": publish,
+        "publication_verification": verification,
     }
 
 
@@ -146,9 +228,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--result-out", type=Path)
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--publication-failure-records", type=Path)
+    parser.add_argument("--run-id")
     args = parser.parse_args(argv)
     try:
-        result = finalize_coder(args.checkout, args.repository, args.issue, publish=args.publish)
+        result = finalize_coder(
+            args.checkout,
+            args.repository,
+            args.issue,
+            publish=args.publish,
+            publication_failure_records=args.publication_failure_records,
+            run_id=args.run_id,
+        )
         if args.result_out:
             args.result_out.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(result, sort_keys=True))
