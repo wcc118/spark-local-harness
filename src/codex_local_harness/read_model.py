@@ -87,6 +87,7 @@ def summarize_views(views: Iterable[RunView]) -> dict[str, Any]:
         "frontier_tokens": sum(view.frontier_tokens for view in items),
         "correction_cycles": sum(view.correction_cycle for view in items),
         "codex_interventions": sum(view.intervention_depth != "none" for view in items),
+        "cache_enabled": sum(1 for view in items if getattr(view, 'cache_enabled', False)),
     }
 
 

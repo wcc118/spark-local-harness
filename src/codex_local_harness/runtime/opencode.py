@@ -18,6 +18,9 @@ class OpenCodeStats:
     tool_calls: int
     tool_errors: int
     wall_seconds: float
+    cache_read: int = 0
+    cache_write: int = 0
+    cache_provenance: str | None = None
 
     def as_health(
         self,
@@ -52,6 +55,9 @@ class OpenCodeStats:
                 local_input=self.input_tokens,
                 local_output=self.output_tokens,
                 local_reasoning=self.reasoning_tokens,
+                cache_read=self.cache_read,
+                cache_write=self.cache_write,
+                cache_provenance=self.cache_provenance,
             ),
             failure_class=failure_class,
             turns=self.turns,

@@ -18,6 +18,12 @@ from .health import read_jsonl
 from .read_model import RunView, build_run_views, summarize_views
 from .workflow import WorkflowEvent, derive_operations
 
+try:
+    from .sessions import SessionSummary, read_usages, aggregate_sessions, SessionIdentity
+    HAS_SESSIONS = True
+except ImportError:
+    HAS_SESSIONS = False
+
 
 @dataclass(frozen=True)
 class DashboardSource:
@@ -27,6 +33,8 @@ class DashboardSource:
     workflow: Path | None = None
     frontier: Path | None = None
     publication_failures: Path | None = None
+    sessions: Path | None = None
+    identities: Path | None = None
     release: str = "v0.1.1"
     mode: str = "live"
     now: datetime | None = None
@@ -47,12 +55,25 @@ class DashboardSource:
             lambda path: read_records(path, PublicationFailure),
             statuses,
         ) if self.publication_failures else ()
+        
+        # Load session data if available
+        sessions_data: list[dict[str, Any]] = []
+        if HAS_SESSIONS and self.sessions:
+            session_usages = self._load(
+                self.sessions, "sessions",
+                lambda path: read_usages(path) if path.exists() else (),
+                statuses
+            )
+            for usage in session_usages:
+                sessions_data.append(usage.as_dict())
+        
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
         frontier = latest_status(frontier_records)
         operations = derive_operations(workflow)
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
+        
         return {
             "schema_version": 1,
             "release": self.release,
@@ -68,6 +89,7 @@ class DashboardSource:
             "codex": frontier.as_dict() if frontier else FrontierStatus(
                 "unavailable", "1970-01-01T00:00:00Z", "unavailable", note_code="official-interface-unavailable"
             ).as_dict(),
+            "sessions": sessions_data,
         }
 
     @staticmethod
@@ -239,6 +261,27 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
     if snapshot["publication_failures"]:
         source_banner += f'<section class="source-warning"><strong>Telemetry publication failures:</strong> {len(snapshot["publication_failures"])}</section>'
+    
+    # Session telemetry (conditional - only show if session data is available)
+    session_data = snapshot.get("sessions", [])
+    session_cards = ""
+    if session_data:
+        total_session_tokens = sum(s.get("finish_tokens") or 0 for s in session_data)
+        interrupted_sessions = sum(1 for s in session_data if s.get("interrupted"))
+        missing_sessions = sum(1 for s in session_data if s.get("missing"))
+        reset_sessions = sum(1 for s in session_data if s.get("reset"))
+        cache_read = sum((s.get("cache_read") or 0) for s in session_data)
+        cache_write = sum((s.get("cache_write") or 0) for s in session_data)
+        
+        session_cards = f'''
+<div class="telemetry">
+    <section class="card"><span>Session tokens</span><strong>{html.escape(str(total_session_tokens or 0))}</strong><small>{len(session_data)} sessions</small></section>
+    <section class="card"><span>Interrupted</span><strong>{interrupted_sessions}</strong><small>no data available</small></section>
+    <section class="card"><span>Missing</span><strong>{missing_sessions}</strong><small>no data available</small></section>
+    <section class="card"><span>Reset</span><strong>{reset_sessions}</strong><small>tokens reset</small></section>
+</div>
+'''
+    
     context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
     interactive_tokens = f"{codex['tokens_used']:,}" if codex["tokens_used"] is not None else "Unavailable"
     plan = f"{codex['plan_remaining_percent']:.1f}%" if codex["plan_remaining_percent"] is not None else "Unavailable"
@@ -262,6 +305,7 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
 {source_banner}
 <div class="cards">{card_html}</div>
+{session_cards}
 <div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Source update age</span><strong data-age-seconds="{age_seconds if age_seconds is not None else ''}">{html.escape(newest_text)}</strong><small>{freshness['existing_files']} / {freshness['source_files']} sources present</small></section></div>
 <h2>Current workflow</h2>{operations}
 <h2>Run history</h2>
@@ -302,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workflow", type=Path)
     parser.add_argument("--frontier", type=Path)
     parser.add_argument("--publication-failures", type=Path)
+    parser.add_argument("--sessions", type=Path, help="Session usage records (optional)")
+    parser.add_argument("--identities", type=Path, help="Session identity records (optional)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.1.1")
@@ -318,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
         args.workflow,
         args.frontier,
         args.publication_failures,
+        args.sessions,
+        args.identities,
         args.release,
         args.mode,
     )

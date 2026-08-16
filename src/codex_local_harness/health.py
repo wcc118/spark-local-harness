@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +12,14 @@ import fcntl
 
 SCHEMA_VERSION = 1
 INTERVENTION_DEPTHS = {"none", "audit", "targeted", "takeover"}
+SAFE_ATOM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/#@+\-]{0,255}\Z")
+
+
+def _safe_atom(value: str, name: str) -> None:
+    if not value or not value.strip():
+        raise ValueError(f"{name} must be non-empty")
+    if not SAFE_ATOM.fullmatch(value):
+        raise ValueError(f"{name} must be a bounded identifier")
 
 
 @dataclass(frozen=True)
@@ -21,10 +30,17 @@ class TokenUsage:
     frontier_input: int = 0
     frontier_output: int = 0
     frontier_reasoning: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    cache_provenance: str | None = None
 
     def __post_init__(self) -> None:
-        if any(value < 0 for value in asdict(self).values()):
+        token_values = asdict(self)
+        token_values.pop("cache_provenance", None)  # This is a string, not a count
+        if any(value < 0 for value in token_values.values()):
             raise ValueError("token counts must be non-negative")
+        if self.cache_provenance is not None:
+            _safe_atom(self.cache_provenance, "cache_provenance")
 
     @property
     def local_total(self) -> int:
@@ -37,6 +53,10 @@ class TokenUsage:
     @property
     def total(self) -> int:
         return self.local_total + self.frontier_total
+
+    @property
+    def cache_total(self) -> int:
+        return self.cache_read + self.cache_write
 
 
 @dataclass(frozen=True)
@@ -165,6 +185,8 @@ def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
     items = tuple(records)
     local_tokens = sum(item.usage.local_total for item in items)
     frontier_tokens = sum(item.usage.frontier_total for item in items)
+    cache_read = sum(item.usage.cache_read for item in items)
+    cache_write = sum(item.usage.cache_write for item in items)
     total_tokens = local_tokens + frontier_tokens
     locally_autonomous = sum(
         item.intervention_depth == "none" and item.usage.frontier_total == 0 for item in items
@@ -178,6 +200,9 @@ def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
         "failure_counts": _counts(item.failure_class for item in items if item.failure_class),
         "local_tokens": local_tokens,
         "frontier_tokens": frontier_tokens,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+        "cache_total": cache_read + cache_write,
         "frontier_token_share": frontier_tokens / total_tokens if total_tokens else 0.0,
         "local_autonomy_rate": locally_autonomous / len(items) if items else 0.0,
         "codex_targeted_runs": sum(item.intervention_depth == "targeted" for item in items),

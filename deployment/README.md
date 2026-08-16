@@ -15,12 +15,16 @@ This directory contains systemd user units for persistent deployments.
 The loopback-only dashboard backend. It:
 - Binds to `127.0.0.1:8765` (loopback)
 - Reads health data from `%h/.local/share/codex-local-harness/health/`
+- Reads session usage data from `%h/.local/share/codex-local-harness/health/sessions.jsonl` (optional)
+- Reads session identity data from `%h/.local/share/codex-local-harness/health/identities.jsonl` (optional)
 - Is GET-only and read-only
 - Requires no external network access
 
 **IMPORTANT**: The dashboard must remain loopback-only. LAN exposure is handled by a separate socat proxy.
 
 **NOTE**: This unit does not use `User=` or `PrivateNetwork=` directives. It runs as the current user with access to the host network namespace.
+
+**NEW IN v0.1.2**: The dashboard now includes session telemetry cards when session usage records are available. These are conditionally displayed and do not appear if no session data exists.
 
 ### socat-lan-proxy.service
 
