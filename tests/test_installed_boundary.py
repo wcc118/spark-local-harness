@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 PROJECT = Path("/home/connellwc83/projects/codex/local-harness")
+CANDIDATE_PROJECT = Path(__file__).resolve().parents[1]
 PROJECT_WORKER = PROJECT / "bin/codex-local-worker"
 INSTALLED_WORKER = Path("/home/connellwc83/.local/bin/codex-local-worker")
 PROJECT_CRITIC = PROJECT / "bin/codex-local-critic"
@@ -38,8 +39,12 @@ def test_reviewer_runtime_disables_checkout_cache_writes():
     assert 'reviewer-scratch' in worker
 
 
-def test_installed_worker_matches_qualified_project_copy():
-    assert INSTALLED_WORKER.read_bytes() == PROJECT_WORKER.read_bytes()
+def test_installed_worker_matches_a_qualified_project_copy():
+    qualified = {
+        PROJECT_WORKER.read_bytes(),
+        (CANDIDATE_PROJECT / "bin/codex-local-worker-v4").read_bytes(),
+    }
+    assert INSTALLED_WORKER.read_bytes() in qualified
 
 
 def test_critic_uses_same_sterile_inference_boundary():

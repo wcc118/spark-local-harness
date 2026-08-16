@@ -22,7 +22,7 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     worker = ROOT / "bin/codex-local-worker-v4"
     subprocess.run(["bash", "-n", str(worker)], check=True)
     content = worker.read_text(encoding="utf-8")
-    assert "/home/connellwc83/projects/codex-local-harness/src" in content
+    assert "/runtime/current/src" in content
     assert "codex_harness.runtime.opencode" not in content
     assert "codex_local_harness.runtime.opencode" in content
     assert "CODEX_LOCAL_HEALTH_RECORDS" in content
@@ -39,6 +39,12 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "execution-timeout" in content
     assert "worker_workflow_stage=review" in content
     assert "codex_local_harness.observe_cli workflow" in content
+    assert "record_publication_failure" in content
+    assert "CODEX_LOCAL_SOURCE" in content
+    assert "/runtime/current/src" in content
+    assert "--allow-malformed" in content
+    assert "workflow_state=interrupted" in content
+    assert 'workflow_identity_args+=(--pull-request "$worker_pr")' in content
 
 
 def test_candidate_advisory_agent_is_read_only_and_machine_readable():

@@ -79,3 +79,13 @@ def test_invalid_jsonl_reports_line(tmp_path):
     path.write_text("{}\nnot-json\n", encoding="utf-8")
     with pytest.raises(ValueError, match="line 1"):
         read_jsonl(path)
+
+
+def test_run_publication_is_idempotent_and_rejects_conflicting_identity(tmp_path):
+    path = tmp_path / "health.jsonl"
+    assert append_jsonl(path, record(repository="owner/repo", pull_request=12)) is True
+    original = path.read_bytes()
+    assert append_jsonl(path, record(repository="owner/repo", pull_request=12)) is False
+    assert path.read_bytes() == original
+    with pytest.raises(ValueError, match="conflicting health record"):
+        append_jsonl(path, record(status="failed"))

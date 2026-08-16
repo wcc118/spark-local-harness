@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+install_bin=${CODEX_LOCAL_INSTALL_BIN:-/home/connellwc83/.local/bin}
+backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
+stable_worker=${CODEX_LOCAL_STABLE_WORKER:-$install_bin/codex-local-worker}
+candidate_worker=${CODEX_LOCAL_CANDIDATE_WORKER:-$script_dir/codex-local-worker-v4}
+candidate_source=${CODEX_LOCAL_CANDIDATE_SOURCE:-$script_dir/../src}
+runtime_root=${CODEX_LOCAL_RUNTIME_ROOT:-/home/connellwc83/.local/share/codex-local-harness/runtime}
+expected_baseline=37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415
+
+for required in "$stable_worker" "$candidate_worker"; do
+  [[ -f $required ]] || { echo "ERROR: required worker is missing: $required" >&2; exit 2; }
+done
+[[ -d $candidate_source/codex_local_harness ]] || {
+  echo "ERROR: candidate Python source is missing: $candidate_source/codex_local_harness" >&2
+  exit 2
+}
+find "$candidate_source/codex_local_harness" -type f -name '*.py' -print -quit | grep -q . || {
+  echo "ERROR: candidate Python source contains no modules" >&2
+  exit 2
+}
+bash -n "$candidate_worker"
+observed_stable=$(sha256sum "$stable_worker" | cut -d' ' -f1)
+observed_candidate=$(sha256sum "$candidate_worker" | cut -d' ' -f1)
+[[ $observed_stable == "$expected_baseline" || $observed_stable == "$observed_candidate" ]] || {
+  echo "ERROR: stable worker is neither qualified baseline nor current candidate: $observed_stable" >&2
+  exit 65
+}
+
+backup_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+backup_dir=$backup_root/$backup_id
+install -d -m 700 "$install_bin" "$backup_root" "$backup_dir" "$runtime_root"
+install -m 600 "$stable_worker" "$backup_dir/codex-local-worker"
+printf '%s  codex-local-worker\n' "$observed_stable" >"$backup_dir/SHA256SUMS"
+if [[ -L $runtime_root/current ]]; then
+  readlink "$runtime_root/current" >"$backup_dir/runtime-target"
+fi
+chmod 600 "$backup_dir/SHA256SUMS"
+
+bundle_hash=$(
+  cd "$candidate_source"
+  find codex_local_harness -type f -name '*.py' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+)
+runtime_dir=$runtime_root/$bundle_hash
+if [[ ! -d $runtime_dir/src/codex_local_harness ]]; then
+  runtime_tmp=$(mktemp -d --tmpdir="$runtime_root")
+  while IFS= read -r -d '' source_file; do
+    relative_path=${source_file#"$candidate_source/"}
+    install -D -m 600 "$source_file" "$runtime_tmp/src/$relative_path"
+  done < <(find "$candidate_source/codex_local_harness" -type f -name '*.py' -print0 | sort -z)
+  mv "$runtime_tmp" "$runtime_dir"
+fi
+ln -s "$runtime_dir" "$runtime_root/current.new"
+mv -Tf "$runtime_root/current.new" "$runtime_root/current"
+install -m 755 "$candidate_worker" "$stable_worker"
+
+promotion_status=promoted
+[[ $observed_stable == "$observed_candidate" ]] && promotion_status=runtime-refreshed
+printf 'status=%s\nbackup=%s\nruntime=%s\nworker_sha256=%s\n' \
+  "$promotion_status" "$backup_dir" "$runtime_dir" "$(sha256sum "$stable_worker" | cut -d' ' -f1)"

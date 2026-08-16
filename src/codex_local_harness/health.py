@@ -66,6 +66,8 @@ class RunHealth:
     delivery_ready: bool | None = None
     dirty_entries: int = 0
     generated_artifacts: int = 0
+    repository: str | None = None
+    pull_request: int | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -74,6 +76,12 @@ class RunHealth:
             raise ValueError("required string fields must be non-empty")
         if self.issue <= 0:
             raise ValueError("issue must be positive")
+        if self.pull_request is not None and self.pull_request <= 0:
+            raise ValueError("pull request must be positive")
+        if self.repository is not None and (
+            "/" not in self.repository or any(character.isspace() for character in self.repository)
+        ):
+            raise ValueError("repository must be an OWNER/REPO identifier")
         if self.wall_seconds < 0 or self.correction_cycle < 0:
             raise ValueError("timing and correction counts must be non-negative")
         if self.intervention_depth not in INTERVENTION_DEPTHS:
@@ -113,15 +121,30 @@ class RunHealth:
         return cls(usage=TokenUsage(**usage_data), **data)
 
 
-def append_jsonl(path: Path, record: RunHealth) -> None:
-    """Append one normalized record without ever storing prompts or credentials."""
+def append_jsonl(path: Path, record: RunHealth) -> bool:
+    """Append one canonical run, rejecting conflicting reuse of its identity."""
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(record.as_dict(), sort_keys=True, separators=(",", ":")) + "\n"
-    with path.open("a", encoding="utf-8") as handle:
+    with path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                existing = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid health record at line {line_number}: {exc}") from exc
+            if existing.get("run_id") == record.run_id:
+                if existing != record.as_dict():
+                    raise ValueError(f"conflicting health record for run_id {record.run_id}")
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False
+        handle.seek(0, 2)
         handle.write(encoded)
         handle.flush()
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return True
 
 
 def read_jsonl(path: Path) -> tuple[RunHealth, ...]:

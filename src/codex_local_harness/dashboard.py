@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .diagnostics import Adjudication, LifecycleEvent, read_records
+from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
 from .read_model import RunView, build_run_views, summarize_views
@@ -26,6 +26,7 @@ class DashboardSource:
     lifecycle: Path
     workflow: Path | None = None
     frontier: Path | None = None
+    publication_failures: Path | None = None
     release: str = "v0.1.1"
     mode: str = "live"
     now: datetime | None = None
@@ -40,6 +41,12 @@ class DashboardSource:
         lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
         workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
         frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
+        publication_failures = self._load(
+            self.publication_failures,
+            "publication-failures",
+            lambda path: read_records(path, PublicationFailure),
+            statuses,
+        ) if self.publication_failures else ()
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
@@ -57,6 +64,7 @@ class DashboardSource:
             "runs": [view.as_dict() for view in views],
             "operations": current_operations,
             "superseded_operations": sum(operation["current_state"] == "superseded" for operation in operations),
+            "publication_failures": [failure.as_dict() for failure in publication_failures],
             "codex": frontier.as_dict() if frontier else FrontierStatus(
                 "unavailable", "1970-01-01T00:00:00Z", "unavailable", note_code="official-interface-unavailable"
             ).as_dict(),
@@ -77,7 +85,14 @@ class DashboardSource:
         return records
 
     def paths(self) -> tuple[Path, ...]:
-        return tuple(path for path in (self.runs, self.adjudications, self.lifecycle, self.workflow, self.frontier) if path is not None)
+        return tuple(path for path in (
+            self.runs,
+            self.adjudications,
+            self.lifecycle,
+            self.workflow,
+            self.frontier,
+            self.publication_failures,
+        ) if path is not None)
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
         result = []
@@ -222,6 +237,8 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     newest_text = _format_age(age_seconds) if age_seconds is not None else "No data"
     source_problems = [source for source in snapshot["sources"] if source["state"] != "ok"]
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
+    if snapshot["publication_failures"]:
+        source_banner += f'<section class="source-warning"><strong>Telemetry publication failures:</strong> {len(snapshot["publication_failures"])}</section>'
     context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
     interactive_tokens = f"{codex['tokens_used']:,}" if codex["tokens_used"] is not None else "Unavailable"
     plan = f"{codex['plan_remaining_percent']:.1f}%" if codex["plan_remaining_percent"] is not None else "Unavailable"
@@ -284,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lifecycle", type=Path, required=True)
     parser.add_argument("--workflow", type=Path)
     parser.add_argument("--frontier", type=Path)
+    parser.add_argument("--publication-failures", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.1.1")
@@ -293,7 +311,16 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("dashboard must bind to a loopback address")
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
-    source = DashboardSource(args.runs, args.adjudications, args.lifecycle, args.workflow, args.frontier, args.release, args.mode)
+    source = DashboardSource(
+        args.runs,
+        args.adjudications,
+        args.lifecycle,
+        args.workflow,
+        args.frontier,
+        args.publication_failures,
+        args.release,
+        args.mode,
+    )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
     print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)
     try:
