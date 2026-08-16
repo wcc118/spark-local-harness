@@ -194,9 +194,14 @@ def _operation_projection(items: list[WorkflowEvent]) -> dict[str, Any]:
         diagnostics.append({"kind": "legacy-session-identity", "state": "unknown"})
     if any(current.observed_at < previous.observed_at for previous, current in zip(file_order, file_order[1:])):
         diagnostics.append({"kind": "stale-event-order", "state": "stale"})
+    github_observations = [
+        event for event in events
+        if any(reference.startswith("github-label:") for reference in event.evidence_refs)
+    ]
+    latest_github = github_observations[-1] if github_observations else None
     github_labels = {
         reference.removeprefix("github-label:")
-        for event in events for reference in event.evidence_refs
+        for reference in (latest_github.evidence_refs if latest_github else ())
         if reference.startswith("github-label:")
     }
     if github_labels:

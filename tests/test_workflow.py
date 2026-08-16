@@ -181,6 +181,15 @@ def test_github_label_divergence_is_diagnostic_only():
     assert operation["current_state"] == "active"
 
 
+def test_historical_matching_label_cannot_hide_current_divergence():
+    operation = derive_operations([
+        event("old", "merge", "active", "2026-08-15T18:00:00Z", evidence_refs=("github-label:status/review-passed",)),
+        event("new", "merge", "active", "2026-08-15T18:01:00Z", evidence_refs=("github-label:status/backlog",)),
+    ])[0]
+    diagnostic = next(item for item in operation["diagnostics"] if item["kind"] == "github-label-divergence")
+    assert diagnostic["observed"] == ["status/backlog"]
+
+
 def test_strict_publisher_rejects_reuse_regression_and_bad_correction_cycle():
     existing = [event("work", "local-work", "passed", "2026-08-15T18:00:00Z")]
     with pytest.raises(ValueError, match="event_id reuse"):
