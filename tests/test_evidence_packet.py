@@ -124,6 +124,19 @@ def test_portability_signals_do_not_flag_portable_fallbacks_or_non_python():
     assert detect_advisory_risk_signals("+os.sync()\n", ("README.md",)) == ()
 
 
+def test_portability_signals_respect_file_boundaries_in_mixed_patch():
+    mixed = '''diff --git a/src/save.py b/src/save.py
++++ b/src/save.py
+@@ -0,0 +1 @@
++value = 1
+diff --git a/README.md b/README.md
++++ b/README.md
+@@ -0,0 +1 @@
++Avoid os.sync() and os.O_DIRECTORY here.
+'''
+    assert detect_advisory_risk_signals(mixed, ("src/save.py", "README.md")) == ()
+
+
 def test_packet_serializes_advisory_signals_without_a_verdict():
     value = packet(FakeRun(files=("src/save.py",), patch="+os.sync()\n"))
     serialized = value.compact_json()

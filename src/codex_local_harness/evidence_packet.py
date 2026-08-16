@@ -149,13 +149,18 @@ def build_reviewer_evidence_packet(
 
 def detect_advisory_risk_signals(patch: str, changed_files: Sequence[str]) -> tuple[str, ...]:
     """Return bounded, answer-neutral reviewer cues from added Python lines."""
-    if not any(path.endswith(".py") for path in changed_files):
+    python_files = tuple(path for path in changed_files if path.endswith(".py"))
+    if not python_files:
         return ()
-    added = [
-        line[1:]
-        for line in patch.splitlines()
-        if line.startswith("+") and not line.startswith("+++")
-    ]
+    has_file_headers = any(line.startswith("diff --git ") for line in patch.splitlines())
+    in_python_diff = not has_file_headers and len(python_files) == len(changed_files)
+    added = []
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            match = re.match(r"diff --git a/.+ b/(.+)$", line)
+            in_python_diff = bool(match and match.group(1).endswith(".py"))
+        elif in_python_diff and line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
     signals: list[str] = []
     if any(re.search(r"\bos\.sync\s*\(", line) for line in added):
         signals.append("python-portability: direct os.sync() call added; verify platform support and durability claim")
