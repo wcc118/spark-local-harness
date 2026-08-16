@@ -408,7 +408,8 @@ fi
 if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   set +e
   "${coder_cli[@]}" --checkout "$worker_repo_path" --repository "$worker_repository" \
-    --issue "$worker_issue" --result-out "$worker_result" --publish
+    --issue "$worker_issue" --result-out "$worker_result" --publish \
+    --publication-failure-records "$publication_failure_records" --run-id "$worker_run_id"
   finalize_status=$?
   set -e
   [[ $finalize_status == 0 ]] || workflow_status=65
