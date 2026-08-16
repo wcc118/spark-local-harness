@@ -11,6 +11,7 @@ import fcntl
 
 SCHEMA_VERSION = 1
 INTERVENTION_DEPTHS = {"none", "audit", "targeted", "takeover"}
+TOKEN_PROVENANCE = {"observed", "unsupported", "estimated", "not-applicable"}
 
 
 @dataclass(frozen=True)
@@ -21,10 +22,15 @@ class TokenUsage:
     frontier_input: int = 0
     frontier_output: int = 0
     frontier_reasoning: int = 0
+    local_cache_read: int | None = None
+    local_cache_write: int | None = None
+    cache_provenance: str | None = None
 
     def __post_init__(self) -> None:
-        if any(value < 0 for value in asdict(self).values()):
+        if any(value < 0 for value in asdict(self).values() if isinstance(value, int)):
             raise ValueError("token counts must be non-negative")
+        if self.cache_provenance is not None and self.cache_provenance not in TOKEN_PROVENANCE:
+            raise ValueError(f"cache_provenance must be one of {TOKEN_PROVENANCE}")
 
     @property
     def local_total(self) -> int:
@@ -118,6 +124,10 @@ class RunHealth:
         usage_data.pop("local_total", None)
         usage_data.pop("frontier_total", None)
         usage_data.pop("total", None)
+        # Default cache provenance to "unsupported" only if the key is completely missing
+        # (backward compatibility for old records that don't have cache fields)
+        if "cache_provenance" not in usage_data:
+            usage_data["cache_provenance"] = "unsupported"
         return cls(usage=TokenUsage(**usage_data), **data)
 
 

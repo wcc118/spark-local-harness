@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .diagnostics import append_record
@@ -27,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     workflow.add_argument("--correction-cycle", type=int, default=0)
     workflow.add_argument("--stop-reason")
     workflow.add_argument("--evidence-ref", action="append", default=[])
+    workflow.add_argument("--session-id")
+    workflow.add_argument("--repository")
 
     frontier = commands.add_parser("frontier")
     frontier.add_argument("--records", type=Path, required=True)
@@ -43,10 +46,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.kind == "workflow":
+            session_id = (
+                args.session_id
+                or os.environ.get("CODEX_LOCAL_SESSION_ID")
+                or os.environ.get("CODEX_THREAD_ID")
+            )
+            repository = args.repository or os.environ.get("CODEX_LOCAL_REPOSITORY")
             record = WorkflowEvent(
                 args.event_id, args.operation_id, args.stage, args.state, args.observed_at, args.issue,
                 args.pull_request, args.run_id, args.role, args.model, args.correction_cycle,
-                args.stop_reason, tuple(args.evidence_ref),
+                args.stop_reason, tuple(args.evidence_ref), session_id, repository,
             )
         else:
             record = FrontierStatus(

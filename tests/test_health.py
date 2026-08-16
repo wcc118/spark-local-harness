@@ -89,3 +89,115 @@ def test_run_publication_is_idempotent_and_rejects_conflicting_identity(tmp_path
     assert path.read_bytes() == original
     with pytest.raises(ValueError, match="conflicting health record"):
         append_jsonl(path, record(status="failed"))
+
+
+def test_token_usage_default_cache_values():
+    usage = TokenUsage()
+    assert usage.local_cache_read is None
+    assert usage.local_cache_write is None
+    assert usage.cache_provenance is None
+
+
+def test_token_usage_with_observed_cache():
+    usage = TokenUsage(local_cache_read=10, local_cache_write=5, cache_provenance="observed")
+    assert usage.local_cache_read == 10
+    assert usage.local_cache_write == 5
+    assert usage.cache_provenance == "observed"
+
+
+def test_token_usage_with_zero_cache_values():
+    # Explicitly zero cache should be allowed
+    usage = TokenUsage(local_cache_read=0, local_cache_write=0, cache_provenance="observed")
+    assert usage.local_cache_read == 0
+    assert usage.local_cache_write == 0
+
+
+def test_token_usage_rejects_invalid_provenance():
+    with pytest.raises(ValueError, match="cache_provenance"):
+        TokenUsage(cache_provenance="invalid")
+
+
+def test_token_usage_backward_compatibility_with_runhealth_from_dict():
+    # When creating a TokenUsage directly, cache_provenance is None by default
+    # The "unsupported" default only applies in RunHealth.from_dict for backward compatibility
+    old_data = {
+        "local_input": 100,
+        "local_output": 20,
+    }
+    usage = TokenUsage(**old_data)
+    assert usage.local_cache_read is None
+    assert usage.local_cache_write is None
+    assert usage.cache_provenance is None  # Direct instantiation has None by default
+
+
+def test_runhealth_from_dict_defaults_unsupported_for_legacy_records():
+    # When deserializing from JSON (old records without cache fields),
+    # cache_provenance should default to "unsupported" for backward compatibility
+    old_health_data = {
+        "run_id": "run-1",
+        "issue": 7,
+        "role": "coder",
+        "runtime": "opencode",
+        "model": "qwen3-coder-next",
+        "profile": "codex-led-v4",
+        "task_class": "moderate",
+        "status": "success",
+        "wall_seconds": 12.5,
+        "usage": {
+            "local_input": 100,
+            "local_output": 20,
+        },
+    }
+    health = RunHealth.from_dict(old_health_data)
+    assert health.usage.local_cache_read is None
+    assert health.usage.local_cache_write is None
+    assert health.usage.cache_provenance == "unsupported"  # Default for legacy records
+
+
+def test_run_health_from_dict_with_new_cache_fields():
+    data = {
+        "run_id": "run-1",
+        "issue": 7,
+        "role": "coder",
+        "runtime": "opencode",
+        "model": "qwen3-coder-next",
+        "profile": "codex-led-v4",
+        "task_class": "moderate",
+        "status": "success",
+        "wall_seconds": 12.5,
+        "usage": {
+            "local_input": 100,
+            "local_output": 20,
+            "local_cache_read": 10,
+            "local_cache_write": 5,
+            "cache_provenance": "observed",
+        },
+    }
+    health = RunHealth.from_dict(data)
+    assert health.usage.local_cache_read == 10
+    assert health.usage.local_cache_write == 5
+    assert health.usage.cache_provenance == "observed"
+
+
+def test_run_health_from_dict_backward_compatibility():
+    # Old records without cache fields in usage should deserialize with defaults
+    data = {
+        "run_id": "run-1",
+        "issue": 7,
+        "role": "coder",
+        "runtime": "opencode",
+        "model": "qwen3-coder-next",
+        "profile": "codex-led-v4",
+        "task_class": "moderate",
+        "status": "success",
+        "wall_seconds": 12.5,
+        "usage": {
+            "local_input": 100,
+            "local_output": 20,
+        },
+    }
+    health = RunHealth.from_dict(data)
+    # Legacy records should have cache_provenance default to "unsupported"
+    assert health.usage.local_cache_read is None
+    assert health.usage.local_cache_write is None
+    assert health.usage.cache_provenance == "unsupported"
