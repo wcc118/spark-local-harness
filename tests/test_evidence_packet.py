@@ -34,6 +34,8 @@ class FakeRun:
             return self.stat + "\n"
         if argv[:3] == ["git", "diff", "--no-ext-diff"]:
             return self.patch
+        if argv[:3] == ["git", "diff", "--check"]:
+            return ""
         raise AssertionError(argv)
 
 
@@ -54,6 +56,7 @@ def test_packet_is_deterministic_head_bound_and_answer_neutral():
     for prohibited in ("expected_verdict", "scout_findings", "codex_conclusion", "acceptance_criteria"):
         assert prohibited not in serialized
     assert json.loads(serialized)["test_executables"][0][0] == "pytest"
+    assert json.loads(serialized)["verification_exit_code"] == 0
 
 
 def test_packet_bounds_files_stat_and_patch_with_full_patch_digest():

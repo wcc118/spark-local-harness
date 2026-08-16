@@ -122,14 +122,14 @@ fi
 
 case "$worker_role" in
   helper) default_worker_timeout=300 ;;
-  reviewer) default_worker_timeout=240 ;;
+  reviewer) default_worker_timeout=120 ;;
   coder) default_worker_timeout=1800 ;;
 esac
 worker_timeout=${CODEX_LOCAL_TIMEOUT_SECONDS:-$default_worker_timeout}
 [[ "$worker_timeout" =~ ^[1-9][0-9]*$ ]] || {
   echo "ERROR: CODEX_LOCAL_TIMEOUT_SECONDS must be a positive integer" >&2; exit 2;
 }
-reviewer_token_budget=${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-600000}
+reviewer_token_budget=${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-250000}
 [[ "$reviewer_token_budget" =~ ^[1-9][0-9]*$ ]] || {
   echo "ERROR: CODEX_LOCAL_REVIEWER_TOKEN_BUDGET must be a positive integer" >&2; exit 2;
 }
@@ -164,15 +164,10 @@ jq '.mcp.github.enabled = false
         }
       })
     | .agent.reviewer.permission = ((.agent.reviewer.permission // {}) + {
-        "external_directory": "deny",
-        "bash": {
-          "*": "deny", "git status*": "allow", "git diff*": "allow",
-          "git log*": "allow", "git show*": "allow", "rg *": "allow",
-          "ls*": "allow", "pwd": "allow", "sed *": "allow",
-          "python3 -m pytest*": "allow", "pytest*": "allow"
-        }
+        "external_directory": "deny", "bash": "deny", "read": "deny",
+        "glob": "deny", "grep": "deny"
       })
-    | .agent.reviewer.steps = 16' /home/connellwc83/.config/opencode/opencode.json \
+    | .agent.reviewer.steps = 4' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
 cp -a /home/connellwc83/.config/opencode/agents/. \
   "$worker_runtime_home/.config/opencode/agents/"

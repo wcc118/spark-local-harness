@@ -328,6 +328,8 @@ def test_validate_result_normalizes_omitted_optional_escalation_reason(tmp_path)
 def test_validate_result_distinguishes_observed_and_reported_tests(tmp_path):
     reported = valid_result(tests=[{"command": "pytest -q", "provenance": "task-reported"}])
     assert validate_result(reported, envelope(tmp_path))["tests"][0]["provenance"] == "task-reported"
+    observed = valid_result(tests=[{"command": "git diff --check", "exit_code": 0, "provenance": "harness-observed"}])
+    assert validate_result(observed, envelope(tmp_path))["tests"][0]["provenance"] == "harness-observed"
     with pytest.raises(ReviewError, match="provenance"):
         validate_result(valid_result(tests=[{"command": "pytest", "exit_code": 0}]), envelope(tmp_path))
     with pytest.raises(ReviewError, match="exit_code"):
@@ -371,9 +373,9 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert "IMMUTABLE_REVIEW_ENVELOPE=" in prompt
     assert SHA in prompt
     assert RESULT_PREFIX in prompt
-    assert "First inspect the harness-observed exact-head diff" in prompt
-    assert "no more than eight tool calls total" in prompt
-    assert "reviewer-observed or task-reported" in prompt
+    assert "Inspect the harness-observed exact-head diff" in prompt
+    assert "evidence boundary is intentionally tool-free" in prompt
+    assert "harness-observed, reviewer-observed, or task-reported" in prompt
     assert prompt.endswith("REPORTED_TASK_CLAIMS:\nReview the change")
 
 

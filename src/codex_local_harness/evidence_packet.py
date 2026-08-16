@@ -40,6 +40,8 @@ class ReviewerEvidencePacket:
     patch_truncated: bool
     patch_sha256: str
     test_executables: tuple[tuple[str, str], ...]
+    verification_command: str = "git diff --check <comparison-base>..<head>"
+    verification_exit_code: int = 0
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION or self.provenance != "harness-observed":
@@ -62,6 +64,8 @@ class ReviewerEvidencePacket:
             raise ValueError("invalid patch digest")
         if len(set(name for name, _ in self.test_executables)) != len(self.test_executables):
             raise ValueError("duplicate test executable")
+        if self.verification_exit_code != 0:
+            raise ValueError("review preflight verification did not pass")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -105,6 +109,7 @@ def build_reviewer_evidence_packet(
             raise ValueError("Git returned an unsafe changed-file path")
     diff_stat_raw = run(["git", "diff", "--stat", "--compact-summary", revision], checkout).strip()
     patch_raw = run(["git", "diff", "--no-ext-diff", "--unified=40", revision], checkout)
+    run(["git", "diff", "--check", revision], checkout)
     if not diff_stat_raw or not patch_raw:
         raise ValueError("Git returned empty review evidence")
     diff_stat, stat_truncated = _bounded(diff_stat_raw, MAX_DIFF_STAT_CHARS, "\n...[diff stat truncated]")

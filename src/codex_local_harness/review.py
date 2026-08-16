@@ -186,9 +186,10 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         "IMMUTABLE_REVIEW_ENVELOPE=" + identity + "\n\n"
         + evidence
         + "Review only the checkout and commit identified above. Do not access another checkout. "
-        "First inspect the harness-observed exact-head diff already in this packet, then run at most "
-        "one smallest relevant verification command. Use no more than eight tool calls total. After "
-        "that command, stop exploring and serialize the complete result while budget remains. "
+        "Inspect the harness-observed exact-head diff and deterministic git-diff-check result in this "
+        "packet. The evidence boundary is intentionally tool-free: do not invoke tools or seek more "
+        "files. If the bounded patch is truncated or insufficient, return ESCALATE. Serialize the "
+        "complete result immediately. "
         "Do not change GitHub state. End with exactly one single-line machine result prefixed "
         f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
         "coder findings; never delete, regenerate, or repair them. Test execution is configured "
@@ -197,7 +198,7 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         f"another /tmp or external path. The disposable runtime home {envelope.runtime_home} is "
         "also harness-owned and may contain interpreter or package-manager runtime files only.\n\n"
         "The evidence packet contains harness-observed facts, not findings or a verdict. "
-        "In every tests entry, provenance must be reviewer-observed or task-reported. Never describe "
+        "In every tests entry, provenance must be harness-observed, reviewer-observed, or task-reported. Never describe "
         "a task-reported test as executed by you. "
         "The task below contains reported claims and requirements that still require independent judgment.\n\n"
         f"REPORTED_TASK_CLAIMS:\n{task}"
@@ -325,8 +326,8 @@ def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any
         if not isinstance(result[field], list):
             raise ReviewError(f"{field} must be a list")
     for test in result["tests"]:
-        if not isinstance(test, dict) or test.get("provenance") not in {"reviewer-observed", "task-reported"}:
-            raise ReviewError("every test requires reviewer-observed or task-reported provenance")
+        if not isinstance(test, dict) or test.get("provenance") not in {"harness-observed", "reviewer-observed", "task-reported"}:
+            raise ReviewError("every test requires harness-observed, reviewer-observed, or task-reported provenance")
         if test["provenance"] == "reviewer-observed" and not isinstance(test.get("exit_code"), int):
             raise ReviewError("reviewer-observed tests require an integer exit_code")
     blockers = [f for f in result["findings"] if isinstance(f, dict) and f.get("severity") == "blocker"]
