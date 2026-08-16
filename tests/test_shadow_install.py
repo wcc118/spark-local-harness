@@ -122,3 +122,36 @@ def test_promotion_rejects_empty_python_package_before_backup(tmp_path):
     assert completed.returncode == 2
     assert "contains no modules" in completed.stderr
     assert not backup_root.exists()
+
+
+def test_promotion_rejects_worker_not_in_release_manifest(tmp_path):
+    install_bin = tmp_path / "bin"
+    install_bin.mkdir()
+    stable = install_bin / "codex-local-worker"
+    candidate = tmp_path / "candidate"
+    stable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stable.chmod(0o755)
+    candidate.chmod(0o755)
+    source = tmp_path / "src/codex_local_harness"
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text("", encoding="utf-8")
+    manifest = tmp_path / "release.json"
+    manifest.write_text('{"qualified_worker_sha256": []}\n', encoding="utf-8")
+
+    completed = subprocess.run(
+        [str(ROOT / "bin/promote-v4-worker")], text=True, capture_output=True,
+        env=os.environ | {
+            "CODEX_LOCAL_INSTALL_BIN": str(install_bin),
+            "CODEX_LOCAL_STABLE_WORKER": str(stable),
+            "CODEX_LOCAL_CANDIDATE_WORKER": str(candidate),
+            "CODEX_LOCAL_CANDIDATE_SOURCE": str(tmp_path / "src"),
+            "CODEX_LOCAL_RUNTIME_ROOT": str(tmp_path / "runtime"),
+            "CODEX_LOCAL_BACKUP_ROOT": str(tmp_path / "backups"),
+            "CODEX_LOCAL_RELEASE_MANIFEST": str(manifest),
+        },
+    )
+
+    assert completed.returncode == 65
+    assert "stable worker is not a qualified release" in completed.stderr
+    assert not (tmp_path / "backups").exists()
