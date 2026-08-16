@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -56,13 +57,20 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
     install_bin.mkdir()
     stable = install_bin / "codex-local-worker"
     shutil.copy2(ROOT / "bin/codex-local-worker", stable)
+    candidate = ROOT / "bin/codex-local-worker-v4"
+    manifest = tmp_path / "release.json"
+    manifest.write_text(json.dumps({"qualified_worker_sha256": [
+        hashlib.sha256(stable.read_bytes()).hexdigest(),
+        hashlib.sha256(candidate.read_bytes()).hexdigest(),
+    ]}), encoding="utf-8")
     environment = os.environ | {
         "CODEX_LOCAL_INSTALL_BIN": str(install_bin),
         "CODEX_LOCAL_BACKUP_ROOT": str(backup_root),
         "CODEX_LOCAL_STABLE_WORKER": str(stable),
-        "CODEX_LOCAL_CANDIDATE_WORKER": str(ROOT / "bin/codex-local-worker-v4"),
+        "CODEX_LOCAL_CANDIDATE_WORKER": str(candidate),
         "CODEX_LOCAL_CANDIDATE_SOURCE": str(ROOT / "src"),
         "CODEX_LOCAL_RUNTIME_ROOT": str(tmp_path / "runtime"),
+        "CODEX_LOCAL_RELEASE_MANIFEST": str(manifest),
     }
     first = subprocess.run(
         [str(ROOT / "bin/promote-v4-worker")],
