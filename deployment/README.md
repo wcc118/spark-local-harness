@@ -63,6 +63,12 @@ systemctl --user enable --now dashboard-backend
 systemctl --user enable --now socat-lan-proxy
 ```
 
+Production `promote-v4-worker` runs also install the dashboard unit, reload the
+user manager, and restart the service if it is already active. The prior unit is
+stored in the same promotion backup and restored by `rollback-v4-worker`.
+Isolated tests and non-production prefixes skip unit installation by default;
+set `CODEX_LOCAL_INSTALL_UNITS=1` with explicit unit/systemctl paths to exercise it.
+
 ### Check status
 
 ```bash

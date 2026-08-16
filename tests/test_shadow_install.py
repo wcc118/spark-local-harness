@@ -163,3 +163,47 @@ def test_promotion_rejects_worker_not_in_release_manifest(tmp_path):
     assert completed.returncode == 65
     assert "stable worker is not a qualified release" in completed.stderr
     assert not (tmp_path / "backups").exists()
+
+
+def test_promotion_installs_dashboard_unit_and_rollback_restores_it(tmp_path):
+    install_bin = tmp_path / "bin"
+    unit_dir = tmp_path / "units"
+    install_bin.mkdir()
+    unit_dir.mkdir()
+    stable = install_bin / "codex-local-worker"
+    shutil.copy2(ROOT / "bin/codex-local-worker", stable)
+    candidate = ROOT / "bin/codex-local-worker-v4"
+    manifest = tmp_path / "release.json"
+    manifest.write_text(json.dumps({"qualified_worker_sha256": [
+        hashlib.sha256(stable.read_bytes()).hexdigest(),
+        hashlib.sha256(candidate.read_bytes()).hexdigest(),
+    ]}), encoding="utf-8")
+    installed_unit = unit_dir / "dashboard-backend.service"
+    installed_unit.write_text("old-unit\n", encoding="utf-8")
+    fake_systemctl = tmp_path / "systemctl"
+    calls = tmp_path / "systemctl.calls"
+    fake_systemctl.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {calls}\n", encoding="utf-8")
+    fake_systemctl.chmod(0o755)
+    environment = os.environ | {
+        "CODEX_LOCAL_INSTALL_BIN": str(install_bin),
+        "CODEX_LOCAL_BACKUP_ROOT": str(tmp_path / "backups"),
+        "CODEX_LOCAL_STABLE_WORKER": str(stable),
+        "CODEX_LOCAL_CANDIDATE_WORKER": str(candidate),
+        "CODEX_LOCAL_CANDIDATE_SOURCE": str(ROOT / "src"),
+        "CODEX_LOCAL_RUNTIME_ROOT": str(tmp_path / "runtime"),
+        "CODEX_LOCAL_RELEASE_MANIFEST": str(manifest),
+        "CODEX_LOCAL_INSTALL_UNITS": "1",
+        "CODEX_LOCAL_DASHBOARD_UNIT": str(ROOT / "deployment/dashboard-backend.service"),
+        "CODEX_LOCAL_USER_UNIT_DIR": str(unit_dir),
+        "CODEX_LOCAL_SYSTEMCTL": str(fake_systemctl),
+    }
+    promoted = subprocess.run([str(ROOT / "bin/promote-v4-worker")], check=True, text=True, capture_output=True, env=environment)
+    backup = Path(next(line.split("=", 1)[1] for line in promoted.stdout.splitlines() if line.startswith("backup=")))
+    assert installed_unit.read_bytes() == (ROOT / "deployment/dashboard-backend.service").read_bytes()
+    assert (backup / "dashboard-backend.service").read_text(encoding="utf-8") == "old-unit\n"
+    subprocess.run([str(ROOT / "bin/rollback-v4-worker"), str(backup)], check=True, env=environment)
+    assert installed_unit.read_text(encoding="utf-8") == "old-unit\n"
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "--user daemon-reload", "--user try-restart dashboard-backend.service",
+        "--user daemon-reload", "--user try-restart dashboard-backend.service",
+    ]

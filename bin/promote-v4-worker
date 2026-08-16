@@ -9,6 +9,13 @@ candidate_worker=${CODEX_LOCAL_CANDIDATE_WORKER:-$script_dir/codex-local-worker-
 candidate_source=${CODEX_LOCAL_CANDIDATE_SOURCE:-$script_dir/../src}
 runtime_root=${CODEX_LOCAL_RUNTIME_ROOT:-/home/connellwc83/.local/share/codex-local-harness/runtime}
 release_manifest=${CODEX_LOCAL_RELEASE_MANIFEST:-$script_dir/../config/installed-release.json}
+candidate_dashboard_unit=${CODEX_LOCAL_DASHBOARD_UNIT:-$script_dir/../deployment/dashboard-backend.service}
+user_unit_dir=${CODEX_LOCAL_USER_UNIT_DIR:-/home/connellwc83/.config/systemd/user}
+systemctl_bin=${CODEX_LOCAL_SYSTEMCTL:-systemctl}
+install_units=${CODEX_LOCAL_INSTALL_UNITS:-}
+if [[ -z $install_units ]]; then
+  [[ $install_bin == /home/connellwc83/.local/bin ]] && install_units=1 || install_units=0
+fi
 
 for required in "$stable_worker" "$candidate_worker" "$release_manifest"; do
   [[ -f $required ]] || { echo "ERROR: required worker is missing: $required" >&2; exit 2; }
@@ -44,6 +51,16 @@ if [[ -L $runtime_root/current ]]; then
   readlink "$runtime_root/current" >"$backup_dir/runtime-target"
 fi
 chmod 600 "$backup_dir/SHA256SUMS"
+if [[ $install_units == 1 ]]; then
+  [[ -f $candidate_dashboard_unit ]] || {
+    echo "ERROR: dashboard unit is missing: $candidate_dashboard_unit" >&2
+    exit 2
+  }
+  install -d -m 700 "$user_unit_dir"
+  if [[ -f $user_unit_dir/dashboard-backend.service ]]; then
+    install -m 600 "$user_unit_dir/dashboard-backend.service" "$backup_dir/dashboard-backend.service"
+  fi
+fi
 
 bundle_hash=$(
   cd "$candidate_source"
@@ -61,6 +78,11 @@ fi
 ln -s "$runtime_dir" "$runtime_root/current.new"
 mv -Tf "$runtime_root/current.new" "$runtime_root/current"
 install -m 755 "$candidate_worker" "$stable_worker"
+if [[ $install_units == 1 ]]; then
+  install -m 644 "$candidate_dashboard_unit" "$user_unit_dir/dashboard-backend.service"
+  "$systemctl_bin" --user daemon-reload
+  "$systemctl_bin" --user try-restart dashboard-backend.service
+fi
 
 promotion_status=promoted
 [[ $observed_stable == "$observed_candidate" ]] && promotion_status=runtime-refreshed
