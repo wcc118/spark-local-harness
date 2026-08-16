@@ -1,0 +1,35 @@
+[Unit]
+Description=Codex Local Harness - LAN proxy for dashboard (OPERATOR REVIEW REQUIRED)
+Documentation=https://github.com/wcc118/codex-local-harness/blob/main/docs/mvp-quickstart.md
+After=network.target dashboard-backend.service
+Wants=dashboard-backend.service
+# WARNING: This unit requires operator review of the bind address before installation
+# DEFAULT BIND ADDRESS: 10.0.0.98:8765
+# This exposes the loopback-only dashboard to the local network
+# BEFORE ENABLING: Verify the bind address is appropriate and secure for your environment
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP4-LISTEN:8765,bind=10.0.0.98,reuseaddr,fork TCP4:127.0.0.1:8765
+# Security hardening for socat
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectControlGroups=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+# Explicitly allow network access (required for socat)
+PrivateNetwork=no
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=socat-codex-proxy
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

@@ -4,6 +4,21 @@ The project is building toward the first diagnostic scaffold release,
 `v0.1.0`. Codex remains the primary orchestrator. Local workers perform one
 bounded task. See [the tracked release plan](docs/v0.1.0-plan.md).
 
+## Getting started
+
+New users should read the [MVP quickstart guide](docs/mvp-quickstart.md) for a
+concise setup and usage overview, including routing guidance, escalation
+boundaries, dashboard URL/checks, rollback reference, and known limitations.
+
+The quickstart covers:
+
+- **Installation**: Basic setup and worker configuration
+- **Routing**: Helper vs complex coder routes and model selection
+- **Escalation**: What the harness does (and doesn't) do
+- **Dashboard**: Accessing the read-only diagnostic UI at `http://127.0.0.1:8765`
+- **Rollback**: Worker and health data recovery procedures
+- **Known limitations**: Including reviewer tempfile detection
+
 ## Reviewer transaction
 
 1. Resolve and verify the canonical checkout, GitHub remote, issue, PR, branch,
