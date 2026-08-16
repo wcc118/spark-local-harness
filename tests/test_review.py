@@ -372,6 +372,7 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert SHA in prompt
     assert RESULT_PREFIX in prompt
     assert "First inspect the harness-observed exact-head diff" in prompt
+    assert "no more than eight tool calls total" in prompt
     assert "reviewer-observed or task-reported" in prompt
     assert prompt.endswith("REPORTED_TASK_CLAIMS:\nReview the change")
 

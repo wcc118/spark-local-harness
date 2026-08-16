@@ -343,6 +343,8 @@ if [[ $worker_role == reviewer ]]; then
     reviewer_budget_reason=token-budget
   elif (( inference_status == 124 || inference_status == 137 )); then
     reviewer_budget_reason=wall-time-budget
+  elif grep -q 'Maximum steps reached for this agent' "$worker_log"; then
+    reviewer_budget_reason=step-budget
   fi
 fi
 

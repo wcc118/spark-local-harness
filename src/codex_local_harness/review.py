@@ -187,7 +187,8 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         + evidence
         + "Review only the checkout and commit identified above. Do not access another checkout. "
         "First inspect the harness-observed exact-head diff already in this packet, then run at most "
-        "one smallest relevant verification command before any wider exploration. "
+        "one smallest relevant verification command. Use no more than eight tool calls total. After "
+        "that command, stop exploring and serialize the complete result while budget remains. "
         "Do not change GitHub state. End with exactly one single-line machine result prefixed "
         f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
         "coder findings; never delete, regenerate, or repair them. Test execution is configured "
