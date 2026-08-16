@@ -16,6 +16,7 @@ from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_
 from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
 from .operation_usage import OperationUsageSnapshot, derive_usage
+from .plan_event import derive_plans, read_plan_records
 from .read_model import RunView, build_run_views, summarize_views
 from .workflow import derive_operations, read_workflow_records
 
@@ -32,6 +33,7 @@ class DashboardSource:
     mode: str = "live"
     now: datetime | None = None
     operation_usage: Path | None = None
+    plans: Path | None = None
 
     def _current_time(self) -> datetime:
         return self.now if self.now is not None else datetime.now(timezone.utc)
@@ -53,11 +55,13 @@ class DashboardSource:
             self.operation_usage, "operation-usage",
             lambda path: read_records(path, OperationUsageSnapshot), statuses,
         ) if self.operation_usage else ()
+        plan_events = self._load(self.plans, "plans", read_plan_records, statuses) if self.plans else ()
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
         frontier = latest_status(frontier_records)
         operations = derive_operations(workflow)
+        plans = derive_plans(plan_events, now=self._current_time())
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
         sessions = _derive_sessions(current_operations, self._current_time())
         selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
@@ -66,6 +70,7 @@ class DashboardSource:
             run_ids = {run_id for item in current_operations for run_id in item["run_ids"]}
             views = tuple(view for view in views if view.run_id in run_ids)
             runs = tuple(item for item in runs if item.run_id in run_ids)
+            plans = tuple(item for item in plans if (item["session_id"] or "legacy") == selected)
         operation_usage = derive_usage(usage_snapshots)
         if selected is not None:
             operation_usage = tuple(item for item in operation_usage if item["session_id"] == selected)
@@ -80,6 +85,7 @@ class DashboardSource:
             "summary": summarize_views(views),
             "runs": [view.as_dict() for view in views],
             "operations": current_operations,
+            "plans": plans,
             "sessions": sessions,
             "selected_session": selected,
             "operation_usage": operation_usage,
@@ -114,6 +120,7 @@ class DashboardSource:
             self.frontier,
             self.publication_failures,
             self.operation_usage,
+            self.plans,
         ) if path is not None)
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
@@ -254,7 +261,22 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         for label, value in cards
     )
     rows = "".join(_run_row(view) for view in views) or '<tr><td colspan="10">No diagnostic runs recorded.</td></tr>'
-    operations = "".join(_operation(item) for item in snapshot["operations"]) or '<p class="empty">No workflow events recorded.</p>'
+    plans_by_identity = {
+        (item["session_id"], item["repository"], item["operation_id"], item["issue"]): item
+        for item in snapshot.get("plans", ())
+    }
+    operation_keys = {
+        (item["session_id"], item["repository"], item["operation_id"], item["issue"])
+        for item in snapshot["operations"]
+    }
+    operations = "".join(
+        _operation_pair(item, plans_by_identity.get((item["session_id"], item["repository"], item["operation_id"], item["issue"])))
+        for item in snapshot["operations"]
+    )
+    operations += "".join(
+        _operation_pair(None, plan) for key, plan in plans_by_identity.items() if key not in operation_keys
+    )
+    operations = operations or '<p class="empty">No workflow or plan events recorded.</p>'
     codex = snapshot["codex"]
     freshness = snapshot["freshness"]
     age_seconds = freshness["newest_age_seconds"]
@@ -295,6 +317,7 @@ main{{max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-size:25px}} 
 .table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:10px}} table{{width:100%;border-collapse:collapse;background:var(--panel)}}
 .operation{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px;overflow:hidden}} .operation-head{{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}} .flow{{display:grid;grid-template-columns:repeat(8,minmax(120px,1fr));gap:8px;margin-top:12px;overflow:auto;padding:2px}} .milestone{{position:relative;border:1px solid var(--line);border-radius:8px;padding:9px;min-width:120px}} .milestone.pending{{color:#626b7c;border-color:#343946;background:#181b22}} .milestone.not-applicable{{color:#737b8c;border-color:#343946;background:transparent}} .milestone.active{{border-color:var(--warn)}} .milestone.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px 1px rgba(243,201,105,.5);pointer-events:none}} @media (prefers-reduced-motion:no-preference){{.milestone.active::after{{animation:milestone-orbit 4s linear infinite}}@keyframes milestone-orbit{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}}@media (prefers-reduced-motion:reduce){{.milestone.active::after{{top:4px;right:4px;left:auto}}}} .milestone.passed{{border-color:var(--good)}} .milestone.failed,.milestone.interrupted,.milestone.blocked,.milestone.conflicting{{border-color:var(--bad)}} .milestone-name{{display:block;font-size:11px;color:var(--muted)}} .milestone-activities{{margin-top:6px}} .milestone-activity{{display:inline-block;background:var(--line);color:var(--ink);border-radius:4px;padding:2px 6px;font-size:9px;margin-right:4px;margin-bottom:4px}} .unassigned-activities{{margin:9px 2px 0;padding:7px 10px;border:1px dashed var(--warn);border-radius:5px;color:var(--warn)}} .correction-loop{{margin:9px 2px 0;padding:7px 10px;border-left:3px solid var(--warn);background:#272417;color:var(--warn);border-radius:4px}} .workflow-diagnostic{{display:inline-block;margin-top:8px;padding:3px 7px;border:1px solid var(--bad);color:var(--bad);border-radius:5px;font-size:11px}} @media (max-width:760px){{.flow{{grid-template-columns:1fr;overflow:visible}}.milestone{{min-width:0}}}}
 .telemetry{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0 0 22px}} .empty{{color:var(--muted)}} #connection{{color:var(--warn)}}
+.operation-pair{{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,2fr);gap:12px;align-items:start;margin-bottom:14px}} .operation-pair .operation{{margin:0}} .running-plan{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}} .plan-head{{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}} .plan-objective{{margin:9px 0;color:var(--ink)}} .plan-steps{{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:6px}} .plan-step{{position:relative;border:1px solid var(--line);border-radius:7px;padding:8px}} .plan-step.pending{{color:#626b7c;border-color:#343946;background:#181b22}} .plan-step.active{{border-color:var(--warn)}} .plan-step.completed,.plan-step.skipped{{color:var(--muted)}} .plan-step.blocked{{border-color:var(--bad)}} .plan-step.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px rgba(243,201,105,.5)}} @media (prefers-reduced-motion:no-preference){{.plan-step.active::after{{animation:plan-focus 4s linear infinite}}@keyframes plan-focus{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}} @media (prefers-reduced-motion:reduce){{.plan-step.active::after{{top:4px;right:4px;left:auto}}}} .plan-state{{display:block;font-size:10px;text-transform:uppercase;color:var(--muted)}} .plan-diagnostic{{display:inline-block;margin:7px 5px 0 0;color:var(--bad);font-size:11px}} .plan-change{{border-left:3px solid var(--warn);padding-left:8px;color:var(--warn)}} .plan-history{{margin-top:10px;color:var(--muted)}} @media (max-width:900px){{.operation-pair{{grid-template-columns:1fr}}}}
 .session-picker{{margin:0 0 14px}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px}}
 .source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
 th,td{{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}} th{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
@@ -307,11 +330,56 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <div class="telemetry">{telemetry_html}</div>
 {session_picker}
 <h2>Division of labor</h2>{accounting_html}
-<h2>Current workflow</h2>{operations}
+<h2>Current operations</h2>{operations}
 <h2>Run history</h2>
 <div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>
 <footer>Unknown and unadjudicated are first-class states. A contradiction means observed evidence disagrees with the worker claim.</footer>
 </main><script src="/dashboard.js"></script></body></html>"""
+
+
+def _operation_pair(operation: dict[str, Any] | None, plan: dict[str, Any] | None) -> str:
+    workflow_html = _operation(operation) if operation else '<section class="operation"><h3>Current workflow</h3><p class="empty">Workflow unavailable for this plan.</p></section>'
+    return f'<div class="operation-pair">{workflow_html}{_running_plan(plan)}</div>'
+
+
+def _running_plan(plan: dict[str, Any] | None) -> str:
+    if plan is None:
+        return '<section class="running-plan"><h3>Running plan</h3><p class="empty">Plan unavailable. No durable public plan has been published.</p></section>'
+    steps = "".join(
+        f'<li class="plan-step {html.escape(step["state"])}"><span class="plan-state">{html.escape(step["state"])}</span><strong>{html.escape(step["summary"])}</strong>{_plan_refs(step.get("evidence_refs", []))}</li>'
+        for step in plan["steps"]
+    )
+    current = plan["current_step"]["summary"] if plan["current_step"] else "complete"
+    diagnostics = "".join(
+        f'<span class="plan-diagnostic">{html.escape(item["kind"])}</span>' for item in plan["diagnostics"]
+    )
+    history = "".join(
+        f'<li>revision {item["revision"]} · {html.escape(item["state"])} · {html.escape(item["observed_at"])} · {html.escape(item["source"])}{(" · " + html.escape(item["revision_reason"])) if item["revision_reason"] else ""}</li>'
+        for item in plan["history"]
+    )
+    issue = f'issue {plan["issue"]}'
+    if plan.get("repository"):
+        url = f'https://github.com/{quote(plan["repository"], safe="/")}/issues/{plan["issue"]}'
+        issue = f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">{issue}</a>'
+    age = _format_age(plan["age_seconds"]) if plan.get("age_seconds") is not None else "age unavailable"
+    changed = "" if plan["revision"] == 1 else (
+        f'<p class="plan-change">Plan changed {age}: {html.escape(plan["revision_reason"] or "reason unavailable")}</p>'
+    )
+    return (
+        '<section class="running-plan">'
+        f'<div class="plan-head"><h3>Running plan</h3><span>{plan["completed_steps"]} / {plan["total_steps"]} · revision {plan["revision"]}</span></div>'
+        f'<p class="plan-objective">{html.escape(plan["objective"])}</p>'
+        f'<p><small>{issue} · current: {html.escape(current)} · updated {age} · source {html.escape(plan["source"])}</small></p>'
+        f'{changed}{_plan_refs(plan["evidence_refs"])}{diagnostics}<ol class="plan-steps">{steps}</ol>'
+        f'<details class="plan-history"><summary>Revision history ({len(plan["history"])})</summary><ol>{history}</ol></details>'
+        '</section>'
+    )
+
+
+def _plan_refs(references: list[str]) -> str:
+    if not references:
+        return ""
+    return '<small class="plan-evidence">' + " · ".join(html.escape(item) for item in references) + "</small>"
 
 
 def _operation(operation: dict[str, Any]) -> str:
@@ -341,7 +409,7 @@ def _operation(operation: dict[str, Any]) -> str:
     if corrections:
         latest = max(corrections, key=lambda item: (item["correction_cycle"], item["observed_at"]))
         loop = f'<div class="correction-loop" aria-label="Correction loop cycle {latest["correction_cycle"]}">↩ correction cycle {latest["correction_cycle"]} → implementation · {html.escape(latest["state"])}</div>'
-    return f'<section class="operation"><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span></div>{diagnostics}<div class="flow" aria-label="Delivery milestones">{milestones}</div>{unassigned_html}{loop}</section>'
+    return f'<section class="operation"><h3>Current workflow</h3><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span></div>{diagnostics}<div class="flow" aria-label="Delivery milestones">{milestones}</div>{unassigned_html}{loop}</section>'
 
 
 def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
@@ -453,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--frontier", type=Path)
     parser.add_argument("--publication-failures", type=Path)
     parser.add_argument("--operation-usage", type=Path)
+    parser.add_argument("--plans", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.2.0")
@@ -472,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         args.release,
         args.mode,
         operation_usage=args.operation_usage,
+        plans=args.plans,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
     print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)

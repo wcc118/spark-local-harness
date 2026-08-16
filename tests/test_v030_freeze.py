@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -7,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _digest(relative: str) -> str:
-    return hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    content = subprocess.run(["git", "show", f"v0.3.0:{relative}"], cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout
+    return hashlib.sha256(content).hexdigest()
 
 
 def test_v030_freeze_binds_candidate_components_and_preserves_predecessor():

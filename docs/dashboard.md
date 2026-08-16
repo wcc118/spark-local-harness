@@ -15,6 +15,7 @@ PYTHONPATH=src python3 -m codex_local_harness.dashboard \
   --frontier ~/.local/share/codex-local-harness/health/frontier.jsonl \
   --publication-failures ~/.local/share/codex-local-harness/health/publication-failures.jsonl \
   --operation-usage ~/.local/share/codex-local-harness/health/operation-usage.jsonl \
+  --plans ~/.local/share/codex-local-harness/health/plans.jsonl \
   --mode live
 ```
 
@@ -38,10 +39,14 @@ shows whether displayed data is fresh.
   when normal worker telemetry was never finalized.
 - **Evidence references** are bounded identifiers into durable evidence, not
   captured prompt or response text.
-- **Current workflow** shows the latest state of intake, routing, local work,
-  delivery, review, evidence, Codex decision, correction, merge, and post-merge.
-  Missing observations remain `pending`; stages explicitly recorded as
-  `not-applicable` display as `not needed`.
+- **Current workflow** shows durable delivery milestones. Evidence is attached
+  as activity, correction is a numbered loop to implementation, and missing
+  observations remain `pending` rather than being inferred as passed.
+- **Running plan** shows the latest concise public plan revision beside its
+  matching workflow. It includes objective, ordered step states, progress,
+  evidence references, and revision history. It never stores or displays
+  private reasoning or chain-of-thought. Missing, stale, malformed, conflicting,
+  and superseded plan state remains explicit.
 - **Recorded frontier tokens** include only frontier usage present in harness
   run records. They do not estimate this interactive Codex thread.
 - **Local tokens** include finalized normalized worker runs. The total updates

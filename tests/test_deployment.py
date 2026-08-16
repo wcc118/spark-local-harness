@@ -57,6 +57,7 @@ def test_dashboard_backend_health_paths_use_h_specifier():
     assert f"{health_base}workflow.jsonl" in content
     assert f"{health_base}frontier.jsonl" in content
     assert f"{health_base}publication-failures.jsonl" in content
+    assert f"{health_base}plans.jsonl" in content
     # Should NOT contain /home/%i/ pattern
     assert "/home/%i/" not in content
 
@@ -190,7 +191,7 @@ def test_dashboard_backend_requires_dashboard_backend_service():
 def test_dashboard_backend_release_version():
     """Verify dashboard-backend.service uses the current release."""
     content = read_unit("dashboard-backend.service")
-    assert "--release v0.3.0" in content
+    assert "--release v0.4.0" in content
 
 
 def test_dashboard_backend_live_mode():

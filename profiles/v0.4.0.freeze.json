@@ -1,0 +1,35 @@
+{
+  "release": "v0.4.0",
+  "predecessor": "v0.3.0",
+  "issue": 55,
+  "hypothesis": "a durable public running-plan projection improves operator diagnosis of execution and replanning without exposing private reasoning or adding control authority",
+  "governance": {
+    "orchestrator": "codex",
+    "dashboard_authority": "read-only",
+    "plan_authority": "codex-or-operator-publication",
+    "private_reasoning_capture": false
+  },
+  "validation": {
+    "tests_passed": 310,
+    "compileall_passed": true,
+    "diff_check_passed": true,
+    "matched_workflow_plan_smoke": true,
+    "post_status": 405,
+    "sse_fingerprint_coverage": true,
+    "responsive_and_reduced_motion_coverage": true
+  },
+  "local_coder": {
+    "run_id": "20260816T064236Z-1538797",
+    "result": "interrupted-no-delivery",
+    "steps": 86,
+    "local_tokens": 3560553,
+    "final_authority": "codex"
+  },
+  "sha256": {
+    "plan_event": "879ea6411ff8ca56477fbdbfc26de61d7da9bf2cc265564af720760f8535f666",
+    "plan_cli": "03230b8f89980760c47dc2ba2f3f8ea29f9269510fc81a74d96d0cce80a4150b",
+    "dashboard": "0cdd647b39745f76e46e0d8807b8f488902e629dc007fc0ad0486b108c593bfe",
+    "dashboard_unit": "ce730ffd391c0e7a8006eab4bc49800787328e832ac2ec5191a3af6eab25223e",
+    "replay_plans": "b39696fd878d8c2df89b8e0e098f964f74bdebcf6ef67d8edfd71c409a64fc64"
+  }
+}
