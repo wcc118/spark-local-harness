@@ -64,18 +64,52 @@ def finalize_coder(
     if publish:
         run(["git", "push", "--set-upstream", "origin", branch], canonical)
 
-        # After successful push, retry PR-head verification once within a bounded interval.
-        # This handles GitHub's eventual consistency where the PR list API might not
-        # immediately reflect the correct headRefOid after a push.
-        pr = _retry_pr_verification(
-            canonical,
-            repository,
-            branch,
-            run,
-            publication_failure_records,
-            run_id,
-        )
+        # After successful push, verify PR with retry for eventual consistency.
+        # On first-time publication (no existing PR), _retry_pr_verification will
+        # raise "expected exactly one" or similar, at which point we create the PR
+        # and retry verification.
         created_pr = False
+        try:
+            pr = _retry_pr_verification(
+                canonical,
+                repository,
+                branch,
+                head_sha,
+                run,
+                publication_failure_records,
+                run_id,
+            )
+        except ReviewError as exc:
+            # If PR doesn't exist (first-time publication), create it and retry.
+            # Check if error indicates no PR exists.
+            err_msg = str(exc)
+            if "expected exactly one" not in err_msg and "coder PR identity" not in err_msg:
+                raise
+            # Attempt to create PR for first-time publication
+            issue_identity = _json(
+                run,
+                ["gh", "issue", "view", str(issue), "--repo", repository, "--json", "number,state,title"],
+                canonical,
+            )
+            if issue_identity.get("number") != issue or issue_identity.get("state") != "OPEN":
+                raise ReviewError("issue is missing or not open")
+            title = str(issue_identity.get("title") or f"Issue #{issue}")
+            run(
+                ["gh", "pr", "create", "--repo", repository, "--base", "main", "--head", branch,
+                 "--title", title, "--body", f"Closes #{issue}\n\nPublished by the deterministic coder handoff."],
+                canonical,
+            )
+            created_pr = True
+            # Now verify the newly created PR
+            pr = _retry_pr_verification(
+                canonical,
+                repository,
+                branch,
+                head_sha,
+                run,
+                publication_failure_records,
+                run_id,
+            )
     else:
         prs = _json(
             run,
@@ -167,6 +201,7 @@ def _retry_pr_verification(
     canonical: Path,
     repository: str,
     branch: str,
+    head_sha: str,
     run: Run,
     publication_failure_records: Path | None,
     run_id: str | None,
@@ -194,6 +229,8 @@ def _retry_pr_verification(
         pr = prs[0]
         if pr.get("headRefName") != branch or pr.get("baseRefName") != "main":
             raise ReviewError("coder PR identity does not match checkout or main base")
+        if pr.get("headRefOid") != head_sha:
+            raise ReviewError("coder PR headsha mismatch")
         return pr
     
     try:
@@ -201,12 +238,14 @@ def _retry_pr_verification(
     except ReviewError as exc:
         first_error = exc
         # Record the first mismatch outcome
+        # Use a simplified error class string that avoids spaces and special chars
+        err_class = "mismatch"
         _record_publication_failure(
             publication_failure_records,
             run_id,
             "verify-pr-after-push",
-            f"mismatch:{str(exc)}",
-            repository,
+            f"mismatch:{repository}",
+            err_class,
         )
     
     # Retry once after a bounded interval (short delay for eventual consistency)

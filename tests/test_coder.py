@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from unittest import mock
 
@@ -142,7 +141,7 @@ def test_coder_retry_succeeds_after_eventual_consistency_delay(tmp_path):
             raise AssertionError(command)
 
     runner = RetryRun(tmp_path)
-    with mock.patch("time.sleep", return_value=None):
+    with mock.patch("codex_local_harness.coder.time.sleep", return_value=None):
         result = finalize_coder(tmp_path, REPO, 85, runner, publish=True)
     
     assert result["pull_request"] == 15
@@ -192,8 +191,8 @@ def test_coder_retry_fails_after_persistent_mismatch(tmp_path):
     runner = FailingRun(tmp_path)
     run_id = "test-run-85"
     
-    with mock.patch("time.sleep", return_value=None):
-        with pytest.raises(ReviewError, match="coder PR identity"):
+    with mock.patch("codex_local_harness.coder.time.sleep", return_value=None):
+        with pytest.raises(ReviewError, match="headsha mismatch"):
             finalize_coder(tmp_path, REPO, 85, runner, publish=True, 
                           publication_failure_records=records_path, run_id=run_id)
     
@@ -207,6 +206,51 @@ def test_coder_retry_fails_after_persistent_mismatch(tmp_path):
     assert failure.phase == "verify-pr-after-push"
     assert failure.run_id == run_id
     assert "mismatch" in failure.target
+
+
+def test_coder_retry_immediate_match_after_push(tmp_path):
+    """Test that PR verification passes immediately when head matches after push."""
+    call_count = 0
+
+    class ImmediateRun:
+        def __init__(self, checkout):
+            self.checkout = checkout
+            self.pushed = False
+
+        def __call__(self, argv, cwd=None):
+            command = tuple(argv)
+            if command == ("git", "rev-parse", "--show-toplevel"):
+                return str(self.checkout)
+            if command == ("git", "remote", "get-url", "origin"):
+                return "https://github.com/wcc118/example.git\n"
+            if command == ("git", "branch", "--show-current"):
+                return "issue-85-fix\n"
+            if command == ("git", "rev-parse", "HEAD"):
+                return SHA + "\n"
+            if command == ("git", "status", "--porcelain=v1"):
+                return ""
+            if command[:2] == ("git", "push"):
+                self.pushed = True
+                return ""
+            if command[:3] == ("gh", "pr", "list"):
+                nonlocal call_count
+                call_count += 1
+                # First call: PR exists with correct HEAD (no retry needed)
+                return json.dumps([{"number": 15, "headRefName": "issue-85-fix", "headRefOid": SHA, "baseRefName": "main"}])
+            if command[:3] == ("gh", "label", "list"):
+                return json.dumps([{"name": name} for name in WORKFLOW_LABELS])
+            if command[:3] == ("gh", "issue", "view"):
+                return json.dumps({"number": 85, "state": "OPEN", "labels": [{"name": "status/review"}]})
+            if command[:3] == ("gh", "issue", "edit"):
+                return ""
+            raise AssertionError(command)
+
+    runner = ImmediateRun(tmp_path)
+    with mock.patch("codex_local_harness.coder.time.sleep", return_value=None):
+        result = finalize_coder(tmp_path, REPO, 85, runner, publish=True)
+    assert result["pull_request"] == 15
+    assert runner.pushed
+    assert call_count == 1  # Immediate match, no retry needed
 
 
 def read_records(path, record_type):
