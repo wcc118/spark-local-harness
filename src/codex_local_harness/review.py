@@ -206,6 +206,8 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         f"The required complete result schema is {RESULT_SCHEMA}. Copy every field exactly once, "
         "substitute the immutable identity, and do not rename fields.\n\n"
         "The evidence packet contains harness-observed facts, not findings or a verdict. "
+        "Any advisory_risk_signals are deterministic search cues only: independently assess them, "
+        "do not treat their presence or absence as a verdict, and do not assume they are exhaustive. "
         "In every tests entry, provenance must be harness-observed, reviewer-observed, or task-reported. Never describe "
         "a task-reported test as executed by you. "
         "The task below contains reported claims and requirements that still require independent judgment.\n\n"

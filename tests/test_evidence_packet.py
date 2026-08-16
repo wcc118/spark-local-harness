@@ -12,6 +12,7 @@ from codex_local_harness.evidence_packet import (
     MAX_PATCH_CHARS,
     ReviewerEvidencePacket,
     build_reviewer_evidence_packet,
+    detect_advisory_risk_signals,
 )
 
 
@@ -95,3 +96,49 @@ def test_packet_json_escapes_observed_text():
     serialized = value.compact_json()
     assert '\\"quoted\\"' in serialized
     assert "<script>" in json.loads(serialized)["patch"]
+
+
+def test_portability_signals_recall_explicit_unsafe_python_additions():
+    patch = '''diff --git a/src/save.py b/src/save.py
++++ b/src/save.py
+@@ -0,0 +1,3 @@
++import os
++os.sync()
++fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+'''
+    signals = detect_advisory_risk_signals(patch, ("src/save.py",))
+    assert len(signals) == 2
+    assert "os.sync" in signals[0]
+    assert "os.O_DIRECTORY" in signals[1]
+
+
+def test_portability_signals_do_not_flag_portable_fallbacks_or_non_python():
+    safe = '''diff --git a/src/save.py b/src/save.py
++++ b/src/save.py
+@@ -0,0 +1,3 @@
++flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
++if hasattr(os, "O_DIRECTORY"):
++    flags |= os.O_DIRECTORY
+'''
+    assert detect_advisory_risk_signals(safe, ("src/save.py",)) == ()
+    assert detect_advisory_risk_signals("+os.sync()\n", ("README.md",)) == ()
+
+
+def test_portability_signals_respect_file_boundaries_in_mixed_patch():
+    mixed = '''diff --git a/src/save.py b/src/save.py
++++ b/src/save.py
+@@ -0,0 +1 @@
++value = 1
+diff --git a/README.md b/README.md
++++ b/README.md
+@@ -0,0 +1 @@
++Avoid os.sync() and os.O_DIRECTORY here.
+'''
+    assert detect_advisory_risk_signals(mixed, ("src/save.py", "README.md")) == ()
+
+
+def test_packet_serializes_advisory_signals_without_a_verdict():
+    value = packet(FakeRun(files=("src/save.py",), patch="+os.sync()\n"))
+    serialized = value.compact_json()
+    assert "direct os.sync()" in serialized
+    assert "expected_verdict" not in serialized

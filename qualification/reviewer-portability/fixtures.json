@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "name": "explicit-unsafe-durability",
+      "changed_files": ["src/save.py"],
+      "patch": "+import os\n+os.sync()\n+fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)\n",
+      "expected_signal_count": 2
+    },
+    {
+      "name": "portable-fallback",
+      "changed_files": ["src/save.py"],
+      "patch": "+flags = os.O_RDONLY | getattr(os, \"O_DIRECTORY\", 0)\n+if hasattr(os, \"O_DIRECTORY\"):\n+    flags |= os.O_DIRECTORY\n",
+      "expected_signal_count": 0
+    }
+  ]
+}
