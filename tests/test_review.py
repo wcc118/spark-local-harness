@@ -398,6 +398,8 @@ def test_prepare_prompt_labels_observed_packet_before_reported_claims(tmp_path):
     prompt = prepare_prompt(envelope(tmp_path), "Reported tests pass", packet)
     assert prompt.index("HARNESS_OBSERVED_EVIDENCE=") < prompt.index("REPORTED_TASK_CLAIMS:")
     assert "expected_verdict" not in prompt
+    assert "deterministic search cues only" in prompt
+    assert "do not treat their presence or absence as a verdict" in prompt
 
 
 def test_prepare_prompt_rejects_empty_or_oversized_reported_task(tmp_path):

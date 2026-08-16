@@ -17,6 +17,8 @@ MAX_PACKET_BYTES = 64_000
 MAX_PATH_CHARS = 512
 MAX_REPORTED_TASK_CHARS = 24_000
 MAX_REVIEW_PROMPT_CHARS = 100_000
+MAX_RISK_SIGNALS = 16
+MAX_RISK_SIGNAL_CHARS = 160
 SHA = re.compile(r"^[0-9a-f]{40}$")
 Run = Callable[[Sequence[str], Path | None], str]
 
@@ -40,6 +42,7 @@ class ReviewerEvidencePacket:
     patch_truncated: bool
     patch_sha256: str
     test_executables: tuple[tuple[str, str], ...]
+    advisory_risk_signals: tuple[str, ...] = ()
     verification_command: str = "git diff --check <comparison-base>..<head>"
     verification_exit_code: int = 0
 
@@ -64,6 +67,12 @@ class ReviewerEvidencePacket:
             raise ValueError("invalid patch digest")
         if len(set(name for name, _ in self.test_executables)) != len(self.test_executables):
             raise ValueError("duplicate test executable")
+        if (
+            len(self.advisory_risk_signals) > MAX_RISK_SIGNALS
+            or len(set(self.advisory_risk_signals)) != len(self.advisory_risk_signals)
+            or any(not value or len(value) > MAX_RISK_SIGNAL_CHARS for value in self.advisory_risk_signals)
+        ):
+            raise ValueError("invalid advisory risk signals")
         if self.verification_exit_code != 0:
             raise ValueError("review preflight verification did not pass")
 
@@ -132,9 +141,37 @@ def build_reviewer_evidence_packet(
         patch_truncated=patch_truncated,
         patch_sha256=hashlib.sha256(patch_raw.encode("utf-8")).hexdigest(),
         test_executables=tuple(sorted(test_executables.items())),
+        advisory_risk_signals=detect_advisory_risk_signals(patch_raw, raw_files),
     )
     packet.compact_json()
     return packet
+
+
+def detect_advisory_risk_signals(patch: str, changed_files: Sequence[str]) -> tuple[str, ...]:
+    """Return bounded, answer-neutral reviewer cues from added Python lines."""
+    if not any(path.endswith(".py") for path in changed_files):
+        return ()
+    added = [
+        line[1:]
+        for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    signals: list[str] = []
+    if any(re.search(r"\bos\.sync\s*\(", line) for line in added):
+        signals.append("python-portability: direct os.sync() call added; verify platform support and durability claim")
+
+    guard = re.compile(r"\bhasattr\s*\(\s*os\s*,\s*['\"]O_DIRECTORY['\"]\s*\)")
+    direct = re.compile(r"\bos\.O_DIRECTORY\b")
+    for index, line in enumerate(added):
+        if not direct.search(line):
+            continue
+        nearby = added[max(0, index - 3):index + 1]
+        if not any(guard.search(candidate) for candidate in nearby):
+            signals.append(
+                "python-portability: unguarded os.O_DIRECTORY access added; verify a portable fallback"
+            )
+            break
+    return tuple(signals)
 
 
 def _bounded(value: str, limit: int, marker: str) -> tuple[str, bool]:
