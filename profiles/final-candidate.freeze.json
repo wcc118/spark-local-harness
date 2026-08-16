@@ -1,0 +1,29 @@
+{
+  "name": "codex-led-final-candidate",
+  "frozen_at": "2026-08-16T11:00:00Z",
+  "source_commit": "912f7449c8e7c70c8e2a55de201b90131df03072",
+  "baseline": "baseline-v2-extracted",
+  "model": {
+    "id": "Qwen/Qwen3-Coder-Next-FP8",
+    "runtime": "vllm",
+    "max_model_len": 212500,
+    "gpu_memory_utilization": 0.90,
+    "attention_backend": "flashinfer",
+    "prefix_caching": true,
+    "temperature": 0.2
+  },
+  "review_bounds": {
+    "steps": 4,
+    "wall_seconds": 120,
+    "publication_token_budget": 250000,
+    "tools": false
+  },
+  "checkout_boundary": "isolated-clone",
+  "sha256": {
+    "worker": "a7e35b9c916cb74eaad4a527f17cb14ec8e71cd6fbdffdcde59cb729ee80f3cf",
+    "review": "2d592bfa5ede88204e3c3a081d5cb66ac90cebf750b9f859e360e907ebb08f5b",
+    "coder": "91c25c096ad4e3223ac01ac292d2594eec78ade83e91953c7a268f68a2f8f8c8",
+    "reviewer_agent": "cd571dde8f52bcbeb0a62b67ce8221953603fa60f03dde09d31596073c89244e",
+    "profile": "0896c8dd9c51937f9004a35344721405d4e7d747e73af47335a13d23d409ac5a"
+  }
+}
