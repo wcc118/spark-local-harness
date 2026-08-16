@@ -22,6 +22,12 @@ from .evidence_packet import (
 
 RESULT_PREFIX = "REVIEW_RESULT_JSON="
 VERDICTS = {"APPROVE", "REQUEST_CHANGES", "ESCALATE"}
+RESULT_SCHEMA = (
+    '{"schema_version":1,"verdict":"APPROVE|REQUEST_CHANGES|ESCALATE",'
+    '"repository":"OWNER/REPO","issue":1,"pull_request":2,"reviewed_head_sha":"40-char SHA",'
+    '"criteria":[],"findings":[],"tests":[],"confidence":"high|medium|low",'
+    '"summary":"...","escalation_reason":null}'
+)
 INCOMPLETE_REASONS = {"wall-time-budget", "token-budget", "step-budget", "malformed-result"}
 WORKFLOW_LABELS = {
     "status/backlog",
@@ -197,6 +203,8 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         f"them only below the harness-owned scratch directory {envelope.scratch_dir}; never use "
         f"another /tmp or external path. The disposable runtime home {envelope.runtime_home} is "
         "also harness-owned and may contain interpreter or package-manager runtime files only.\n\n"
+        f"The required complete result schema is {RESULT_SCHEMA}. Copy every field exactly once, "
+        "substitute the immutable identity, and do not rename fields.\n\n"
         "The evidence packet contains harness-observed facts, not findings or a verdict. "
         "In every tests entry, provenance must be harness-observed, reviewer-observed, or task-reported. Never describe "
         "a task-reported test as executed by you. "
@@ -331,6 +339,10 @@ def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any
         if test["provenance"] == "reviewer-observed" and not isinstance(test.get("exit_code"), int):
             raise ReviewError("reviewer-observed tests require an integer exit_code")
     blockers = [f for f in result["findings"] if isinstance(f, dict) and f.get("severity") == "blocker"]
+    if result["confidence"] not in {"high", "medium", "low"}:
+        raise ReviewError("confidence must be high, medium, or low")
+    if not isinstance(result["summary"], str) or not result["summary"].strip():
+        raise ReviewError("summary must be non-empty text")
     if verdict == "APPROVE" and blockers:
         raise ReviewError("APPROVE cannot contain blocker findings")
     if verdict == "ESCALATE" and not result["escalation_reason"]:
