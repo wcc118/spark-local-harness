@@ -17,6 +17,7 @@ codex-harness-diagnostic = "codex_local_harness.diagnostic_cli:main"
 codex-harness-dashboard = "codex_local_harness.dashboard:main"
 codex-harness-observe = "codex_local_harness.observe_cli:main"
 codex-harness-operation-usage = "codex_local_harness.operation_usage:main"
+codex-harness-claude-usage = "codex_local_harness.claude_usage:main"
 codex-harness-plan = "codex_local_harness.plan_cli:main"
 
 [tool.pytest.ini_options]

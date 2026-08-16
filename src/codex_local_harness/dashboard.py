@@ -649,7 +649,7 @@ def _accounting_html(accounting: dict[str, Any], views: list[dict[str, Any]]) ->
         if accounting["codex_cache_provenance"] == "observed" else "Not reported (unsupported)"
     )
     uncached = (
-        f'local {accounting["local_uncached"]:,} / Codex {accounting["codex_uncached"]:,}'
+        f'local {accounting["local_uncached"]:,} / frontier {accounting["codex_uncached"]:,}'
         if accounting["local_uncached"] is not None and accounting["codex_uncached"] is not None
         else "Not fully reported"
     )
@@ -661,12 +661,12 @@ def _accounting_html(accounting: dict[str, Any], views: list[dict[str, Any]]) ->
     spark_html = f'<div class="card-spark">{spark}</div>' if spark else ""
     footnote = (
         '<p class="accounting-footnote">Cached input (not shown as a card above — local worker '
-        f'profiles do not all report it yet): local {cached} · Codex {codex_cached} · uncached {uncached}</p>'
+        f'profiles do not all report it yet): local {cached} · frontier {codex_cached} · uncached {uncached}</p>'
     )
     return (
         '<div class="cards">'
-        f'<section class="card"><span>Processed context · local share</span><strong>{local_processed_share}</strong><small>local {accounting["local_input"]:,} / Codex {accounting["codex_input"] if accounting["codex_input"] is not None else "not reported"}</small>{spark_html}</section>'
-        f'<section class="card"><span>Generated + reasoning · local share</span><strong>{local_generated_share}</strong><small>local {accounting["local_generated"]:,} / Codex {accounting["codex_generated"] if accounting["codex_generated"] is not None else "not reported"}</small></section>'
+        f'<section class="card"><span>Processed context · local share</span><strong>{local_processed_share}</strong><small>local {accounting["local_input"]:,} / frontier {accounting["codex_input"] if accounting["codex_input"] is not None else "not reported"}</small>{spark_html}</section>'
+        f'<section class="card"><span>Generated + reasoning · local share</span><strong>{local_generated_share}</strong><small>local {accounting["local_generated"]:,} / frontier {accounting["codex_generated"] if accounting["codex_generated"] is not None else "not reported"}</small></section>'
         f'<section class="card"><span>Operational contribution</span><strong>{accounting["worker_runs"]} local runs</strong><small>{accounting["codex_interventions"]} Codex interventions · {accounting["corrections"]} corrections · {accounting["takeovers"]} takeovers</small></section>'
         f'</div>{footnote}'
     )

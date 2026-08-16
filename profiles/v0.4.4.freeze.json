@@ -1,0 +1,23 @@
+{
+  "release": "v0.4.4",
+  "predecessor": "v0.4.3",
+  "issue": null,
+  "scope": "claude-operation-usage-capture",
+  "origin": "direct follow-up to dashboard-triage-and-signal-legibility (no tracked issue) — see docs/dashboard.md",
+  "governance": {
+    "dashboard_authority": "read-only"
+  },
+  "validation": {
+    "claude_usage_reuses_operation_usage_schema_no_new_ledger": true,
+    "claude_usage_sums_per_turn_usage_instead_of_diffing_a_cumulative_counter": true,
+    "claude_usage_requires_explicit_context_window_no_scriptable_interface_exists": true,
+    "reasoning_output_tokens_left_at_zero_to_avoid_double_counting_thinking_tokens": true,
+    "division_of_labor_cards_relabeled_frontier_not_codex_only": true,
+    "codex_only_frontier_status_cards_left_untouched": true
+  },
+  "sha256": {
+    "dashboard": "041a37b3b21402ef36dae47758f67befa62fd2e04b78f18c540a99152f05f610",
+    "dashboard_unit": "4ca9cfca8189d531e1283e3704909a6fcb2a9a8214a29d1509c4bc85bbc26ddc",
+    "claude_usage": "5d41daf294fc4416d19c6d3937fec8b13dfd9de651d72db8e0f53c9c6fa45f45"
+  }
+}

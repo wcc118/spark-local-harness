@@ -534,6 +534,29 @@ def test_accounting_footnote_replaces_cached_card_and_sparkline_renders(tmp_path
     assert '<svg class="sparkline"' in page
 
 
+def test_division_of_labor_cards_say_frontier_not_codex_only(tmp_path):
+    base = fixture_source(tmp_path)
+    usage = tmp_path / "operation-usage.jsonl"
+    common = dict(
+        session_id="thread-a", repository="owner/repo", issue=19,
+        operation_id="issue-19", source="claude-transcript-usage", context_window=200000,
+    )
+    append_record(usage, OperationUsageSnapshot(
+        "start", "2026-08-16T00:00:00Z", "start",
+        input_tokens=100, cached_input_tokens=60, cache_write_input_tokens=0,
+        output_tokens=20, reasoning_output_tokens=0, total_tokens=180, **common,
+    ))
+    append_record(usage, OperationUsageSnapshot(
+        "finish", "2026-08-16T00:05:00Z", "finish",
+        input_tokens=300, cached_input_tokens=180, cache_write_input_tokens=0,
+        output_tokens=50, reasoning_output_tokens=0, total_tokens=530, **common,
+    ))
+    page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, operation_usage=usage).snapshot())
+    assert "/ frontier " in page
+    assert "Codex interventions" in page  # unrelated concept, still Codex-specific and unchanged
+    assert "/ Codex " not in page
+
+
 def test_session_picker_has_no_csp_blocked_inline_handler(tmp_path):
     base = fixture_source(tmp_path)
     page = render_dashboard(base.snapshot())

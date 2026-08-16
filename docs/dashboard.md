@@ -93,6 +93,17 @@ shows whether displayed data is fresh.
   authoritative measured or timestamped operator-reported value is supplied.
 - **Codex context and plan** show measured or timestamped operator-reported
   values. They remain `Unavailable` when no authoritative interface exists.
+- **"Frontier" in Division of Labor is assistant-neutral**, not Codex-only.
+  Both `codex_local_harness.operation_usage` (parses Codex's own
+  `rollout-*.jsonl` session log, a running total, diffed across a start/finish
+  pair) and `codex_local_harness.claude_usage` (sums Claude Code's per-turn
+  `message.usage` from its own `~/.claude/projects/<project>/<session>.jsonl`
+  transcript, tagged `source: claude-transcript-usage`) append into the same
+  `operation-usage.jsonl` ledger, so any interactive assistant that
+  self-reports at an operation's start and finish shows up here. Claude has
+  no scriptable context-window interface, so `claude_usage` requires
+  `--context-window` as an explicit, vendor-published value rather than
+  inferring one.
 
 Counts are descriptive. Small samples are not evidence of architectural
 improvement, and the dashboard intentionally does not recommend or apply
