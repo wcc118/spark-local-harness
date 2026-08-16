@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .evidence_packet import (
+    MAX_REPORTED_TASK_CHARS,
+    MAX_REVIEW_PROMPT_CHARS,
+    ReviewerEvidencePacket,
+    build_reviewer_evidence_packet,
+    discover_test_executables,
+)
+
 
 RESULT_PREFIX = "REVIEW_RESULT_JSON="
 VERDICTS = {"APPROVE", "REQUEST_CHANGES", "ESCALATE"}
@@ -168,11 +176,15 @@ def build_envelope(
     )
 
 
-def prepare_prompt(envelope: Envelope, task: str) -> str:
+def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket | None = None) -> str:
+    if not task.strip() or len(task) > MAX_REPORTED_TASK_CHARS:
+        raise ReviewError("reported review task is empty or exceeds its size bound")
     identity = json.dumps(envelope.as_dict(), sort_keys=True, separators=(",", ":"))
-    return (
+    evidence = f"HARNESS_OBSERVED_EVIDENCE={packet.compact_json()}\n\n" if packet else ""
+    prompt = (
         "IMMUTABLE_REVIEW_ENVELOPE=" + identity + "\n\n"
-        "Review only the checkout and commit identified above. Do not access another checkout. "
+        + evidence
+        + "Review only the checkout and commit identified above. Do not access another checkout. "
         "Do not change GitHub state. End with exactly one single-line machine result prefixed "
         f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
         "coder findings; never delete, regenerate, or repair them. Test execution is configured "
@@ -180,8 +192,13 @@ def prepare_prompt(envelope: Envelope, task: str) -> str:
         f"them only below the harness-owned scratch directory {envelope.scratch_dir}; never use "
         f"another /tmp or external path. The disposable runtime home {envelope.runtime_home} is "
         "also harness-owned and may contain interpreter or package-manager runtime files only.\n\n"
-        f"TASK:\n{task}"
+        "The evidence packet contains harness-observed facts, not findings or a verdict. "
+        "The task below contains reported claims and requirements that still require independent judgment.\n\n"
+        f"REPORTED_TASK_CLAIMS:\n{task}"
     )
+    if len(prompt) > MAX_REVIEW_PROMPT_CHARS:
+        raise ReviewError("review prompt exceeds its total size bound")
+    return prompt
 
 
 def parse_result(log_path: Path) -> dict[str, Any]:
@@ -428,8 +445,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.checkout, args.repository, args.issue, args.pr,
                 scratch_dir=args.scratch_dir, runtime_home=args.runtime_home,
             )
+            packet = build_reviewer_evidence_packet(
+                Path(envelope.checkout), envelope.repository, envelope.issue,
+                envelope.pull_request, envelope.base_sha, envelope.head_sha,
+                run_command, dict(discover_test_executables()),
+            )
             write_json(args.envelope_out, envelope.as_dict())
-            sys.stdout.write(prepare_prompt(envelope, args.task_file.read_text(encoding="utf-8")))
+            sys.stdout.write(prepare_prompt(envelope, args.task_file.read_text(encoding="utf-8"), packet))
         else:
             envelope = load_envelope(args.envelope)
             audit_tool_scope(args.log, envelope)
