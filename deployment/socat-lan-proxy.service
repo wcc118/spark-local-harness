@@ -21,7 +21,6 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 ProtectKernelLogs=yes
 ProtectClock=yes
-ProtectRuntimeDirectory=yes
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes
 LockPersonality=yes
