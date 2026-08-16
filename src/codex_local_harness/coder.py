@@ -32,8 +32,14 @@ def _unexpected_status(status: str) -> list[str]:
         if " -> " in path:
             path = path.rsplit(" -> ", 1)[-1]
         if not GENERATED.search(path):
-            unexpected.append(line)
+            unexpected.append(path)
     return unexpected
+
+
+def _run_diff_check(base: str, head: str, run: Run, checkout: Path) -> None:
+    """Run git diff --check on the comparison base and head."""
+    revision = f"{base}..{head}"
+    run(["git", "diff", "--check", revision], checkout)
 
 
 def _list_prs(run: Run, canonical: Path, repository: str, branch: str) -> list[dict[str, Any]]:
@@ -142,9 +148,11 @@ def finalize_coder(
         raise ReviewError("coder checkout has invalid branch or HEAD")
     unexpected = _unexpected_status(run(["git", "status", "--porcelain=v1"], canonical))
     if unexpected:
-        raise ReviewError(f"coder left unexpected checkout changes: {unexpected}")
+        raise ReviewError(f"coder left unexpected checkout changes: {'; '.join(unexpected)}")
 
     if publish:
+        base_sha = run(["git", "merge-base", "origin/main", head_sha], canonical).strip()
+        _run_diff_check(base_sha, head_sha, run, canonical)
         run(["git", "push", "--set-upstream", "origin", branch], canonical)
 
     prs = _list_prs(run, canonical, repository, branch)
