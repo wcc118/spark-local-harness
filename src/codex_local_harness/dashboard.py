@@ -63,7 +63,7 @@ class DashboardSource:
         operations = derive_operations(workflow)
         plans = derive_plans(plan_events, now=self._current_time())
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
-        sessions = _derive_sessions(current_operations, self._current_time())
+        sessions = _derive_sessions(current_operations, self._current_time(), plans)
         selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
         if selected is not None:
             current_operations = [item for item in current_operations if (item["session_id"] or "legacy") == selected]
@@ -422,7 +422,10 @@ def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
     return f'<div class="milestone-activities">{activity_html}</div>'
 
 
-def _derive_sessions(operations: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+def _derive_sessions(
+    operations: list[dict[str, Any]], now: datetime,
+    plans: tuple[dict[str, Any], ...] = (),
+) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for operation in operations:
         grouped.setdefault(operation["session_id"] or "legacy", []).append(operation)
@@ -437,6 +440,19 @@ def _derive_sessions(operations: list[dict[str, Any]], now: datetime) -> list[di
         else:
             status = "idle"
         sessions.append({"session_id": session_id, "status": status, "updated_at": newest["updated_at"], "operations": len(items)})
+    known = set(grouped)
+    plan_groups: dict[str, list[dict[str, Any]]] = {}
+    for plan in plans:
+        session_id = plan["session_id"] or "legacy"
+        if session_id not in known:
+            plan_groups.setdefault(session_id, []).append(plan)
+    for session_id, items in plan_groups.items():
+        newest = max(items, key=lambda item: item["observed_at"])
+        status = "active" if newest["current_step"] is not None else "completed"
+        sessions.append({
+            "session_id": session_id, "status": status,
+            "updated_at": newest["observed_at"], "operations": 0,
+        })
     return sorted(sessions, key=lambda item: (item["updated_at"], item["session_id"]), reverse=True)
 
 

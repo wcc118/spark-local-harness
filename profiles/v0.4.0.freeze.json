@@ -10,7 +10,7 @@
     "private_reasoning_capture": false
   },
   "validation": {
-    "tests_passed": 310,
+    "tests_passed": 311,
     "compileall_passed": true,
     "diff_check_passed": true,
     "matched_workflow_plan_smoke": true,
@@ -28,7 +28,7 @@
   "sha256": {
     "plan_event": "879ea6411ff8ca56477fbdbfc26de61d7da9bf2cc265564af720760f8535f666",
     "plan_cli": "03230b8f89980760c47dc2ba2f3f8ea29f9269510fc81a74d96d0cce80a4150b",
-    "dashboard": "0cdd647b39745f76e46e0d8807b8f488902e629dc007fc0ad0486b108c593bfe",
+    "dashboard": "a4ebb1f592ddbe0fe1046e70484dc87abaf95e45602ceaaabd8af0e6c846d559",
     "dashboard_unit": "ce730ffd391c0e7a8006eab4bc49800787328e832ac2ec5191a3af6eab25223e",
     "replay_plans": "b39696fd878d8c2df89b8e0e098f964f74bdebcf6ef67d8edfd71c409a64fc64"
   }

@@ -425,3 +425,20 @@ def test_plan_source_participates_in_sse_fingerprint(tmp_path):
     before = source.fingerprint()
     plans.write_text("\n", encoding="utf-8")
     assert source.fingerprint() != before
+
+
+def test_plan_only_session_is_selectable_without_fabricating_workflow(tmp_path):
+    base = fixture_source(tmp_path)
+    plans = tmp_path / "plans.jsonl"
+    append_record(plans, PlanEvent(
+        "plan-only", "issue-55", 55, "Plan before workflow", (
+            {"step_id": "one", "summary": "Await workflow", "state": "active"},
+        ), "2026-08-16T06:00:00Z", "codex", session_id="plan-session", repository="owner/repo",
+    ))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, plans=plans)
+    snapshot = source.snapshot("plan-session")
+    assert snapshot["selected_session"] == "plan-session"
+    assert snapshot["operations"] == []
+    assert [item["session_id"] for item in snapshot["plans"]] == ["plan-session"]
+    assert any(item["session_id"] == "plan-session" and item["operations"] == 0 for item in snapshot["sessions"])
+    assert "Workflow unavailable for this plan." in render_dashboard(snapshot)
