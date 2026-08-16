@@ -167,6 +167,14 @@ def _format_age(seconds: float) -> str:
     return "just now"
 
 
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="14" fill="#0b1020"/>
+<circle cx="32" cy="32" r="21" fill="none" stroke="#2a3552" stroke-width="4"/>
+<path d="M43 20a17 17 0 1 0 0 24" fill="none" stroke="#59d499" stroke-width="7" stroke-linecap="round"/>
+<circle cx="48" cy="16" r="5" fill="#f3c969"/>
+</svg>"""
+
+
 def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         server_version = "CodexHarnessDashboard/0.1"
@@ -176,6 +184,9 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
             route = parsed_url.path
             requested_session = parse_qs(parsed_url.query).get("session", [None])[0]
             try:
+                if route == "/favicon.svg":
+                    self._send(HTTPStatus.OK, "image/svg+xml", FAVICON_SVG.encode())
+                    return
                 snapshot = source.snapshot(requested_session)
                 if route == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", render_dashboard(snapshot).encode())
@@ -209,7 +220,7 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
@@ -307,6 +318,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     accounting_html = _accounting_html(snapshot["accounting"])
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <title>Codex agent harness diagnostics</title>
 <style>
 :root{{--bg:#0b1020;--panel:#151c30;--ink:#eef2ff;--muted:#9aa6c3;--line:#2a3552;--good:#59d499;--warn:#f3c969;--bad:#ff7885}}
