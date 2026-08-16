@@ -369,7 +369,8 @@ def test_correction_loop_and_activity_evidence_render_accessibly(tmp_path):
     assert 'aria-label="Delivery milestones"' in page
     assert 'aria-label="Correction loop cycle 1"' in page
     assert "↩ correction cycle 1 → implementation · active" in page
-    assert "grid-template-columns:1fr" in page
+    assert "grid-template-columns:repeat(4,minmax(0,1fr))" in page
+    assert "grid-template-columns:repeat(2,minmax(0,1fr))" in page
 
 
 def test_evidence_first_case_has_pending_milestones_and_visible_activity(tmp_path):
@@ -384,7 +385,7 @@ def test_evidence_first_case_has_pending_milestones_and_visible_activity(tmp_pat
     assert page.count('class="milestone pending"') == 8
 
 
-def test_running_plan_renders_beside_matching_workflow_and_escapes_public_text(tmp_path):
+def test_running_plan_renders_below_matching_workflow_and_escapes_public_text(tmp_path):
     base = fixture_source(tmp_path)
     workflow = tmp_path / "workflow.jsonl"
     plans = tmp_path / "plans.jsonl"
@@ -408,17 +409,19 @@ def test_running_plan_renders_beside_matching_workflow_and_escapes_public_text(t
     assert 'class="plan-step active"' in page
     assert 'class="plan-step pending"' in page
     assert "Revision history (1)" in page
-    assert "grid-template-columns:minmax(0,3fr) minmax(300px,2fr)" in page
-    assert "@media (max-width:900px)" in page
+    assert "grid-template-columns:minmax(0,1fr)" in page
+    assert "grid-template-columns:repeat(8,minmax(0,1fr))" in page
+    assert "repeat(8,minmax(120px,1fr))" not in page
     assert "@media (prefers-reduced-motion:no-preference)" in page
 
 
-def test_missing_plan_is_explicit_and_malformed_source_is_warning(tmp_path):
+def test_missing_plan_is_omitted_and_malformed_source_is_warning(tmp_path):
     base = fixture_source(tmp_path)
     workflow = tmp_path / "workflow.jsonl"
     append_record(workflow, WorkflowEvent("workflow", "issue-55", "review", "active", "2026-08-16T06:00:00Z", 55))
     missing_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, plans=tmp_path / "missing.jsonl").snapshot())
-    assert "Plan unavailable. No durable public plan has been published." in missing_page
+    assert "Running plan" not in missing_page
+    assert "Plan unavailable" not in missing_page
     malformed = tmp_path / "plans.jsonl"
     malformed.write_text("not-json\n", encoding="utf-8")
     malformed_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, plans=malformed).snapshot())

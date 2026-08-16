@@ -1,0 +1,19 @@
+{
+  "release": "v0.4.2",
+  "predecessor": "v0.4.1",
+  "issue": 90,
+  "scope": "dashboard-plan-layout-repair",
+  "governance": {
+    "dashboard_authority": "read-only"
+  },
+  "validation": {
+    "missing_plan_panel_omitted": true,
+    "workflow_uses_full_width": true,
+    "horizontal_page_overflow_prevented": true,
+    "responsive_milestone_grid": true
+  },
+  "sha256": {
+    "dashboard": "1205bdf272115f512a362af3b256cfaaba3e6faef2c6c86d99ea1d71aee32c14",
+    "dashboard_unit": "3a3d0d382f9b8063edc00f7435132ee0561c61a3002536d1f1ffe9682e2952b3"
+  }
+}
