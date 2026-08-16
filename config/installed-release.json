@@ -2,7 +2,8 @@
   "qualified_worker_sha256": [
     "37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415",
     "aec3075fe8c1743169ae77388d6b41150cd030990032700549c610f07e7a4f10",
-    "237a5c2be8db1c81c23be629f0f96bce0b97a13bfc03e5b0f7aa9cc8a1a0a113"
+    "237a5c2be8db1c81c23be629f0f96bce0b97a13bfc03e5b0f7aa9cc8a1a0a113",
+    "0fb2e6c5862ab91076e13185bc844beebf3b7eead1d3dbf4b8d4e6c237cad929"
   ],
   "source": "Codex-approved release artifacts only; never derived dynamically from the checkout",
   "qualified_at": "2026-08-16T05:45:00Z"

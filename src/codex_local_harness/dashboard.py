@@ -28,7 +28,7 @@ class DashboardSource:
     workflow: Path | None = None
     frontier: Path | None = None
     publication_failures: Path | None = None
-    release: str = "v0.1.1"
+    release: str = "v0.2.0"
     mode: str = "live"
     now: datetime | None = None
     operation_usage: Path | None = None
@@ -431,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operation-usage", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--release", default="v0.1.1")
+    parser.add_argument("--release", default="v0.2.0")
     parser.add_argument("--mode", choices=("live", "replay"), default="live")
     args = parser.parse_args(argv)
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
