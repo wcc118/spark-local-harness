@@ -19,6 +19,7 @@ from codex_local_harness.review import (
     validate_result,
     verify_checkout_unchanged,
 )
+from codex_local_harness.evidence_packet import ReviewerEvidencePacket
 
 
 REPO = "wcc118/example"
@@ -344,7 +345,26 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert "IMMUTABLE_REVIEW_ENVELOPE=" in prompt
     assert SHA in prompt
     assert RESULT_PREFIX in prompt
-    assert prompt.endswith("TASK:\nReview the change")
+    assert prompt.endswith("REPORTED_TASK_CLAIMS:\nReview the change")
+
+
+def test_prepare_prompt_labels_observed_packet_before_reported_claims(tmp_path):
+    packet = ReviewerEvidencePacket(
+        1, "harness-observed", REPO, 7, 11, BASE_SHA, SHA, 1,
+        ("src/example.py",), False, "1 file changed", False,
+        "diff --git a/src/example.py b/src/example.py\n", False, "c" * 64,
+        (("pytest", "/home/test/.local/bin/pytest"),),
+    )
+    prompt = prepare_prompt(envelope(tmp_path), "Reported tests pass", packet)
+    assert prompt.index("HARNESS_OBSERVED_EVIDENCE=") < prompt.index("REPORTED_TASK_CLAIMS:")
+    assert "expected_verdict" not in prompt
+
+
+def test_prepare_prompt_rejects_empty_or_oversized_reported_task(tmp_path):
+    with pytest.raises(ReviewError, match="size bound"):
+        prepare_prompt(envelope(tmp_path), "")
+    with pytest.raises(ReviewError, match="size bound"):
+        prepare_prompt(envelope(tmp_path), "x" * 24_001)
 
 
 def test_render_comment_preserves_shell_metacharacters(tmp_path):

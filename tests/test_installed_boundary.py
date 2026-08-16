@@ -155,6 +155,11 @@ def test_reviewer_configuration_denies_direct_durable_writes():
     assert permission["bash"]["* /tmp/*"] == "deny"
 
 
+def test_coder_configuration_denies_subagent_delegation():
+    config = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
+    assert config["agent"]["coder"]["permission"]["task"] == "deny"
+
+
 def test_reviewer_prompt_assigns_publication_to_deterministic_harness():
     prompt = REVIEWER_PROMPT.read_text(encoding="utf-8")
     assert "no durable-state ownership" in prompt
