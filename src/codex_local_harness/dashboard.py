@@ -63,7 +63,7 @@ class DashboardSource:
         selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
         if selected is not None:
             current_operations = [item for item in current_operations if (item["session_id"] or "legacy") == selected]
-            run_ids = {item["run_id"] for item in current_operations if item["run_id"]}
+            run_ids = {run_id for item in current_operations for run_id in item["run_ids"]}
             views = tuple(view for view in views if view.run_id in run_ids)
             runs = tuple(item for item in runs if item.run_id in run_ids)
         operation_usage = derive_usage(usage_snapshots)

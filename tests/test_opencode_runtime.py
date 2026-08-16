@@ -166,6 +166,6 @@ def test_parser_defaults_unsupported_when_no_cache_in_log(tmp_path):
     ]
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
     stats = parse_log(path)
-    assert stats.cache_read == 0
-    assert stats.cache_write == 0
+    assert stats.cache_read is None
+    assert stats.cache_write is None
     assert stats.cache_provenance == "unsupported"  # Default when no cache object

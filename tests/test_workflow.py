@@ -24,6 +24,14 @@ def test_workflow_derives_current_position_and_stage_history():
     assert [stage["state"] for stage in operation["stages"][:4]] == ["passed", "passed", "active", "pending"]
 
 
+def test_workflow_retains_every_run_identity_for_session_filtering():
+    operation = derive_operations([
+        event("one", "local-work", "failed", "2026-08-15T18:00:00Z", run_id="run-1", session_id="session-1"),
+        event("two", "correction", "passed", "2026-08-15T18:01:00Z", run_id="run-2", session_id="session-1"),
+    ])[0]
+    assert operation["run_ids"] == ["run-1", "run-2"]
+
+
 def test_workflow_preserves_correction_stop_reason():
     operation = derive_operations([
         event("one", "local-work", "passed", "2026-08-15T18:00:00Z"),

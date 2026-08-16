@@ -18,8 +18,8 @@ class OpenCodeStats:
     tool_calls: int
     tool_errors: int
     wall_seconds: float
-    cache_read: int = 0
-    cache_write: int = 0
+    cache_read: int | None = None
+    cache_write: int | None = None
     cache_provenance: str | None = None
 
     def as_health(
@@ -123,6 +123,8 @@ def parse_log(path: Path) -> OpenCodeStats:
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise ValueError(f"invalid OpenCode event at line {line_number}: {exc}") from exc
     wall_seconds = (max(timestamps) - min(timestamps)) / 1000 if len(timestamps) > 1 else 0.0
+    if cache_provenance != "observed":
+        cache_read = cache_write = None
     return OpenCodeStats(input_tokens, output_tokens, reasoning_tokens, turns, tool_calls, tool_errors, wall_seconds, cache_read, cache_write, cache_provenance)
 
 
@@ -159,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             if not args.allow_malformed:
                 raise
-            stats = OpenCodeStats(0, 0, 0, 0, 0, 0, 0.0, 0, 0, "unsupported")
+            stats = OpenCodeStats(0, 0, 0, 0, 0, 0, 0.0, None, None, "unsupported")
         health = stats.as_health(
             run_id=args.run_id,
             issue=args.issue,
