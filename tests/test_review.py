@@ -368,6 +368,13 @@ def test_validate_result_rejects_invalid_artifacts(tmp_path, changes, message):
         validate_result(valid_result(**changes), envelope(tmp_path))
 
 
+def test_validate_result_rejects_invalid_confidence_or_summary(tmp_path):
+    with pytest.raises(ReviewError, match="confidence"):
+        validate_result(valid_result(confidence=1.0), envelope(tmp_path))
+    with pytest.raises(ReviewError, match="summary"):
+        validate_result(valid_result(summary=""), envelope(tmp_path))
+
+
 def test_prepare_prompt_contains_immutable_identity(tmp_path):
     prompt = prepare_prompt(envelope(tmp_path), "Review the change")
     assert "IMMUTABLE_REVIEW_ENVELOPE=" in prompt
@@ -376,6 +383,8 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert "Inspect the harness-observed exact-head diff" in prompt
     assert "evidence boundary is intentionally tool-free" in prompt
     assert "harness-observed, reviewer-observed, or task-reported" in prompt
+    assert '"reviewed_head_sha":"40-char SHA"' in prompt
+    assert "Copy every field exactly once" in prompt
     assert prompt.endswith("REPORTED_TASK_CLAIMS:\nReview the change")
 
 

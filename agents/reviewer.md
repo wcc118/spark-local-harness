@@ -33,3 +33,7 @@ matching the task schema. Do not wrap it in Markdown or omit schema fields. Do
 not claim durable actions; the deterministic harness publishes a validated
 result. If evidence is insufficient, use `ESCALATE` rather than continuing
 unbounded exploration.
+
+The harness prompt includes the complete schema. Copy every field exactly once;
+do not abbreviate or rename identity, verdict, criteria, findings, tests,
+confidence, summary, or escalation fields.
