@@ -43,6 +43,9 @@ STAGE_TO_MILESTONE = {
     "post-merge": "post-merge",
 }
 ACTIVITY_STAGES = {"evidence", "correction"}
+ACTIVITY_TYPES = {"evidence", "correction", "investigation", "adjudication", "test", "postflight", "operator-intervention"}
+ACTORS = {"codex", "worker", "operator", "system"}
+SOURCES = {"codex-cli", "worker-wrapper", "operator", "replay", "legacy"}
 TERMINAL_STATES = {"passed", "failed", "interrupted", "blocked", "superseded", "not-applicable"}
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
@@ -76,6 +79,11 @@ class WorkflowEvent:
     evidence_refs: tuple[str, ...] = ()
     session_id: str | None = None
     repository: str | None = None
+    actor: str | None = None
+    source: str | None = None
+    prior_milestone: str | None = None
+    milestone: str | None = None
+    activity_type: str | None = None
     schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -98,8 +106,21 @@ class WorkflowEvent:
                 _safe_atom(value, name)
         for reference in self.evidence_refs:
             _safe_atom(reference, "evidence_ref")
-        if self.schema_version != DIAGNOSTIC_SCHEMA_VERSION:
+        if self.schema_version not in {1, 2}:
             raise ValueError("unsupported workflow schema version")
+        if self.schema_version == 2:
+            if self.actor not in ACTORS or self.source not in SOURCES:
+                raise ValueError("v2 workflow events require valid actor and source")
+            if self.milestone not in {*MILESTONES, "unassigned"}:
+                raise ValueError("v2 workflow events require a valid milestone")
+            if self.prior_milestone is not None and self.prior_milestone not in MILESTONES:
+                raise ValueError("invalid prior milestone")
+            if self.activity_type is not None and self.activity_type not in ACTIVITY_TYPES:
+                raise ValueError("invalid activity type")
+            if self.stage in ACTIVITY_STAGES and self.activity_type is None:
+                raise ValueError("v2 activity event requires activity_type")
+            if self.stage not in ACTIVITY_STAGES and self.activity_type is not None:
+                raise ValueError("v2 milestone event cannot declare activity_type")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -120,12 +141,18 @@ def _event_payload(event: WorkflowEvent) -> str:
 
 
 def _activity_milestone(event: WorkflowEvent, milestone_events: list[WorkflowEvent]) -> str:
+    if event.milestone is not None:
+        return event.milestone
     if event.stage == "correction":
         return "implementation"
     earlier = [item for item in milestone_events if (item.observed_at, item.event_id) <= (event.observed_at, event.event_id)]
     if earlier:
         return STAGE_TO_MILESTONE[earlier[-1].stage]
     return "unassigned"
+
+
+def _event_milestone(event: WorkflowEvent) -> str:
+    return event.milestone or STAGE_TO_MILESTONE[event.stage]
 
 
 def _operation_projection(items: list[WorkflowEvent]) -> dict[str, Any]:
@@ -155,14 +182,14 @@ def _operation_projection(items: list[WorkflowEvent]) -> dict[str, Any]:
     milestone_events = [event for event in events if event.stage in STAGE_TO_MILESTONE]
     latest_by_milestone: dict[str, WorkflowEvent] = {}
     for event in milestone_events:
-        latest_by_milestone[STAGE_TO_MILESTONE[event.stage]] = event
+        latest_by_milestone[_event_milestone(event)] = event
 
     activities = []
     for event in events:
         if event.stage not in ACTIVITY_STAGES:
             continue
         activities.append({
-            "activity_type": event.stage,
+            "activity_type": event.activity_type or event.stage,
             "milestone": _activity_milestone(event, milestone_events),
             "state": event.state,
             "observed_at": event.observed_at,
@@ -186,7 +213,7 @@ def _operation_projection(items: list[WorkflowEvent]) -> dict[str, Any]:
         })
 
     newest = events[-1]
-    current_milestone = STAGE_TO_MILESTONE.get(newest.stage, _activity_milestone(newest, milestone_events))
+    current_milestone = _event_milestone(newest) if newest.stage in STAGE_TO_MILESTONE else _activity_milestone(newest, milestone_events)
     diagnostics = []
     if conflicts:
         diagnostics.append({"kind": "conflicting-event-reuse", "event_ids": conflicts})
