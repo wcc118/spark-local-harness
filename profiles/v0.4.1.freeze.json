@@ -1,0 +1,13 @@
+{
+  "release": "v0.4.1",
+  "predecessor": "v0.4.0",
+  "issue": 71,
+  "scope": "dashboard-favicon-only",
+  "governance": {
+    "dashboard_authority": "read-only"
+  },
+  "sha256": {
+    "dashboard": "f21b335c4f8d99d01216abfbdb90f67d9745c340cb8fcaf0fb76e2fae2840fa1",
+    "dashboard_unit": "71a2106672c56924820c375d8120c43781cb5660308561ac3cb5289896a0f075"
+  }
+}

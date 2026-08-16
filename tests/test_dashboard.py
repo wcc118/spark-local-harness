@@ -69,12 +69,20 @@ def test_http_surface_is_get_only_and_no_store(tmp_path):
             payload = json.load(response)
             assert payload["read_only"] is True
             assert response.headers["Cache-Control"] == "no-store"
+        with urllib.request.urlopen(base + "/favicon.svg") as response:
+            assert response.headers["Content-Type"] == "image/svg+xml"
+            assert b'<svg xmlns="http://www.w3.org/2000/svg"' in response.read()
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(urllib.request.Request(base + "/", data=b"", method="POST"))
         assert error.value.code == 405
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_dashboard_declares_distinctive_local_favicon(tmp_path):
+    page = render_dashboard(fixture_source(tmp_path).snapshot())
+    assert '<link rel="icon" href="/favicon.svg" type="image/svg+xml">' in page
 
 
 def test_source_reads_without_modifying_ledgers(tmp_path):
