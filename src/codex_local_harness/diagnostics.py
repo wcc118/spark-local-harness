@@ -173,7 +173,7 @@ def append_record(path: Path, record: Any) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(record.as_dict(), sort_keys=True, separators=(",", ":")) + "\n"
     identity_name = next(
-        (name for name in ("adjudication_id", "event_id", "status_id", "failure_id") if hasattr(record, name)),
+        (name for name in ("adjudication_id", "event_id", "status_id", "failure_id", "record_id") if hasattr(record, name)),
         None,
     )
     if identity_name is None:

@@ -14,6 +14,7 @@ PYTHONPATH=src python3 -m codex_local_harness.dashboard \
   --workflow ~/.local/share/codex-local-harness/health/workflow.jsonl \
   --frontier ~/.local/share/codex-local-harness/health/frontier.jsonl \
   --publication-failures ~/.local/share/codex-local-harness/health/publication-failures.jsonl \
+  --operation-usage ~/.local/share/codex-local-harness/health/operation-usage.jsonl \
   --mode live
 ```
 

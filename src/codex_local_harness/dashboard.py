@@ -10,11 +10,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
+from .operation_usage import OperationUsageSnapshot, derive_usage
 from .read_model import RunView, build_run_views, summarize_views
 from .workflow import WorkflowEvent, derive_operations
 
@@ -30,11 +31,12 @@ class DashboardSource:
     release: str = "v0.1.1"
     mode: str = "live"
     now: datetime | None = None
+    operation_usage: Path | None = None
 
     def _current_time(self) -> datetime:
         return self.now if self.now is not None else datetime.now(timezone.utc)
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, session_id: str | None = None) -> dict[str, Any]:
         statuses: list[dict[str, Any]] = []
         runs = self._load(self.runs, "runs", read_jsonl, statuses)
         adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
@@ -47,12 +49,27 @@ class DashboardSource:
             lambda path: read_records(path, PublicationFailure),
             statuses,
         ) if self.publication_failures else ()
+        usage_snapshots = self._load(
+            self.operation_usage, "operation-usage",
+            lambda path: read_records(path, OperationUsageSnapshot), statuses,
+        ) if self.operation_usage else ()
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
         frontier = latest_status(frontier_records)
         operations = derive_operations(workflow)
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
+        sessions = _derive_sessions(current_operations, self._current_time())
+        selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
+        if selected is not None:
+            current_operations = [item for item in current_operations if (item["session_id"] or "legacy") == selected]
+            run_ids = {item["run_id"] for item in current_operations if item["run_id"]}
+            views = tuple(view for view in views if view.run_id in run_ids)
+            runs = tuple(item for item in runs if item.run_id in run_ids)
+        operation_usage = derive_usage(usage_snapshots)
+        if selected is not None:
+            operation_usage = tuple(item for item in operation_usage if item["session_id"] == selected)
+        accounting = _accounting(runs, views, operation_usage, current_operations)
         return {
             "schema_version": 1,
             "release": self.release,
@@ -63,6 +80,10 @@ class DashboardSource:
             "summary": summarize_views(views),
             "runs": [view.as_dict() for view in views],
             "operations": current_operations,
+            "sessions": sessions,
+            "selected_session": selected,
+            "operation_usage": operation_usage,
+            "accounting": accounting,
             "superseded_operations": sum(operation["current_state"] == "superseded" for operation in operations),
             "publication_failures": [failure.as_dict() for failure in publication_failures],
             "codex": frontier.as_dict() if frontier else FrontierStatus(
@@ -92,6 +113,7 @@ class DashboardSource:
             self.workflow,
             self.frontier,
             self.publication_failures,
+            self.operation_usage,
         ) if path is not None)
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
@@ -143,9 +165,11 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
         server_version = "CodexHarnessDashboard/0.1"
 
         def do_GET(self) -> None:  # noqa: N802
-            route = urlsplit(self.path).path
+            parsed_url = urlsplit(self.path)
+            route = parsed_url.path
+            requested_session = parse_qs(parsed_url.query).get("session", [None])[0]
             try:
-                snapshot = source.snapshot()
+                snapshot = source.snapshot(requested_session)
                 if route == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", render_dashboard(snapshot).encode())
                 elif route == "/api/snapshot":
@@ -239,9 +263,26 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     source_banner = "" if not source_problems else '<section class="source-warning"><strong>Source warning:</strong> ' + ", ".join(html.escape(f"{source['name']}={source['state']}") for source in source_problems) + "</section>"
     if snapshot["publication_failures"]:
         source_banner += f'<section class="source-warning"><strong>Telemetry publication failures:</strong> {len(snapshot["publication_failures"])}</section>'
-    context = f"{codex['context_used']:,} / {codex['context_window']:,}" if codex["context_used"] is not None and codex["context_window"] is not None else "Unavailable"
-    interactive_tokens = f"{codex['tokens_used']:,}" if codex["tokens_used"] is not None else "Unavailable"
-    plan = f"{codex['plan_remaining_percent']:.1f}%" if codex["plan_remaining_percent"] is not None else "Unavailable"
+    telemetry_cards = []
+    if codex["tokens_used"] is not None:
+        telemetry_cards.append(("Interactive Codex tokens", f"{codex['tokens_used']:,}", codex["source"]))
+    if codex["context_used"] is not None and codex["context_window"] is not None:
+        telemetry_cards.append(("Codex context", f"{codex['context_used']:,} / {codex['context_window']:,}", codex["source"]))
+    if codex["plan_remaining_percent"] is not None:
+        telemetry_cards.append(("Plan remaining", f"{codex['plan_remaining_percent']:.1f}%", codex["source"]))
+    if codex["plan_refresh_at"] is not None:
+        telemetry_cards.append(("Plan refresh", codex["plan_refresh_at"], "Never estimated"))
+    telemetry_cards.append(("Source update age", newest_text, f"{freshness['existing_files']} / {freshness['source_files']} sources present"))
+    telemetry_html = "".join(
+        f'<section class="card"><span>{html.escape(str(label))}</span><strong>{html.escape(str(value))}</strong><small>{html.escape(str(note))}</small></section>'
+        for label, value, note in telemetry_cards
+    )
+    session_options = ['<option value="">All sessions</option>'] + [
+        f'<option value="{html.escape(item["session_id"])}"{" selected" if snapshot["selected_session"] == item["session_id"] else ""}>{html.escape(item["session_id"])} · {html.escape(item["status"])}</option>'
+        for item in snapshot["sessions"]
+    ]
+    session_picker = f'<form class="session-picker" method="get"><label>Session <select name="session" onchange="this.form.submit()">{"".join(session_options)}</select></label></form>'
+    accounting_html = _accounting_html(snapshot["accounting"])
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex agent harness diagnostics</title>
@@ -254,6 +295,7 @@ main{{max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-size:25px}} 
 .table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:10px}} table{{width:100%;border-collapse:collapse;background:var(--panel)}}
 .operation{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px}} .operation-head{{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}} .flow{{display:grid;grid-template-columns:repeat(10,minmax(110px,1fr));gap:6px;margin-top:12px;overflow:auto}} .stage{{position:relative;border:1px solid var(--line);border-radius:8px;padding:9px;min-width:110px}} .stage.pending{{color:var(--muted);border-color:#555b66;background:#22252d}} .stage.not-applicable{{color:#737b8c;border-color:#343946;background:transparent}} .stage.active{{border-color:var(--warn)}} .stage.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px 1px rgba(243,201,105,.5);pointer-events:none}} @media (prefers-reduced-motion:no-preference){{.stage.active::after{{animation:stage-orbit 4s linear infinite}}@keyframes stage-orbit{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}}@media (prefers-reduced-motion:reduce){{.stage.active::after{{top:4px;right:4px;left:auto}}}} .stage.passed{{border-color:var(--good)}} .stage.failed,.stage.interrupted,.stage.blocked{{border-color:var(--bad)}} .stage-name{{display:block;font-size:11px;color:var(--muted)}}
 .telemetry{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0 0 22px}} .empty{{color:var(--muted)}} #connection{{color:var(--warn)}}
+.session-picker{{margin:0 0 14px}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px}}
 .source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
 th,td{{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}} th{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
 tr.contradiction{{background:#3a1e2a}} .passed{{color:var(--good)}} .failed,.interrupted,.timed-out,.cancelled{{color:var(--bad)}} .unadjudicated,.unknown{{color:var(--warn)}}
@@ -262,7 +304,9 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span></p>
 {source_banner}
 <div class="cards">{card_html}</div>
-<div class="telemetry"><section class="card"><span>Interactive Codex tokens</span><strong>{html.escape(interactive_tokens)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Codex context</span><strong>{html.escape(context)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan remaining</span><strong>{html.escape(plan)}</strong><small>{html.escape(str(codex['source']))}</small></section><section class="card"><span>Plan refresh</span><strong>{html.escape(str(codex['plan_refresh_at'] or 'Unavailable'))}</strong><small>Never estimated</small></section><section class="card"><span>Source update age</span><strong data-age-seconds="{age_seconds if age_seconds is not None else ''}">{html.escape(newest_text)}</strong><small>{freshness['existing_files']} / {freshness['source_files']} sources present</small></section></div>
+<div class="telemetry">{telemetry_html}</div>
+{session_picker}
+<h2>Division of labor</h2>{accounting_html}
 <h2>Current workflow</h2>{operations}
 <h2>Run history</h2>
 <div class="table-wrap"><table><thead><tr><th>Run</th><th>Role / model</th><th>Task</th><th>Claim</th><th>Observed</th><th>Lifecycle</th><th>Delivery</th><th>Time</th><th>Tokens L/F</th><th>Evidence</th></tr></thead><tbody>{rows}</tbody></table></div>
@@ -276,7 +320,89 @@ def _operation(operation: dict[str, Any]) -> str:
         for stage in operation["stages"]
     )
     stop = f' · stopped: {html.escape(str(operation["stop_reason"]))}' if operation["stop_reason"] else ""
-    return f'<section class="operation"><div class="operation-head"><strong>{html.escape(operation["operation_id"])}</strong><span>issue {operation["issue"]} · {html.escape(operation["current_stage"])} / {html.escape(operation["current_state"])}{stop}</span></div><div class="flow">{stages}</div></section>'
+    issue_text = f"issue {operation['issue']}"
+    title = html.escape(operation["operation_id"])
+    if operation.get("repository"):
+        issue_url = f"https://github.com/{quote(operation['repository'], safe='/')}/issues/{operation['issue']}"
+        issue_text = f'<a href="{html.escape(issue_url)}" target="_blank" rel="noopener noreferrer">{issue_text}</a>'
+        title = f'<a href="{html.escape(issue_url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+    session = html.escape(str(operation.get("session_id") or "legacy"))
+    return f'<section class="operation"><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_stage"])} / {html.escape(operation["current_state"])}{stop}</span></div><div class="flow">{stages}</div></section>'
+
+
+def _derive_sessions(operations: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for operation in operations:
+        grouped.setdefault(operation["session_id"] or "legacy", []).append(operation)
+    sessions = []
+    for session_id, items in grouped.items():
+        newest = max(items, key=lambda item: item["updated_at"])
+        states = {(item["current_stage"], item["current_state"]) for item in items}
+        if any(state == "active" for _, state in states):
+            status = "active"
+        elif states and all(stage == "post-merge" and state == "passed" for stage, state in states):
+            status = "completed"
+        else:
+            status = "idle"
+        sessions.append({"session_id": session_id, "status": status, "updated_at": newest["updated_at"], "operations": len(items)})
+    return sorted(sessions, key=lambda item: (item["updated_at"], item["session_id"]), reverse=True)
+
+
+def _accounting(
+    runs: tuple[Any, ...], views: tuple[RunView, ...],
+    usage: tuple[dict[str, Any], ...], operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    observed = [item for item in usage if item["status"] == "observed"]
+    local_input = sum(item.usage.local_input for item in runs)
+    local_cached_values = [item.usage.local_cache_read for item in runs if item.usage.cache_provenance == "observed"]
+    local_generated = sum(item.usage.local_output + item.usage.local_reasoning for item in runs)
+    local_cache_complete = bool(runs) and len(local_cached_values) == len(runs)
+    codex_complete = bool(usage) and len(observed) == len(usage)
+    codex_input = sum(item["input_tokens"] for item in observed) if codex_complete else None
+    codex_cached = sum(item["cached_input_tokens"] for item in observed) if codex_complete else None
+    codex_generated = sum(item["output_tokens"] + item["reasoning_output_tokens"] for item in observed) if codex_complete else None
+    return {
+        "local_input": local_input,
+        "local_cached": sum(value or 0 for value in local_cached_values) if local_cache_complete else None,
+        "local_uncached": local_input - sum(value or 0 for value in local_cached_values) if local_cache_complete else None,
+        "local_cache_provenance": "observed" if local_cache_complete else "unsupported",
+        "local_generated": local_generated, "codex_input": codex_input,
+        "codex_cached": codex_cached, "codex_generated": codex_generated,
+        "codex_uncached": sum(item["uncached_input_tokens"] for item in observed) if codex_complete else None,
+        "codex_cache_provenance": "observed" if codex_complete else "unsupported",
+        "codex_usage_operations": len(observed), "worker_runs": len(runs),
+        "codex_interventions": sum(item.intervention_depth != "none" for item in views),
+        "corrections": sum(item.get("correction_cycle", 0) for item in operations),
+        "takeovers": sum(item.intervention_depth == "takeover" for item in views),
+    }
+
+
+def _accounting_html(accounting: dict[str, Any]) -> str:
+    processed = accounting["local_input"] + accounting["codex_input"] if accounting["codex_input"] is not None else None
+    generated = accounting["local_generated"] + accounting["codex_generated"] if accounting["codex_generated"] is not None else None
+    local_processed_share = f'{accounting["local_input"] / processed * 100:.1f}%' if processed else "Not available"
+    local_generated_share = f'{accounting["local_generated"] / generated * 100:.1f}%' if generated else "Not available"
+    cached = (
+        f'{accounting["local_cached"]:,} (observed)'
+        if accounting["local_cache_provenance"] == "observed" else "Not reported (unsupported)"
+    )
+    codex_cached = (
+        f'{accounting["codex_cached"]:,} (observed)'
+        if accounting["codex_cache_provenance"] == "observed" else "Not reported (unsupported)"
+    )
+    uncached = (
+        f'local {accounting["local_uncached"]:,} / Codex {accounting["codex_uncached"]:,}'
+        if accounting["local_uncached"] is not None and accounting["codex_uncached"] is not None
+        else "Not fully reported"
+    )
+    return (
+        '<div class="cards">'
+        f'<section class="card"><span>Processed context · local share</span><strong>{local_processed_share}</strong><small>local {accounting["local_input"]:,} / Codex {accounting["codex_input"] if accounting["codex_input"] is not None else "not reported"}</small></section>'
+        f'<section class="card"><span>Generated + reasoning · local share</span><strong>{local_generated_share}</strong><small>local {accounting["local_generated"]:,} / Codex {accounting["codex_generated"] if accounting["codex_generated"] is not None else "not reported"}</small></section>'
+        f'<section class="card"><span>Cached input</span><strong>local {cached}</strong><small>Codex {codex_cached} · uncached {uncached}</small></section>'
+        f'<section class="card"><span>Operational contribution</span><strong>{accounting["worker_runs"]} local runs</strong><small>{accounting["codex_interventions"]} Codex interventions · {accounting["corrections"]} corrections · {accounting["takeovers"]} takeovers</small></section>'
+        '</div>'
+    )
 
 
 def _run_row(view: dict[str, Any]) -> str:
@@ -302,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workflow", type=Path)
     parser.add_argument("--frontier", type=Path)
     parser.add_argument("--publication-failures", type=Path)
+    parser.add_argument("--operation-usage", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.1.1")
@@ -320,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
         args.publication_failures,
         args.release,
         args.mode,
+        operation_usage=args.operation_usage,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
     print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)
@@ -334,13 +462,13 @@ def main(argv: list[str] | None = None) -> int:
 
 DASHBOARD_JS = """(() => {
   let initial = true;
-  const events = new EventSource('/events');
+  const events = new EventSource('/events' + window.location.search);
   const connection = (text, color) => {
     const state = document.getElementById('connection');
     if (state) { state.textContent = text; state.style.color = color; }
   };
   const refresh = async () => {
-    const response = await fetch('/', {cache: 'no-store'});
+    const response = await fetch('/' + window.location.search, {cache: 'no-store'});
     if (!response.ok) { throw new Error('dashboard refresh failed'); }
     const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
     const current = document.querySelector('main');

@@ -13,6 +13,7 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
     --workflow %h/.local/share/codex-local-harness/health/workflow.jsonl \
     --frontier %h/.local/share/codex-local-harness/health/frontier.jsonl \
     --publication-failures %h/.local/share/codex-local-harness/health/publication-failures.jsonl \
+    --operation-usage %h/.local/share/codex-local-harness/health/operation-usage.jsonl \
     --host 127.0.0.1 \
     --port 8765 \
     --release v0.1.3 \

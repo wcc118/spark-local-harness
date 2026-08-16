@@ -13,6 +13,7 @@ from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, Public
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
 from codex_local_harness.frontier import FrontierStatus
 from codex_local_harness.workflow import WorkflowEvent
+from codex_local_harness.operation_usage import OperationUsageSnapshot
 
 
 def fixture_source(tmp_path):
@@ -96,8 +97,9 @@ def test_snapshot_includes_workflow_and_explicitly_unavailable_codex_data(tmp_pa
     assert snapshot["codex"]["tokens_used"] is None
     page = render_dashboard(snapshot)
     assert "Current workflow" in page
-    assert "Unavailable" in page
-    assert "Interactive Codex tokens" in page
+    assert "Interactive Codex tokens" not in page
+    assert "Codex context" not in page
+    assert "Plan remaining" not in page
 
 
 def test_sse_emits_snapshot_event(tmp_path):
@@ -117,7 +119,7 @@ def test_sse_emits_snapshot_event(tmp_path):
 def test_browser_updates_dom_without_full_page_reload():
     from codex_local_harness.dashboard import DASHBOARD_JS
 
-    assert "fetch('/', {cache: 'no-store'})" in DASHBOARD_JS
+    assert "fetch('/' + window.location.search, {cache: 'no-store'})" in DASHBOARD_JS
     assert "replaceWith(replacement)" in DASHBOARD_JS
     assert "location.reload" not in DASHBOARD_JS
 
@@ -275,3 +277,74 @@ def test_publication_failures_are_visible_without_hiding_valid_runs(tmp_path):
     assert snapshot["summary"]["runs"] == 1
     assert len(snapshot["publication_failures"]) == 1
     assert "Telemetry publication failures:</strong> 1" in render_dashboard(snapshot)
+
+
+def test_session_filter_separates_same_issue_and_survives_reconstruction(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent(
+        "a", "issue-19", "local-work", "active", "2026-08-16T00:00:00Z", 19,
+        run_id="run-1", session_id="thread-a", repository="owner/repo",
+    ))
+    append_record(workflow, WorkflowEvent(
+        "b", "issue-19", "post-merge", "passed", "2026-08-16T00:01:00Z", 19,
+        session_id="thread-b", repository="owner/repo",
+    ))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+
+    all_sessions = source.snapshot()
+    selected = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot("thread-a")
+
+    assert len(all_sessions["operations"]) == 2
+    assert {(item["session_id"], item["status"]) for item in all_sessions["sessions"]} == {
+        ("thread-a", "active"), ("thread-b", "completed"),
+    }
+    assert [item["session_id"] for item in selected["operations"]] == ["thread-a"]
+    assert selected["selected_session"] == "thread-a"
+
+
+def test_valid_workflow_identity_links_exact_github_issue(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent(
+        "linked", "issue-62", "review", "active", "2026-08-16T00:00:00Z", 62,
+        session_id="thread-a", repository="wcc118/codex-local-harness",
+    ))
+    page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
+    assert 'href="https://github.com/wcc118/codex-local-harness/issues/62"' in page
+    assert 'target="_blank" rel="noopener noreferrer"' in page
+
+
+def test_operation_usage_drives_division_of_labor_without_cost_claim(tmp_path):
+    base = fixture_source(tmp_path)
+    usage = tmp_path / "operation-usage.jsonl"
+    common = dict(
+        session_id="thread-a", repository="owner/repo", issue=19,
+        operation_id="issue-19", source="codex-rollout-token-count",
+        context_window=258400,
+    )
+    append_record(usage, OperationUsageSnapshot(
+        "start", "2026-08-16T00:00:00Z", "start",
+        input_tokens=100, cached_input_tokens=60, cache_write_input_tokens=0,
+        output_tokens=20, reasoning_output_tokens=5, total_tokens=120, **common,
+    ))
+    append_record(usage, OperationUsageSnapshot(
+        "finish", "2026-08-16T00:05:00Z", "finish",
+        input_tokens=300, cached_input_tokens=180, cache_write_input_tokens=0,
+        output_tokens=50, reasoning_output_tokens=15, total_tokens=350, **common,
+    ))
+    snapshot = DashboardSource(
+        base.runs, base.adjudications, base.lifecycle, operation_usage=usage,
+    ).snapshot()
+    page = render_dashboard(snapshot)
+    assert snapshot["accounting"]["codex_input"] == 200
+    assert snapshot["accounting"]["codex_cached"] == 120
+    assert "Processed context · local share" in page
+    assert "Generated + reasoning · local share" in page
+    assert "Cost share" not in page
+
+
+def test_missing_cache_is_not_rendered_as_observed_zero(tmp_path):
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+    assert "Not reported (unsupported)" in page
