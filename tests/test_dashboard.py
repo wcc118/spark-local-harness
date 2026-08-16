@@ -202,12 +202,12 @@ def test_active_workflow_stage_has_orbiting_light(tmp_path):
     source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
-    assert 'class="stage active"' in page
-    assert '.stage.active::after{content:""' in page
-    assert ".stage.active{border-color:var(--warn)}" in page
+    assert 'class="milestone active"' in page
+    assert '.milestone.active::after{content:""' in page
+    assert ".milestone.active{border-color:var(--warn)}" in page
     assert "top:4px;left:4px;width:6px;height:6px" in page
     assert "top:calc(100% - 10px);left:calc(100% - 10px)" in page
-    assert "animation:stage-orbit 4s linear infinite" in page
+    assert "animation:milestone-orbit 4s linear infinite" in page
 
 
 def test_orbiting_light_respects_prefers_reduced_motion(tmp_path):
@@ -217,8 +217,8 @@ def test_orbiting_light_respects_prefers_reduced_motion(tmp_path):
     source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
-    assert "@media (prefers-reduced-motion:no-preference){.stage.active::after{animation:stage-orbit" in page
-    assert "@media (prefers-reduced-motion:reduce){.stage.active::after{top:4px;right:4px;left:auto}" in page
+    assert "@media (prefers-reduced-motion:no-preference){.milestone.active::after{animation:milestone-orbit" in page
+    assert "@media (prefers-reduced-motion:reduce){.milestone.active::after{top:4px;right:4px;left:auto}" in page
 
 
 def test_non_active_stages_do_not_show_orbit_light(tmp_path):
@@ -231,10 +231,10 @@ def test_non_active_stages_do_not_show_orbit_light(tmp_path):
     snapshot = source.snapshot()
     page = render_dashboard(snapshot)
     # Should have both passed and active stages
-    assert 'class="stage passed"' in page
-    assert 'class="stage active"' in page
-    assert 'class="stage pending"' in page
-    assert ".stage.pending{color:var(--muted);border-color:#555b66;background:#22252d}" in page
+    assert 'class="milestone passed"' in page
+    assert 'class="milestone active"' in page
+    assert 'class="milestone pending"' in page
+    assert ".milestone.pending{color:#626b7c;border-color:#343946;background:#181b22}" in page
 
 
 def test_not_applicable_stage_is_rendered_as_not_needed(tmp_path):
@@ -242,9 +242,9 @@ def test_not_applicable_stage_is_rendered_as_not_needed(tmp_path):
     workflow = tmp_path / "workflow.jsonl"
     append_record(workflow, WorkflowEvent("evt-1", "issue-19", "correction", "not-applicable", "2026-08-15T18:00:00Z", 19))
     page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
-    assert 'class="stage not-applicable"' in page
-    assert '<strong class="stage-state">not needed</strong>' in page
-    assert ".stage.not-applicable{color:#737b8c;border-color:#343946;background:transparent}" in page
+    assert 'class="milestone-activity not-applicable"' in page
+    assert "correction · not needed" in page
+    assert ".milestone.not-applicable{color:#737b8c;border-color:#343946;background:transparent}" in page
 
 
 def test_render_dashboard_emits_single_title(tmp_path):
@@ -348,3 +348,28 @@ def test_missing_cache_is_not_rendered_as_observed_zero(tmp_path):
     base = fixture_source(tmp_path)
     page = render_dashboard(base.snapshot())
     assert "Not reported (unsupported)" in page
+
+
+def test_correction_loop_and_activity_evidence_render_accessibly(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("work", "issue-35", "local-work", "passed", "2026-08-15T18:00:00Z", 35))
+    append_record(workflow, WorkflowEvent("review", "issue-35", "review", "failed", "2026-08-15T18:01:00Z", 35))
+    append_record(workflow, WorkflowEvent("fix", "issue-35", "correction", "active", "2026-08-15T18:02:00Z", 35, correction_cycle=1))
+    page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
+    assert 'aria-label="Delivery milestones"' in page
+    assert 'aria-label="Correction loop cycle 1"' in page
+    assert "↩ correction cycle 1 → implementation · active" in page
+    assert "grid-template-columns:1fr" in page
+
+
+def test_evidence_first_case_has_pending_milestones_and_visible_activity(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("evidence", "issue-35", "evidence", "active", "2026-08-15T18:00:00Z", 35))
+    snapshot = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot()
+    assert all(item["state"] == "pending" for item in snapshot["operations"][0]["milestones"])
+    page = render_dashboard(snapshot)
+    assert "evidence · active" in page
+    assert 'aria-label="Unassigned activities"' in page
+    assert page.count('class="milestone pending"') == 8

@@ -1,4 +1,6 @@
-from codex_local_harness.workflow import WorkflowEvent, derive_operations
+import pytest
+
+from codex_local_harness.workflow import WorkflowEvent, derive_operations, validate_append
 
 
 def event(identifier, stage, state, observed_at, **changes):
@@ -134,3 +136,65 @@ def test_jsonl_backward_compatibility_with_from_dict():
     ev = WorkflowEvent.from_dict(old_data)
     assert ev.session_id is None
     assert ev.repository is None
+
+
+def test_truthful_milestones_do_not_infer_missing_predecessors():
+    operation = derive_operations([
+        event("evidence-first", "evidence", "active", "2026-08-15T18:00:00Z"),
+    ])[0]
+    states = {item["milestone"]: item["state"] for item in operation["milestones"]}
+    assert set(states.values()) == {"pending"}
+    assert operation["activities"] == [{
+        "activity_type": "evidence", "milestone": "unassigned", "state": "active",
+        "observed_at": "2026-08-15T18:00:00Z", "run_id": None, "role": None,
+        "correction_cycle": 0, "stop_reason": None, "evidence_refs": [],
+    }]
+
+
+def test_correction_is_numbered_activity_loop_not_linear_milestone():
+    operation = derive_operations([
+        event("work", "local-work", "passed", "2026-08-15T18:00:00Z"),
+        event("review", "review", "failed", "2026-08-15T18:01:00Z"),
+        event("fix", "correction", "active", "2026-08-15T18:02:00Z", correction_cycle=1),
+    ])[0]
+    assert "correction" not in [item["milestone"] for item in operation["milestones"]]
+    assert operation["activities"][-1]["milestone"] == "implementation"
+    assert operation["activities"][-1]["correction_cycle"] == 1
+
+
+def test_conflicting_event_reuse_and_stale_file_order_remain_visible():
+    operation = derive_operations([
+        event("same", "review", "passed", "2026-08-15T18:01:00Z"),
+        event("same", "review", "failed", "2026-08-15T18:00:00Z"),
+    ])[0]
+    assert operation["current_state"] == "conflicting"
+    assert {item["kind"] for item in operation["diagnostics"]} >= {
+        "conflicting-event-reuse", "stale-event-order", "github-label-unavailable",
+    }
+
+
+def test_github_label_divergence_is_diagnostic_only():
+    operation = derive_operations([
+        event("merge", "merge", "active", "2026-08-15T18:00:00Z", evidence_refs=("github-label:status/backlog",)),
+    ])[0]
+    assert any(item["kind"] == "github-label-divergence" for item in operation["diagnostics"])
+    assert operation["current_state"] == "active"
+
+
+def test_historical_matching_label_cannot_hide_current_divergence():
+    operation = derive_operations([
+        event("old", "merge", "active", "2026-08-15T18:00:00Z", evidence_refs=("github-label:status/review-passed",)),
+        event("new", "merge", "active", "2026-08-15T18:01:00Z", evidence_refs=("github-label:status/backlog",)),
+    ])[0]
+    diagnostic = next(item for item in operation["diagnostics"] if item["kind"] == "github-label-divergence")
+    assert diagnostic["observed"] == ["status/backlog"]
+
+
+def test_strict_publisher_rejects_reuse_regression_and_bad_correction_cycle():
+    existing = [event("work", "local-work", "passed", "2026-08-15T18:00:00Z")]
+    with pytest.raises(ValueError, match="event_id reuse"):
+        validate_append(existing, event("work", "review", "active", "2026-08-15T18:01:00Z"))
+    with pytest.raises(ValueError, match="regression"):
+        validate_append(existing, event("back", "routing", "active", "2026-08-15T18:01:00Z"))
+    with pytest.raises(ValueError, match="positive correction_cycle"):
+        validate_append(existing, event("fix", "correction", "active", "2026-08-15T18:01:00Z"))

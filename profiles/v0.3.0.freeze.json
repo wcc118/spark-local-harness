@@ -1,0 +1,46 @@
+{
+  "release": "v0.3.0",
+  "predecessor": "v0.2.0",
+  "issue": 56,
+  "candidate_head_before_freeze": "48a573c933dddba55848ed6d9b9fb17784d8f90f",
+  "hypothesis": "milestones, attached activities, and correction loops improve workflow truthfulness without changing orchestration authority",
+  "governance": {
+    "orchestrator": "codex",
+    "merge_authority": "codex",
+    "dashboard_authority": "read-only",
+    "ledger": "append-only",
+    "publication": "best-effort"
+  },
+  "validation": {
+    "tests_passed": 297,
+    "compileall_passed": true,
+    "diff_check_passed": true,
+    "v2_codex_worker_publication_smoke": true,
+    "evidence_first_replay": true,
+    "ordinary_flow_replay": true,
+    "correction_loop_replay": true,
+    "mutation_methods_allowed": false
+  },
+  "local_runs": {
+    "coder": {
+      "run_id": "20260816T060858Z-1487114",
+      "result": "no-delivery",
+      "steps": 90,
+      "local_tokens": 4209602
+    },
+    "reviewer": {
+      "run_id": "20260816T062406Z-1508765",
+      "result": "interrupted-no-verdict",
+      "steps": 70,
+      "local_tokens": 3953300
+    },
+    "final_authority": "codex"
+  },
+  "sha256": {
+    "workflow": "193f4373f05a6f801ab1df27986fefbd662d5098d05d42a98db4effbba386d92",
+    "dashboard": "d63f352bc0f37db5ced6f65727da38fa6f986bd12a10b5cf4b81f8ee5c1abe55",
+    "observe_cli": "c4759b23a6b0f678434b2d436eef37772ae15be3522acad3a74c29fa399d35a2",
+    "replay_workflow": "43527ac16fc194b4ed036b4a0e07ea28eedc0e31bac27253685c215f46844c18",
+    "worker": "0fb2e6c5862ab91076e13185bc844beebf3b7eead1d3dbf4b8d4e6c237cad929"
+  }
+}

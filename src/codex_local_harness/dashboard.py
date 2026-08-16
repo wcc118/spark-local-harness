@@ -17,7 +17,7 @@ from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
 from .operation_usage import OperationUsageSnapshot, derive_usage
 from .read_model import RunView, build_run_views, summarize_views
-from .workflow import WorkflowEvent, derive_operations
+from .workflow import derive_operations, read_workflow_records
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class DashboardSource:
         runs = self._load(self.runs, "runs", read_jsonl, statuses)
         adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
         lifecycle = self._load(self.lifecycle, "lifecycle", lambda path: read_records(path, LifecycleEvent), statuses)
-        workflow = self._load(self.workflow, "workflow", lambda path: read_records(path, WorkflowEvent), statuses) if self.workflow else ()
+        workflow = self._load(self.workflow, "workflow", read_workflow_records, statuses) if self.workflow else ()
         frontier_records = self._load(self.frontier, "frontier", lambda path: read_records(path, FrontierStatus), statuses) if self.frontier else ()
         publication_failures = self._load(
             self.publication_failures,
@@ -293,7 +293,7 @@ main{{max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-size:25px}} 
 .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:22px}} .card{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}}
 .card span{{display:block;color:var(--muted);font-size:12px}} .card strong{{display:block;font-size:21px;margin-top:3px}}
 .table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:10px}} table{{width:100%;border-collapse:collapse;background:var(--panel)}}
-.operation{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px}} .operation-head{{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}} .flow{{display:grid;grid-template-columns:repeat(10,minmax(110px,1fr));gap:6px;margin-top:12px;overflow:auto}} .stage{{position:relative;border:1px solid var(--line);border-radius:8px;padding:9px;min-width:110px}} .stage.pending{{color:var(--muted);border-color:#555b66;background:#22252d}} .stage.not-applicable{{color:#737b8c;border-color:#343946;background:transparent}} .stage.active{{border-color:var(--warn)}} .stage.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px 1px rgba(243,201,105,.5);pointer-events:none}} @media (prefers-reduced-motion:no-preference){{.stage.active::after{{animation:stage-orbit 4s linear infinite}}@keyframes stage-orbit{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}}@media (prefers-reduced-motion:reduce){{.stage.active::after{{top:4px;right:4px;left:auto}}}} .stage.passed{{border-color:var(--good)}} .stage.failed,.stage.interrupted,.stage.blocked{{border-color:var(--bad)}} .stage-name{{display:block;font-size:11px;color:var(--muted)}}
+.operation{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px;overflow:hidden}} .operation-head{{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}} .flow{{display:grid;grid-template-columns:repeat(8,minmax(120px,1fr));gap:8px;margin-top:12px;overflow:auto;padding:2px}} .milestone{{position:relative;border:1px solid var(--line);border-radius:8px;padding:9px;min-width:120px}} .milestone.pending{{color:#626b7c;border-color:#343946;background:#181b22}} .milestone.not-applicable{{color:#737b8c;border-color:#343946;background:transparent}} .milestone.active{{border-color:var(--warn)}} .milestone.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px 1px rgba(243,201,105,.5);pointer-events:none}} @media (prefers-reduced-motion:no-preference){{.milestone.active::after{{animation:milestone-orbit 4s linear infinite}}@keyframes milestone-orbit{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}}@media (prefers-reduced-motion:reduce){{.milestone.active::after{{top:4px;right:4px;left:auto}}}} .milestone.passed{{border-color:var(--good)}} .milestone.failed,.milestone.interrupted,.milestone.blocked,.milestone.conflicting{{border-color:var(--bad)}} .milestone-name{{display:block;font-size:11px;color:var(--muted)}} .milestone-activities{{margin-top:6px}} .milestone-activity{{display:inline-block;background:var(--line);color:var(--ink);border-radius:4px;padding:2px 6px;font-size:9px;margin-right:4px;margin-bottom:4px}} .unassigned-activities{{margin:9px 2px 0;padding:7px 10px;border:1px dashed var(--warn);border-radius:5px;color:var(--warn)}} .correction-loop{{margin:9px 2px 0;padding:7px 10px;border-left:3px solid var(--warn);background:#272417;color:var(--warn);border-radius:4px}} .workflow-diagnostic{{display:inline-block;margin-top:8px;padding:3px 7px;border:1px solid var(--bad);color:var(--bad);border-radius:5px;font-size:11px}} @media (max-width:760px){{.flow{{grid-template-columns:1fr;overflow:visible}}.milestone{{min-width:0}}}}
 .telemetry{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0 0 22px}} .empty{{color:var(--muted)}} #connection{{color:var(--warn)}}
 .session-picker{{margin:0 0 14px}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px}}
 .source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
@@ -315,9 +315,9 @@ code{{color:#cbd5ff}} details{{max-width:380px;white-space:normal}} footer{{colo
 
 
 def _operation(operation: dict[str, Any]) -> str:
-    stages = "".join(
-        f'<div class="stage {html.escape(stage["state"])}"><span class="stage-name">{html.escape(stage["stage"])}</span><strong class="stage-state">{html.escape("not needed" if stage["state"] == "not-applicable" else stage["state"])}</strong></div>'
-        for stage in operation["stages"]
+    milestones = "".join(
+        f'<div class="milestone {html.escape(m["state"])}"><span class="milestone-name">{html.escape(m["label"])}</span><strong class="milestone-state">{html.escape("not needed" if m["state"] == "not-applicable" else m["state"])}</strong>{_milestone_activities_html(m["activities"])}</div>'
+        for m in operation["milestones"]
     )
     stop = f' · stopped: {html.escape(str(operation["stop_reason"]))}' if operation["stop_reason"] else ""
     issue_text = f"issue {operation['issue']}"
@@ -327,7 +327,31 @@ def _operation(operation: dict[str, Any]) -> str:
         issue_text = f'<a href="{html.escape(issue_url)}" target="_blank" rel="noopener noreferrer">{issue_text}</a>'
         title = f'<a href="{html.escape(issue_url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
     session = html.escape(str(operation.get("session_id") or "legacy"))
-    return f'<section class="operation"><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_stage"])} / {html.escape(operation["current_state"])}{stop}</span></div><div class="flow">{stages}</div></section>'
+    diagnostics = "".join(
+        f'<span class="workflow-diagnostic">{html.escape(item["kind"])}</span>'
+        for item in operation.get("diagnostics", [])
+    )
+    unassigned = [item for item in operation["activities"] if item["milestone"] == "unassigned"]
+    unassigned_html = "" if not unassigned else (
+        '<div class="unassigned-activities" aria-label="Unassigned activities"><strong>Unassigned activity</strong>'
+        + _milestone_activities_html(unassigned) + "</div>"
+    )
+    loop = ""
+    corrections = [item for item in operation["activities"] if item["activity_type"] == "correction" and item["state"] != "not-applicable"]
+    if corrections:
+        latest = max(corrections, key=lambda item: (item["correction_cycle"], item["observed_at"]))
+        loop = f'<div class="correction-loop" aria-label="Correction loop cycle {latest["correction_cycle"]}">↩ correction cycle {latest["correction_cycle"]} → implementation · {html.escape(latest["state"])}</div>'
+    return f'<section class="operation"><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span></div>{diagnostics}<div class="flow" aria-label="Delivery milestones">{milestones}</div>{unassigned_html}{loop}</section>'
+
+
+def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
+    if not activities:
+        return ""
+    activity_html = " ".join(
+        f'<span class="milestone-activity {html.escape(item["state"])}">{html.escape(item["activity_type"])} · {html.escape("not needed" if item["state"] == "not-applicable" else item["state"])}</span>'
+        for item in activities
+    )
+    return f'<div class="milestone-activities">{activity_html}</div>'
 
 
 def _derive_sessions(operations: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
