@@ -15,7 +15,7 @@ STALE = "b" * 40
 
 
 class CoderRun:
-    def __init__(self, checkout, *, prs=1, heads=None, status="", workflow=("status/review",)):
+    def __init__(self, checkout, *, prs=1, heads=None, status="", workflow=("status/review",), diff_check_fail=""):
         self.checkout = checkout
         self.prs = prs
         self.heads = list(heads or [])
@@ -26,6 +26,7 @@ class CoderRun:
         self.created = False
         self.commented = False
         self.pr_reads = 0
+        self.diff_check_fail = diff_check_fail
 
     def __call__(self, argv, cwd=None):
         command = tuple(argv)
@@ -37,8 +38,14 @@ class CoderRun:
             return "issue-7-fix\n"
         if command == ("git", "rev-parse", "HEAD"):
             return SHA + "\n"
+        if command == ("git", "merge-base", "origin/main", SHA):
+            return SHA + "\n"
         if command == ("git", "status", "--porcelain=v1"):
             return self.status
+        if command[:3] == ("git", "diff", "--check"):
+            if self.diff_check_fail:
+                raise ReviewError(f"command failed (1): {' '.join(argv)}: {self.diff_check_fail}")
+            return ""
         if command[:2] == ("git", "push"):
             self.pushed = True
             return ""
@@ -140,3 +147,33 @@ def test_publisher_fails_after_one_retry_and_records_both_observations(tmp_path)
     event = PublicationFailure.from_dict(json.loads(records.read_text().strip()))
     assert event.error_class == "persistent-mismatch"
     assert event.target.count(STALE) == 2 and SHA in event.target
+
+
+def test_publisher_preflight_clean_checkoutProceeds_to_push(tmp_path):
+    runner = CoderRun(tmp_path, status="")
+    result = finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
+    assert result["published"] is True
+    assert runner.pushed
+
+
+def test_publisher_preflight_diff_check_failure_prevents_push(tmp_path):
+    runner = CoderRun(tmp_path, status="", diff_check_fail="src/value.py:15: trailing whitespace.\n")
+    with pytest.raises(ReviewError, match="trailing whitespace"):
+        finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
+    assert not runner.pushed and not runner.created
+
+
+def test_publisher_preflight_unexpected_artifact_prevents_push_and_identifies_path(tmp_path):
+    runner = CoderRun(tmp_path, status="?? scratch.tmp\n", diff_check_fail="")
+    with pytest.raises(ReviewError, match="scratch.tmp"):
+        finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
+    assert not runner.pushed and not runner.created
+
+
+def test_publisher_preflight_no_publication_mutations_on_failure(tmp_path):
+    runner = CoderRun(tmp_path, status="?? scratch.tmp\n", diff_check_fail="")
+    with pytest.raises(ReviewError):
+        finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
+    assert not runner.pushed
+    assert not runner.created
+    assert not runner.commented
