@@ -59,6 +59,8 @@ def test_lifecycle_represents_interrupted_run_without_prompt_content(tmp_path):
         model="qwen3-coder-next",
         profile="codex-led-v4",
         task_class="difficult-concurrency",
+        checkout_kind="isolated-clone",
+        checkout_id="a" * 64,
     )
     append_record(path, record)
     assert read_records(path, LifecycleEvent) == (record,)
@@ -66,6 +68,7 @@ def test_lifecycle_represents_interrupted_run_without_prompt_content(tmp_path):
     assert set(payload) == {
         "dirty_entries", "event", "event_id", "exit_status", "observed_at",
         "run_id", "schema_version", "wall_seconds", "issue", "role", "model", "profile", "task_class",
+        "checkout_kind", "checkout_id",
     }
 
 

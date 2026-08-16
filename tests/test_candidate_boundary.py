@@ -50,6 +50,7 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "--allow-malformed" in content
     assert "workflow_state=interrupted" in content
     assert 'workflow_identity_args+=(--pull-request "$worker_pr")' in content
+    assert 'lifecycle_checkout_args=(--checkout-kind "$checkout_kind" --checkout-id "$checkout_id")' in content
 
 
 def test_candidate_advisory_agent_is_read_only_and_machine_readable():

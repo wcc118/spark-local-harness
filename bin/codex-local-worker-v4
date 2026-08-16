@@ -10,12 +10,15 @@ usage() {
 
 (( $# >= 3 )) || usage
 worker_role=$1
+worker_source_repo_path=$2
 worker_repo_path=$2
 shift 2
 
 task_temp=
 review_runtime_tmp=
 worker_runtime_home=
+worker_isolation_root=
+isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-/home/connellwc83/.local/share/opencode-orchestration/isolated-checkouts}
 diagnostic_started=0
 diagnostic_finalized=0
 worker_started_epoch=
@@ -42,6 +45,7 @@ cleanup() {
       --wall-seconds "$diagnostic_elapsed" --exit-status "$cleanup_status" \
       --dirty-entries "$diagnostic_dirty" --issue "$worker_issue" --role "$worker_role" \
       --model "$worker_model" --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" \
+      "${lifecycle_checkout_args[@]}" \
       >/dev/null; then
       echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
       record_publication_failure cleanup lifecycle
@@ -64,6 +68,9 @@ cleanup() {
   fi
   if [[ -n $worker_runtime_home && -d $worker_runtime_home ]]; then
     rm -rf -- "$worker_runtime_home"
+  fi
+  if [[ -n $worker_isolation_root && -d $worker_isolation_root && $worker_isolation_root == "$isolation_parent"/* ]]; then
+    rm -rf -- "$worker_isolation_root"
   fi
 }
 trap cleanup EXIT
@@ -195,13 +202,6 @@ case "$worker_sandbox" in
   *) echo "ERROR: unsupported worker sandbox: $worker_sandbox" >&2; exit 2 ;;
 esac
 
-# Local commits need an identity, but not the operator's credential-bearing
-# global Git configuration.
-if [[ $worker_role == coder ]]; then
-  git -C "$worker_repo_path" config user.name "$(git config --global user.name)"
-  git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
-fi
-
 worker_repository=${CODEX_LOCAL_REPOSITORY:-}
 worker_issue=${CODEX_LOCAL_ISSUE:-}
 worker_pr=${CODEX_LOCAL_PR:-}
@@ -210,6 +210,40 @@ record_run=${CODEX_LOCAL_RECORD_RUN:-0}
 if [[ $record_run == 1 && ( -z $worker_repository || -z $worker_issue ) ]]; then
   echo "ERROR: recording requires CODEX_LOCAL_REPOSITORY and CODEX_LOCAL_ISSUE" >&2
   exit 2
+fi
+
+checkout_kind=source-read-only
+checkout_id=$(printf '%s' "$(realpath "$worker_source_repo_path")" | sha256sum | cut -d' ' -f1)
+if [[ $worker_role == coder || $worker_role == reviewer ]]; then
+  source_root=$(git -C "$worker_source_repo_path" rev-parse --show-toplevel)
+  [[ $(realpath "$source_root") == $(realpath "$worker_source_repo_path") ]] || {
+    echo "ERROR: worker source must be the Git root" >&2; exit 65;
+  }
+  [[ -z $(git -C "$worker_source_repo_path" status --porcelain=v1) ]] || {
+    echo "ERROR: worker source checkout must be clean before isolation" >&2; exit 65;
+  }
+  source_head=$(git -C "$worker_source_repo_path" rev-parse HEAD)
+  source_branch=$(git -C "$worker_source_repo_path" branch --show-current)
+  source_remote=$(git -C "$worker_source_repo_path" remote get-url origin)
+  [[ -n $source_branch ]] || { echo "ERROR: worker source checkout must have a branch" >&2; exit 65; }
+  install -d -m 700 "$isolation_parent"
+  worker_isolation_root=$(mktemp -d --tmpdir="$isolation_parent")
+  worker_repo_path=$worker_isolation_root/checkout
+  git clone --quiet --no-hardlinks --no-checkout "$worker_source_repo_path" "$worker_repo_path"
+  git -C "$worker_repo_path" remote set-url origin "$source_remote"
+  git -C "$worker_repo_path" checkout --quiet -B "$source_branch" "$source_head"
+  checkout_kind=isolated-clone
+  checkout_id=$(printf '%s' "$worker_repo_path" | sha256sum | cut -d' ' -f1)
+fi
+
+# Local commits need an identity, but not the operator's credential-bearing
+# global Git configuration.
+if [[ $worker_role == coder ]]; then
+  [[ -n $worker_repository && -n $worker_issue ]] || {
+    echo "ERROR: isolated coder requires CODEX_LOCAL_REPOSITORY and CODEX_LOCAL_ISSUE" >&2; exit 2;
+  }
+  git -C "$worker_repo_path" config user.name "$(git config --global user.name)"
+  git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
 fi
 
 candidate_source=${CODEX_LOCAL_SOURCE:-/home/connellwc83/.local/share/codex-local-harness/runtime/current/src}
@@ -228,6 +262,7 @@ worker_session_id=${CODEX_LOCAL_SESSION_ID:-${CODEX_THREAD_ID:-}}
 [[ -z $worker_session_id ]] || workflow_identity_args+=(--session-id "$worker_session_id")
 # Repository (CODEX_LOCAL_REPOSITORY)
 [[ -z $worker_repository ]] || workflow_identity_args+=(--repository "$worker_repository")
+lifecycle_checkout_args=(--checkout-kind "$checkout_kind" --checkout-id "$checkout_id")
 record_publication_failure() {
   local publication_phase=$1
   local publication_target=$2
@@ -263,7 +298,7 @@ if [[ $worker_role == reviewer ]]; then
     --envelope-out "$worker_envelope" --scratch-dir "$review_runtime_tmp" \
     --runtime-home "$worker_runtime_home") || exit 65
 fi
-if [[ $worker_role == coder && ${CODEX_LOCAL_CODER_POSTFLIGHT:-0} == 1 ]]; then
+if [[ $worker_role == coder && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   worker_task=$'HARNESS DELIVERY BOUNDARY: Work only in the local checkout. Do not push, use gh, create a PR, comment, or change labels. Commit the verified implementation on a clean local issue branch; the deterministic harness owns all remote publication.\n\n'"$worker_task"
 fi
 
@@ -276,7 +311,8 @@ if [[ $record_run == 1 ]]; then
     --records "$lifecycle_records" --event-id "$worker_run_id:started" \
     --run-id "$worker_run_id" --event started --observed-at "$diagnostic_now" \
     --issue "$worker_issue" --role "$worker_role" --model "$worker_model" \
-    --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" >/dev/null; then
+    --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" \
+    "${lifecycle_checkout_args[@]}" >/dev/null; then
     echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
     record_publication_failure start lifecycle
   fi
@@ -369,7 +405,7 @@ elif [[ $worker_role == reviewer && $inference_status == 0 ]]; then
     workflow_status=65
   fi
 fi
-if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-0} == 1 ]]; then
+if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   set +e
   "${coder_cli[@]}" --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --result-out "$worker_result" --publish
@@ -460,7 +496,8 @@ if [[ $record_run == 1 ]]; then
     --run-id "$worker_run_id" --event "$diagnostic_event" --observed-at "$diagnostic_now" \
     --wall-seconds "$diagnostic_elapsed" --exit-status "$workflow_status" \
     --dirty-entries "$dirty_entries" --issue "$worker_issue" --role "$worker_role" \
-    --model "$worker_model" --profile codex-led-v4 --task-class "$task_class" >/dev/null; then
+    --model "$worker_model" --profile codex-led-v4 --task-class "$task_class" \
+    "${lifecycle_checkout_args[@]}" >/dev/null; then
     echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
     record_publication_failure finish lifecycle
   fi
