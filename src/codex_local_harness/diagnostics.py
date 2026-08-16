@@ -101,6 +101,8 @@ class LifecycleEvent:
     model: str | None = None
     profile: str | None = None
     task_class: str | None = None
+    checkout_kind: str | None = None
+    checkout_id: str | None = None
     schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -120,6 +122,7 @@ class LifecycleEvent:
             raise ValueError("issue must be positive")
         for name, value in (
             ("role", self.role), ("model", self.model), ("profile", self.profile), ("task_class", self.task_class),
+            ("checkout_kind", self.checkout_kind), ("checkout_id", self.checkout_id),
         ):
             if value is not None:
                 _safe_atom(value, name)

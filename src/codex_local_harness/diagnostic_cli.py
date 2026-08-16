@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     lifecycle.add_argument("--model")
     lifecycle.add_argument("--profile")
     lifecycle.add_argument("--task-class")
+    lifecycle.add_argument("--checkout-kind")
+    lifecycle.add_argument("--checkout-id")
 
     args = parser.parse_args(argv)
     try:
@@ -70,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.model,
                 profile=args.profile,
                 task_class=args.task_class,
+                checkout_kind=args.checkout_kind,
+                checkout_id=args.checkout_id,
             )
         append_record(args.records, record)
     except (OSError, ValueError) as exc:
