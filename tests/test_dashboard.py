@@ -243,3 +243,13 @@ def test_not_applicable_stage_is_rendered_as_not_needed(tmp_path):
     assert 'class="stage not-applicable"' in page
     assert '<strong class="stage-state">not needed</strong>' in page
     assert ".stage.not-applicable{color:#737b8c;border-color:#343946;background:transparent}" in page
+
+
+def test_render_dashboard_emits_single_title(tmp_path):
+    base = fixture_source(tmp_path)
+    snapshot = base.snapshot()
+    page = render_dashboard(snapshot)
+    # Regression assertion: exactly one title element with the expected text
+    assert page.count("<title>") == 1
+    assert page.count("</title>") == 1
+    assert "<title>Codex agent harness diagnostics</title>" in page
