@@ -17,6 +17,10 @@ done
   echo "ERROR: candidate Python source is missing: $candidate_source/codex_local_harness" >&2
   exit 2
 }
+find "$candidate_source/codex_local_harness" -type f -name '*.py' -print -quit | grep -q . || {
+  echo "ERROR: candidate Python source contains no modules" >&2
+  exit 2
+}
 bash -n "$candidate_worker"
 observed_stable=$(sha256sum "$stable_worker" | cut -d' ' -f1)
 observed_candidate=$(sha256sum "$candidate_worker" | cut -d' ' -f1)
