@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .diagnostics import append_record
 from .frontier import FrontierStatus
-from .workflow import WorkflowEvent
+from .workflow import WorkflowEvent, read_workflow_records, validate_append
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.pull_request, args.run_id, args.role, args.model, args.correction_cycle,
                 args.stop_reason, tuple(args.evidence_ref), session_id, repository,
             )
+            validate_append(read_workflow_records(args.records), record)
         else:
             record = FrontierStatus(
                 args.status_id, args.observed_at, args.source, args.context_used, args.context_window,

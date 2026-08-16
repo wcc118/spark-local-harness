@@ -33,7 +33,7 @@ def test_v010_freeze_matches_release_artifacts():
 
 def test_project_version_advances_without_rewriting_v010_tag():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.2.0"' in pyproject
+    assert 'version = "0.3.0"' in pyproject
     tagged = subprocess.run(
         ["git", "show", "v0.1.0:pyproject.toml"], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE,
     ).stdout
