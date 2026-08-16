@@ -1,0 +1,8 @@
+{
+  "qualified_worker_sha256": [
+    "aec3075fe8c1743169ae77388d6b41150cd030990032700549c610f07e7a4f10",
+    "237a5c2be8db1c81c23be629f0f96bce0b97a13bfc03e5b0f7aa9cc8a1a0a113"
+  ],
+  "source": "Codex-approved release artifacts only; never derived dynamically from the checkout",
+  "qualified_at": "2026-08-16T05:45:00Z"
+}
