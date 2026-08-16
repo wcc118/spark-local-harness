@@ -16,15 +16,10 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
 ProtectControlGroups=yes
-ProtectKernelLogs=yes
-ProtectClock=yes
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes
 LockPersonality=yes
-RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RemoveIPC=yes
 # Explicitly allow network access (required for socat)

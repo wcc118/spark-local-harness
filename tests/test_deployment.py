@@ -85,6 +85,21 @@ def test_dashboard_backend_security_hardening():
     assert "PrivateTmp=yes" in content
 
 
+def test_user_units_avoid_capability_dropping_directives():
+    """Keep the units runnable by the unprivileged user manager on the target host."""
+    incompatible = (
+        "ProtectKernelTunables=",
+        "ProtectKernelModules=",
+        "ProtectKernelLogs=",
+        "ProtectClock=",
+        "ProtectRuntimeDirectory=",
+        "RestrictRealtime=",
+    )
+    for name in ("dashboard-backend.service", "socat-lan-proxy.service"):
+        content = read_unit(name)
+        assert all(directive not in content for directive in incompatible)
+
+
 def test_dashboard_backend_does_not_use_private_network():
     """Verify dashboard-backend.service does not use PrivateNetwork=yes (removes network isolation)."""
     content = read_unit("dashboard-backend.service")
@@ -227,13 +242,6 @@ def test_units_have_lock_personality():
     for name in ("dashboard-backend.service", "socat-lan-proxy.service"):
         content = read_unit(name)
         assert "LockPersonality=yes" in content
-
-
-def test_units_have_protect_kernel_tunables():
-    """Verify both units protect kernel tunables."""
-    for name in ("dashboard-backend.service", "socat-lan-proxy.service"):
-        content = read_unit(name)
-        assert "ProtectKernelTunables=yes" in content
 
 
 def test_dashboard_backend_requires_loopback_host_validation():
