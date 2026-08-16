@@ -1,0 +1,63 @@
+{
+  "model": "qwen/qwen3.8-27b",
+  "endpoint": "lm-studio",
+  "serving_profile": {
+    "context": 16384,
+    "reasoning_budget": 4000,
+    "reasoning_level": "low",
+    "temperature": 0.2,
+    "max_completion_tokens": 4096
+  },
+  "warmup_seconds": 1.140565,
+  "direct_trials": {
+    "scout": {
+      "positive_trials": 3,
+      "negative_trials": 1,
+      "recall_rate": 1.0,
+      "false_positive_rate": 0.0,
+      "raw_schema_rate": 0.0,
+      "single_fence_normalized_schema_rate": 1.0,
+      "mean_wall_seconds": 19.624295,
+      "total_tokens": 5316,
+      "reasoning_tokens": 2988,
+      "decision": "promoted-for-supplied-evidence-direct-scouting"
+    },
+    "failure-analyst": {
+      "positive_trials": 3,
+      "negative_trials": 1,
+      "recall_rate": 1.0,
+      "false_positive_rate": 0.0,
+      "raw_schema_rate": 0.0,
+      "single_fence_normalized_schema_rate": 0.75,
+      "mean_wall_seconds": 19.758127,
+      "total_tokens": 4918,
+      "reasoning_tokens": 1623,
+      "decision": "not-promoted-negative-control-schema-failure"
+    },
+    "test-designer": {
+      "positive_trials": 3,
+      "negative_trials": 1,
+      "recall_rate": 1.0,
+      "false_positive_rate": 0.0,
+      "raw_schema_rate": 0.0,
+      "single_fence_normalized_schema_rate": 0.75,
+      "mean_wall_seconds": 43.345597,
+      "total_tokens": 10616,
+      "reasoning_tokens": 5865,
+      "decision": "not-promoted-negative-control-schema-failure"
+    }
+  },
+  "mapper": {
+    "trials": 3,
+    "expected_evidence_recalled": 2,
+    "schema_valid_trials": 0,
+    "third_trial_wall_seconds": 154.76,
+    "third_trial_tokens": 64061,
+    "third_trial_turns": 8,
+    "third_trial_tool_calls": 13,
+    "decision": "not-promoted-tool-loop-cost-and-schema-incompatibility"
+  },
+  "normalization_policy": "accept exactly one JSON fence with no surrounding prose; reject all other wrappers",
+  "authority": "all roles remain advisory; no repository, GitHub, workflow, approval, or merge authority",
+  "raw_outputs_committed": false
+}
