@@ -76,6 +76,9 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
     assert stable.read_bytes() == (ROOT / "bin/codex-local-worker-v4").read_bytes()
     runtime = Path(next(line.split("=", 1)[1] for line in first.stdout.splitlines() if line.startswith("runtime=")))
     assert (runtime / "src/codex_local_harness").is_dir()
+    assert list(runtime.rglob("*.py"))
+    assert not list(runtime.rglob("*.pyc"))
+    assert not list(runtime.rglob("__pycache__"))
     second = subprocess.run(
         [str(ROOT / "bin/promote-v4-worker")],
         check=True,

@@ -37,14 +37,15 @@ chmod 600 "$backup_dir/SHA256SUMS"
 
 bundle_hash=$(
   cd "$candidate_source"
-  find codex_local_harness -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+  find codex_local_harness -type f -name '*.py' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
 )
 runtime_dir=$runtime_root/$bundle_hash
 if [[ ! -d $runtime_dir/src/codex_local_harness ]]; then
   runtime_tmp=$(mktemp -d --tmpdir="$runtime_root")
-  install -d -m 700 "$runtime_tmp/src"
-  cp -a "$candidate_source/codex_local_harness" "$runtime_tmp/src/"
-  chmod -R go-rwx "$runtime_tmp"
+  while IFS= read -r -d '' source_file; do
+    relative_path=${source_file#"$candidate_source/"}
+    install -D -m 600 "$source_file" "$runtime_tmp/src/$relative_path"
+  done < <(find "$candidate_source/codex_local_harness" -type f -name '*.py' -print0 | sort -z)
   mv "$runtime_tmp" "$runtime_dir"
 fi
 ln -s "$runtime_dir" "$runtime_root/current.new"
