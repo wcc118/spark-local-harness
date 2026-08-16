@@ -17,7 +17,7 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
     --plans %h/.local/share/codex-local-harness/health/plans.jsonl \
     --host 127.0.0.1 \
     --port 8765 \
-    --release v0.4.3 \
+    --release v0.4.4 \
     --mode live
 # Security hardening
 NoNewPrivileges=yes
