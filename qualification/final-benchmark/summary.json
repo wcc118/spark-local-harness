@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "decision": "promote-with-followups",
+  "baseline_seed": "6aa7e82530f55c1628593952b18ef46baef072b0",
+  "candidate_commit": "912f7449c8e7c70c8e2a55de201b90131df03072",
+  "serving_profile": "profiles/final-candidate.freeze.json",
+  "comparability": {
+    "tasks": "same seeded small, medium, and complex tasks",
+    "hardware": "same DGX Spark",
+    "model": "Qwen/Qwen3-Coder-Next-FP8",
+    "load_time_excluded": true,
+    "frontier_token_telemetry": "unsupported",
+    "estimated_local_inference_cost": "$0 marginal API cost; electricity and hardware amortization excluded"
+  },
+  "baseline": {
+    "successful_pipeline_outcomes": 1,
+    "correct_final_implementations": 2,
+    "local_tokens_core": 8234089,
+    "local_tokens_including_audit_overhead": 8745955,
+    "wall_seconds_core": 2573.836,
+    "wall_seconds_including_audit_overhead": 2813.55,
+    "reviewer_checkout_containment_failures": 1,
+    "malformed_terminal_results": 1,
+    "cases": {
+      "small": {
+        "issue": "https://github.com/wcc118/codex-harness-benchmark/issues/35",
+        "result": "passed",
+        "local_tokens_core": 1858730,
+        "local_tokens_including_audit_overhead": 2370596,
+        "wall_seconds_core": 654.178
+      },
+      "medium": {
+        "issue": "https://github.com/wcc118/codex-harness-benchmark/issues/37",
+        "result": "implementation-correct-pipeline-blocked",
+        "local_tokens_core": 816453,
+        "wall_seconds_core": 348.679
+      },
+      "complex": {
+        "issue": "https://github.com/wcc118/codex-harness-benchmark/issues/39",
+        "result": "failed",
+        "local_tokens_core": 5558906,
+        "wall_seconds_core": 1570.979
+      }
+    }
+  },
+  "candidate": {
+    "successful_pipeline_outcomes": 3,
+    "correct_final_implementations": 3,
+    "fully_autonomous_outcomes": 0,
+    "local_tokens": 3611342,
+    "wall_seconds": 950.635,
+    "local_token_reduction_vs_baseline_core": 0.561416,
+    "wall_time_reduction_vs_baseline_core": 0.630652,
+    "source_checkout_containment_failures": 0,
+    "malformed_terminal_results": 0,
+    "incorrect_reviewer_approvals": 1,
+    "codex_interventions": 3,
+    "local_correction_runs": 3,
+    "workflow_postflight_failures": 3,
+    "cases": {
+      "small": {
+        "issue": "https://github.com/wcc118/codex-harness-benchmark/issues/46",
+        "pull_request": "https://github.com/wcc118/codex-harness-benchmark/pull/49",
+        "reviewed_head": "0d4ceb5de563a3f25fa9ee061a695dbcae60d37f",
+        "result": "passed-after-correction",
+        "local_tokens": 1219074,
+        "wall_seconds": 284.037,
+        "codex_finding": "hash collisions were incorrectly treated as duplicate values"
+      },
+      "medium": {
+        "issue": "https://github.com/wcc118/codex-harness-benchmark/issues/47",
+        "pull_request": "https://github.com/wcc118/codex-harness-benchmark/pull/50",
+        "reviewed_head": "32e5707d1c61427ff5b9ab225c15ff830e299ba7",
+        "result": "passed-after-correction",
+        "local_tokens": 725856,
+        "wall_seconds": 188.643,
+        "codex_finding": "missing mapping keys raised KeyError instead of following the required default behavior"
+      },
+      "complex": {
+        "issue": "https://github.com/wcc118/codex-harness-benchmark/issues/48",
+        "pull_request": "https://github.com/wcc118/codex-harness-benchmark/pull/51",
+        "reviewed_head": "fb9217bc737907e3ba6432753852de06c1ff722d",
+        "result": "passed-after-correction",
+        "local_tokens": 1666412,
+        "wall_seconds": 477.955,
+        "codex_finding": "the first reviewer approved nonportable os.sync and os.O_DIRECTORY usage"
+      }
+    }
+  },
+  "raw_evidence": {
+    "local_run_logs": "~/.local/share/opencode-orchestration/runs/<run-id>.jsonl",
+    "candidate_health_ledger": "~/.local/share/codex-local-harness/health/runs.jsonl",
+    "durable_issue_state": "wcc118/codex-harness-benchmark issues 35, 37, 39, 46, 47, and 48"
+  },
+  "followups": [
+    "Retry deterministic PR-head verification once after a successful push to tolerate GitHub eventual consistency.",
+    "Improve reviewer defect recall for platform and durability claims without restoring unbounded tool use.",
+    "Add deterministic scratch-file and formatting checks before publication."
+  ]
+}
