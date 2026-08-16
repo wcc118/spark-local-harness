@@ -30,6 +30,11 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "runtime.advisory_output" in content
     assert "select(.type == \"text\") | .part.text" in content
     assert "helper) default_worker_timeout=300" in content
+    assert "reviewer) default_worker_timeout=120" in content
+    assert "CODEX_LOCAL_REVIEWER_TOKEN_BUDGET" in content
+    assert ".agent.reviewer.steps = 4" in content
+    assert "Maximum steps reached for this agent" in content
+    assert "REVIEW_INCOMPLETE_JSON=" in (ROOT / "src/codex_local_harness/review.py").read_text(encoding="utf-8")
     assert "delivery-dirty-checkout" in content
     assert "PYTHONDONTWRITEBYTECODE=1" in content
     assert "diagnostic_started=0" in content

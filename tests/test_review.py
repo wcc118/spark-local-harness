@@ -16,6 +16,7 @@ from codex_local_harness.review import (
     prepare_prompt,
     publish_result,
     render_comment,
+    incomplete_result,
     validate_result,
     verify_checkout_unchanged,
 )
@@ -51,7 +52,7 @@ def valid_result(**changes):
         "reviewed_head_sha": SHA,
         "criteria": [{"criterion": "works", "status": "pass", "evidence": "tests"}],
         "findings": [],
-        "tests": [{"command": "pytest", "exit_code": 0}],
+        "tests": [{"command": "pytest", "exit_code": 0, "provenance": "reviewer-observed"}],
         "confidence": "high",
         "summary": "All criteria are supported.",
         "escalation_reason": None,
@@ -324,6 +325,33 @@ def test_validate_result_normalizes_omitted_optional_escalation_reason(tmp_path)
     assert validate_result(value, envelope(tmp_path))["escalation_reason"] is None
 
 
+def test_validate_result_distinguishes_observed_and_reported_tests(tmp_path):
+    reported = valid_result(tests=[{"command": "pytest -q", "provenance": "task-reported"}])
+    assert validate_result(reported, envelope(tmp_path))["tests"][0]["provenance"] == "task-reported"
+    observed = valid_result(tests=[{"command": "git diff --check", "exit_code": 0, "provenance": "harness-observed"}])
+    assert validate_result(observed, envelope(tmp_path))["tests"][0]["provenance"] == "harness-observed"
+    with pytest.raises(ReviewError, match="provenance"):
+        validate_result(valid_result(tests=[{"command": "pytest", "exit_code": 0}]), envelope(tmp_path))
+    with pytest.raises(ReviewError, match="exit_code"):
+        validate_result(valid_result(tests=[{"command": "pytest", "provenance": "reviewer-observed"}]), envelope(tmp_path))
+
+
+def test_incomplete_result_is_nonpublishing_and_identity_bound(tmp_path):
+    result = incomplete_result(envelope(tmp_path), "token-budget")
+    assert result == {
+        "schema_version": 1,
+        "status": "incomplete",
+        "reason": "token-budget",
+        "repository": REPO,
+        "issue": 7,
+        "pull_request": 11,
+        "reviewed_head_sha": SHA,
+        "published": False,
+    }
+    with pytest.raises(ReviewError, match="invalid incomplete reason"):
+        incomplete_result(envelope(tmp_path), "made-up")
+
+
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
@@ -345,6 +373,9 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert "IMMUTABLE_REVIEW_ENVELOPE=" in prompt
     assert SHA in prompt
     assert RESULT_PREFIX in prompt
+    assert "Inspect the harness-observed exact-head diff" in prompt
+    assert "evidence boundary is intentionally tool-free" in prompt
+    assert "harness-observed, reviewer-observed, or task-reported" in prompt
     assert prompt.endswith("REPORTED_TASK_CLAIMS:\nReview the change")
 
 

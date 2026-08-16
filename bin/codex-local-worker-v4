@@ -122,12 +122,16 @@ fi
 
 case "$worker_role" in
   helper) default_worker_timeout=300 ;;
-  reviewer) default_worker_timeout=600 ;;
+  reviewer) default_worker_timeout=120 ;;
   coder) default_worker_timeout=1800 ;;
 esac
 worker_timeout=${CODEX_LOCAL_TIMEOUT_SECONDS:-$default_worker_timeout}
 [[ "$worker_timeout" =~ ^[1-9][0-9]*$ ]] || {
   echo "ERROR: CODEX_LOCAL_TIMEOUT_SECONDS must be a positive integer" >&2; exit 2;
+}
+reviewer_token_budget=${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-250000}
+[[ "$reviewer_token_budget" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: CODEX_LOCAL_REVIEWER_TOKEN_BUDGET must be a positive integer" >&2; exit 2;
 }
 
 worker_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -160,14 +164,10 @@ jq '.mcp.github.enabled = false
         }
       })
     | .agent.reviewer.permission = ((.agent.reviewer.permission // {}) + {
-        "external_directory": "deny",
-        "bash": {
-          "*": "deny", "git status*": "allow", "git diff*": "allow",
-          "git log*": "allow", "git show*": "allow", "rg *": "allow",
-          "ls*": "allow", "pwd": "allow", "sed *": "allow",
-          "python3 -m pytest*": "allow", "pytest*": "allow"
-        }
-      })' /home/connellwc83/.config/opencode/opencode.json \
+        "external_directory": "deny", "bash": "deny", "read": "deny",
+        "glob": "deny", "grep": "deny"
+      })
+    | .agent.reviewer.steps = 4' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
 cp -a /home/connellwc83/.config/opencode/agents/. \
   "$worker_runtime_home/.config/opencode/agents/"
@@ -330,6 +330,19 @@ fi
 inference_status=$?
 set -e
 
+reviewer_observed_tokens=0
+reviewer_budget_reason=
+if [[ $worker_role == reviewer ]]; then
+  reviewer_observed_tokens=$(jq -s '[.[] | select(.type == "step_finish") | (.part.tokens.total // 0)] | add // 0' "$worker_log")
+  if (( reviewer_observed_tokens > reviewer_token_budget )); then
+    reviewer_budget_reason=token-budget
+  elif (( inference_status == 124 || inference_status == 137 )); then
+    reviewer_budget_reason=wall-time-budget
+  elif grep -q 'Maximum steps reached for this agent' "$worker_log"; then
+    reviewer_budget_reason=step-budget
+  fi
+fi
+
 output_status=0
 if [[ $worker_agent == advisory ]]; then
   env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.advisory_output --log "$worker_log" || output_status=$?
@@ -340,13 +353,21 @@ workflow_status=$inference_status
 if (( workflow_status == 0 && output_status != 0 )); then
   workflow_status=65
 fi
-if [[ $worker_role == reviewer && $inference_status == 0 ]]; then
+if [[ $worker_role == reviewer && -n $reviewer_budget_reason ]]; then
+  "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason "$reviewer_budget_reason" \
+    --result-out "$worker_result" || true
+  workflow_status=75
+elif [[ $worker_role == reviewer && $inference_status == 0 ]]; then
   set +e
   "${review_cli[@]}" finalize --envelope "$worker_envelope" --log "$worker_log" \
     --run-id "$worker_run_id" --result-out "$worker_result"
   finalize_status=$?
   set -e
-  [[ $finalize_status == 0 ]] || workflow_status=65
+  if [[ $finalize_status != 0 ]]; then
+    "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason malformed-result \
+      --result-out "$worker_result" || true
+    workflow_status=65
+  fi
 fi
 if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-0} == 1 ]]; then
   set +e
@@ -378,12 +399,21 @@ if [[ $record_run == 1 ]]; then
     delivery_ready=false
     if (( inference_status != 0 )); then
       case "$inference_status" in
-        124|137) health_status=timed-out; failure_class=execution-timeout ;;
+        124|137)
+          health_status=timed-out
+          if [[ $worker_role == reviewer ]]; then
+            failure_class=review-wall-time-budget
+          else
+            failure_class=execution-timeout
+          fi
+          ;;
         130|143) health_status=interrupted; failure_class=execution-interrupted ;;
         *) failure_class=infrastructure-inference ;;
       esac
     else
-      if (( output_status != 0 )); then
+      if [[ $reviewer_budget_reason == token-budget ]]; then
+        failure_class=review-token-budget
+      elif (( output_status != 0 )); then
         failure_class=malformed-result
       else
         failure_class=workflow-postflight
