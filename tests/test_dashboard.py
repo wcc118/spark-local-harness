@@ -14,6 +14,7 @@ from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
 from codex_local_harness.frontier import FrontierStatus
 from codex_local_harness.workflow import WorkflowEvent
 from codex_local_harness.operation_usage import OperationUsageSnapshot
+from codex_local_harness.plan_event import PlanEvent
 
 
 def fixture_source(tmp_path):
@@ -373,3 +374,71 @@ def test_evidence_first_case_has_pending_milestones_and_visible_activity(tmp_pat
     assert "evidence · active" in page
     assert 'aria-label="Unassigned activities"' in page
     assert page.count('class="milestone pending"') == 8
+
+
+def test_running_plan_renders_beside_matching_workflow_and_escapes_public_text(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    plans = tmp_path / "plans.jsonl"
+    append_record(workflow, WorkflowEvent(
+        "workflow", "issue-55", "local-work", "active", "2026-08-16T06:00:00Z", 55,
+        session_id="thread-a", repository="owner/repo",
+    ))
+    append_record(plans, PlanEvent(
+        "plan-1", "issue-55", 55, "Build <truthfully>", (
+            {"step_id": "one", "summary": "Schema", "state": "completed", "evidence_refs": ["test:schema"]},
+            {"step_id": "two", "summary": "Live smoke", "state": "active"},
+            {"step_id": "three", "summary": "Merge", "state": "pending"},
+        ), "2026-08-16T06:00:00Z", "codex", session_id="thread-a", repository="owner/repo",
+    ))
+    snapshot = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, plans=plans).snapshot()
+    page = render_dashboard(snapshot)
+    assert page.count('class="operation-pair"') == 1
+    assert "Running plan" in page and "1 / 3" in page
+    assert "current: Live smoke" in page
+    assert "Build &lt;truthfully&gt;" in page and "Build <truthfully>" not in page
+    assert 'class="plan-step active"' in page
+    assert 'class="plan-step pending"' in page
+    assert "Revision history (1)" in page
+    assert "grid-template-columns:minmax(0,3fr) minmax(300px,2fr)" in page
+    assert "@media (max-width:900px)" in page
+    assert "@media (prefers-reduced-motion:no-preference)" in page
+
+
+def test_missing_plan_is_explicit_and_malformed_source_is_warning(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent("workflow", "issue-55", "review", "active", "2026-08-16T06:00:00Z", 55))
+    missing_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, plans=tmp_path / "missing.jsonl").snapshot())
+    assert "Plan unavailable. No durable public plan has been published." in missing_page
+    malformed = tmp_path / "plans.jsonl"
+    malformed.write_text("not-json\n", encoding="utf-8")
+    malformed_page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow, plans=malformed).snapshot())
+    assert "plans=malformed" in malformed_page
+
+
+def test_plan_source_participates_in_sse_fingerprint(tmp_path):
+    base = fixture_source(tmp_path)
+    plans = tmp_path / "plans.jsonl"
+    plans.write_text("", encoding="utf-8")
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, plans=plans)
+    before = source.fingerprint()
+    plans.write_text("\n", encoding="utf-8")
+    assert source.fingerprint() != before
+
+
+def test_plan_only_session_is_selectable_without_fabricating_workflow(tmp_path):
+    base = fixture_source(tmp_path)
+    plans = tmp_path / "plans.jsonl"
+    append_record(plans, PlanEvent(
+        "plan-only", "issue-55", 55, "Plan before workflow", (
+            {"step_id": "one", "summary": "Await workflow", "state": "active"},
+        ), "2026-08-16T06:00:00Z", "codex", session_id="plan-session", repository="owner/repo",
+    ))
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, plans=plans)
+    snapshot = source.snapshot("plan-session")
+    assert snapshot["selected_session"] == "plan-session"
+    assert snapshot["operations"] == []
+    assert [item["session_id"] for item in snapshot["plans"]] == ["plan-session"]
+    assert any(item["session_id"] == "plan-session" and item["operations"] == 0 for item in snapshot["sessions"])
+    assert "Workflow unavailable for this plan." in render_dashboard(snapshot)
