@@ -5,8 +5,6 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
-from pathlib import Path
-import tempfile
 
 import pytest
 
@@ -247,8 +245,8 @@ def test_not_applicable_stage_is_rendered_as_not_needed(tmp_path):
     assert ".stage.not-applicable{color:#737b8c;border-color:#343946;background:transparent}" in page
 
 
-def test_render_dashboard_emits_single_title():
-    base = fixture_source(Path(tempfile.mkdtemp()))
+def test_render_dashboard_emits_single_title(tmp_path):
+    base = fixture_source(tmp_path)
     snapshot = base.snapshot()
     page = render_dashboard(snapshot)
     # Regression assertion: exactly one title element with the expected text
