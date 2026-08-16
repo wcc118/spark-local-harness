@@ -74,3 +74,20 @@ def test_parser_reports_malformed_line(tmp_path):
     path.write_text('{}\n{"type":"step_finish","part":{"tokens":{"input":-1}}}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="line 2"):
         parse_log(path)
+
+
+def test_cli_can_record_malformed_result_without_claiming_token_usage(tmp_path):
+    log = tmp_path / "events.jsonl"
+    records = tmp_path / "health.jsonl"
+    log.write_text("not-json\n", encoding="utf-8")
+    assert main([
+        "--log", str(log), "--records", str(records), "--run-id", "run-bad",
+        "--issue", "53", "--role", "helper", "--model", "qwen3.8-27b",
+        "--profile", "codex-led-v4", "--task-class", "routine", "--status", "failure",
+        "--failure-class", "malformed-result", "--inference-status", "0",
+        "--workflow-status", "65", "--allow-malformed", "--repository", "owner/repo",
+    ]) == 0
+    health = read_jsonl(records)[0]
+    assert health.failure_class == "malformed-result"
+    assert health.usage.local_total == 0
+    assert health.repository == "owner/repo"

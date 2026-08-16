@@ -99,3 +99,17 @@ def test_cli_appends_hidden_failure_and_interrupted_lifecycle(tmp_path, capsys):
     assert len(capsys.readouterr().out.splitlines()) == 2
     assert read_records(adjudications, Adjudication)[0].verdict == "failed"
     assert read_records(lifecycle, LifecycleEvent)[0].event == "interrupted"
+
+
+def test_diagnostic_publication_is_idempotent_and_rejects_conflict(tmp_path):
+    path = tmp_path / "lifecycle.jsonl"
+    record = LifecycleEvent("run-1:started", "run-1", "started", "2026-08-15T17:00:00Z")
+    assert append_record(path, record) is True
+    original = path.read_bytes()
+    assert append_record(path, record) is False
+    assert path.read_bytes() == original
+    with pytest.raises(ValueError, match="conflicting diagnostic record"):
+        append_record(
+            path,
+            LifecycleEvent("run-1:started", "run-1", "cancelled", "2026-08-15T17:01:00Z"),
+        )

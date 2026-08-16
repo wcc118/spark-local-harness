@@ -27,7 +27,7 @@ cleanup() {
       124|137) diagnostic_event=timed-out ;;
       130|143) diagnostic_event=interrupted ;;
     esac
-    diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
     diagnostic_elapsed=$(( $(date -u +%s) - worker_started_epoch ))
     diagnostic_dirty=0
     if [[ $worker_role == coder && -d $worker_repo_path ]]; then
@@ -36,19 +36,25 @@ cleanup() {
         diagnostic_dirty=$(grep -c '^' <<<"$diagnostic_status_snapshot")
       fi
     fi
-    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
+    if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
       --records "$lifecycle_records" --event-id "$worker_run_id:$diagnostic_event" \
       --run-id "$worker_run_id" --event "$diagnostic_event" --observed-at "$diagnostic_now" \
       --wall-seconds "$diagnostic_elapsed" --exit-status "$cleanup_status" \
       --dirty-entries "$diagnostic_dirty" --issue "$worker_issue" --role "$worker_role" \
       --model "$worker_model" --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" \
-      >/dev/null 2>&1 || true
-    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+      >/dev/null; then
+      echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
+      record_publication_failure cleanup lifecycle
+    fi
+    if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
       --records "$workflow_records" --event-id "$worker_run_id:$diagnostic_event" \
       --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state interrupted \
       --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
       --role "$worker_role" --model "$worker_model" --stop-reason "$diagnostic_event" \
-      >/dev/null 2>&1 || true
+      "${workflow_identity_args[@]}" >/dev/null; then
+      echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
+      record_publication_failure cleanup workflow
+    fi
   fi
   if [[ -n $task_temp && -f $task_temp ]]; then
     rm -f -- "$task_temp"
@@ -181,7 +187,22 @@ fi
 candidate_source=/home/connellwc83/projects/codex-local-harness/src
 lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/lifecycle.jsonl}
 workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/workflow.jsonl}
+publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/publication-failures.jsonl}
 worker_operation_id=${CODEX_LOCAL_OPERATION_ID:-issue-$worker_issue}
+workflow_identity_args=()
+[[ -z $worker_pr ]] || workflow_identity_args+=(--pull-request "$worker_pr")
+record_publication_failure() {
+  local publication_phase=$1
+  local publication_target=$2
+  local publication_now
+  publication_now=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.publication_cli \
+    --records "$publication_failure_records" \
+    --failure-id "$worker_run_id:$publication_phase:$publication_target" \
+    --run-id "$worker_run_id" --phase "$publication_phase" --target "$publication_target" \
+    --error-class ingestion-failed --observed-at "$publication_now" >/dev/null 2>&1 || \
+      echo "WARN: publication failure record could not be written for run $worker_run_id" >&2
+}
 review_cli=(
   env PYTHONPATH="$candidate_source"
   python3 -m codex_local_harness.review
@@ -212,18 +233,24 @@ fi
 echo "Starting local worker: role=$worker_role tier=$worker_tier model=$worker_model run_id=$worker_run_id" >&2
 if [[ $record_run == 1 ]]; then
   worker_started_epoch=$(date -u +%s)
-  diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
+  diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+  diagnostic_started=1
+  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
     --records "$lifecycle_records" --event-id "$worker_run_id:started" \
     --run-id "$worker_run_id" --event started --observed-at "$diagnostic_now" \
     --issue "$worker_issue" --role "$worker_role" --model "$worker_model" \
-    --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" >/dev/null
-  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
-    --records "$workflow_records" --event-id "$worker_run_id:local-work-started" \
+    --profile codex-led-v4 --task-class "${CODEX_LOCAL_TASK_CLASS:-unclassified}" >/dev/null; then
+    echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
+    record_publication_failure start lifecycle
+  fi
+  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    --records "$workflow_records" --event-id "$worker_run_id:$worker_workflow_stage-started" \
     --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state active \
     --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
-    --role "$worker_role" --model "$worker_model" >/dev/null
-  diagnostic_started=1
+    --role "$worker_role" --model "$worker_model" "${workflow_identity_args[@]}" >/dev/null; then
+    echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
+    record_publication_failure start workflow
+  fi
 fi
 set +e
 worker_env=(env -i HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="${LOGNAME:-worker}"
@@ -245,12 +272,16 @@ fi
 inference_status=$?
 set -e
 
+output_status=0
 if [[ $worker_agent == advisory ]]; then
-  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.advisory_output --log "$worker_log"
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.advisory_output --log "$worker_log" || output_status=$?
 else
-  jq -r 'select(.type == "text") | .part.text' "$worker_log"
+  jq -r 'select(.type == "text") | .part.text' "$worker_log" || output_status=$?
 fi
 workflow_status=$inference_status
+if (( workflow_status == 0 && output_status != 0 )); then
+  workflow_status=65
+fi
 if [[ $worker_role == reviewer && $inference_status == 0 ]]; then
   set +e
   "${review_cli[@]}" finalize --envelope "$worker_envelope" --log "$worker_log" \
@@ -269,9 +300,13 @@ if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POS
 fi
 
 if [[ $record_run == 1 ]]; then
-  /home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh \
+  legacy_ledger=${CODEX_LOCAL_LEGACY_LEDGER:-/home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh}
+  if ! "$legacy_ledger" \
     "$worker_repository" "$worker_issue" "$worker_role" "$worker_model" "$worker_log" \
-    "run_id=$worker_run_id inference_status=$inference_status workflow_status=$workflow_status"
+    "run_id=$worker_run_id inference_status=$inference_status workflow_status=$workflow_status"; then
+    echo "WARN: legacy aggregate ledger ingestion failed for run $worker_run_id" >&2
+    record_publication_failure finish legacy-ledger
+  fi
 
   health_records=${CODEX_LOCAL_HEALTH_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/runs.jsonl}
   task_class=${CODEX_LOCAL_TASK_CLASS:-unclassified}
@@ -285,12 +320,16 @@ if [[ $record_run == 1 ]]; then
     delivery_ready=false
     if (( inference_status != 0 )); then
       case "$inference_status" in
-        124|137) failure_class=execution-timeout ;;
-        130|143) failure_class=execution-interrupted ;;
+        124|137) health_status=timed-out; failure_class=execution-timeout ;;
+        130|143) health_status=interrupted; failure_class=execution-interrupted ;;
         *) failure_class=infrastructure-inference ;;
       esac
     else
-      failure_class=workflow-postflight
+      if (( output_status != 0 )); then
+        failure_class=malformed-result
+      else
+        failure_class=workflow-postflight
+      fi
     fi
   fi
   if [[ $worker_role == coder ]]; then
@@ -312,41 +351,59 @@ if [[ $record_run == 1 ]]; then
     --inference-status "$inference_status" --workflow-status "$workflow_status"
     --delivery-ready "$delivery_ready" --dirty-entries "$dirty_entries"
     --generated-artifacts "$generated_artifacts"
+    --repository "$worker_repository"
   )
+  [[ -z $worker_pr ]] || health_args+=(--pull-request "$worker_pr")
   [[ -z $failure_class ]] || health_args+=(--failure-class "$failure_class")
+  (( output_status == 0 )) || health_args+=(--allow-malformed)
   if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.opencode "${health_args[@]}" >/dev/null; then
     echo "WARN: health telemetry ingestion failed for run $worker_run_id" >&2
+    record_publication_failure finish health
   fi
   diagnostic_event=completed
   case "$inference_status" in
     124|137) diagnostic_event=timed-out ;;
     130|143) diagnostic_event=interrupted ;;
   esac
-  diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
   diagnostic_elapsed=$(( $(date -u +%s) - worker_started_epoch ))
-  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
+  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.diagnostic_cli lifecycle \
     --records "$lifecycle_records" --event-id "$worker_run_id:$diagnostic_event" \
     --run-id "$worker_run_id" --event "$diagnostic_event" --observed-at "$diagnostic_now" \
     --wall-seconds "$diagnostic_elapsed" --exit-status "$workflow_status" \
     --dirty-entries "$dirty_entries" --issue "$worker_issue" --role "$worker_role" \
-    --model "$worker_model" --profile codex-led-v4 --task-class "$task_class" >/dev/null || \
-      echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
+    --model "$worker_model" --profile codex-led-v4 --task-class "$task_class" >/dev/null; then
+    echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
+    record_publication_failure finish lifecycle
+  fi
   workflow_state=passed
-  (( workflow_status == 0 )) || workflow_state=failed
-  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
-    --records "$workflow_records" --event-id "$worker_run_id:local-work-$workflow_state" \
+  workflow_stop_args=()
+  if (( workflow_status != 0 )); then
+    workflow_state=failed
+    case "$diagnostic_event" in
+      timed-out|interrupted) workflow_state=interrupted; workflow_stop_args=(--stop-reason "$diagnostic_event") ;;
+    esac
+  fi
+  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    --records "$workflow_records" --event-id "$worker_run_id:$worker_workflow_stage-$workflow_state" \
     --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state "$workflow_state" \
     --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
-    --role "$worker_role" --model "$worker_model" >/dev/null || \
-      echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
+    --role "$worker_role" --model "$worker_model" "${workflow_identity_args[@]}" \
+    "${workflow_stop_args[@]}" >/dev/null; then
+    echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
+    record_publication_failure finish workflow
+  fi
   if [[ $worker_role == coder ]]; then
     delivery_state=failed
     [[ $delivery_ready == true ]] && delivery_state=passed
-    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
       --records "$workflow_records" --event-id "$worker_run_id:delivery-$delivery_state" \
       --operation-id "$worker_operation_id" --stage delivery --state "$delivery_state" \
       --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
-      --role "$worker_role" --model "$worker_model" >/dev/null || true
+      --role "$worker_role" --model "$worker_model" "${workflow_identity_args[@]}" >/dev/null; then
+      echo "WARN: delivery telemetry ingestion failed for run $worker_run_id" >&2
+      record_publication_failure finish delivery
+    fi
   fi
   diagnostic_finalized=1
 fi

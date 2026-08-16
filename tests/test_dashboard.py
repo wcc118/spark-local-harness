@@ -9,7 +9,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from codex_local_harness.dashboard import DashboardSource, make_handler, render_dashboard
-from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, append_record
+from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, PublicationFailure, append_record
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
 from codex_local_harness.frontier import FrontierStatus
 from codex_local_harness.workflow import WorkflowEvent
@@ -253,3 +253,25 @@ def test_render_dashboard_emits_single_title(tmp_path):
     assert page.count("<title>") == 1
     assert page.count("</title>") == 1
     assert "<title>Codex agent harness diagnostics</title>" in page
+
+
+def test_publication_failures_are_visible_without_hiding_valid_runs(tmp_path):
+    base = fixture_source(tmp_path)
+    failures = tmp_path / "publication-failures.jsonl"
+    append_record(failures, PublicationFailure(
+        "run-1:finish:health",
+        "run-1",
+        "finish",
+        "health",
+        "ingestion-failed",
+        "2026-08-16T00:00:00Z",
+    ))
+    snapshot = DashboardSource(
+        base.runs,
+        base.adjudications,
+        base.lifecycle,
+        publication_failures=failures,
+    ).snapshot()
+    assert snapshot["summary"]["runs"] == 1
+    assert len(snapshot["publication_failures"]) == 1
+    assert "Telemetry publication failures:</strong> 1" in render_dashboard(snapshot)

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+install_bin=${CODEX_LOCAL_INSTALL_BIN:-/home/connellwc83/.local/bin}
+backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
+stable_worker=${CODEX_LOCAL_STABLE_WORKER:-$install_bin/codex-local-worker}
+candidate_worker=${CODEX_LOCAL_CANDIDATE_WORKER:-$script_dir/codex-local-worker-v4}
+expected_baseline=37ff3c637f71105fd14f3a700d2e7a95d0a680851ba4d502c5f05a076eabd415
+
+for required in "$stable_worker" "$candidate_worker"; do
+  [[ -f $required ]] || { echo "ERROR: required worker is missing: $required" >&2; exit 2; }
+done
+bash -n "$candidate_worker"
+observed_stable=$(sha256sum "$stable_worker" | cut -d' ' -f1)
+observed_candidate=$(sha256sum "$candidate_worker" | cut -d' ' -f1)
+if [[ $observed_stable == "$observed_candidate" ]]; then
+  printf 'status=already-promoted\nworker_sha256=%s\n' "$observed_candidate"
+  exit 0
+fi
+[[ $observed_stable == "$expected_baseline" ]] || {
+  echo "ERROR: stable worker is neither qualified baseline nor current candidate: $observed_stable" >&2
+  exit 65
+}
+
+backup_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+backup_dir=$backup_root/$backup_id
+install -d -m 700 "$install_bin" "$backup_root" "$backup_dir"
+install -m 600 "$stable_worker" "$backup_dir/codex-local-worker"
+printf '%s  codex-local-worker\n' "$observed_stable" >"$backup_dir/SHA256SUMS"
+chmod 600 "$backup_dir/SHA256SUMS"
+install -m 755 "$candidate_worker" "$stable_worker"
+
+printf 'status=promoted\nbackup=%s\nworker_sha256=%s\n' \
+  "$backup_dir" "$(sha256sum "$stable_worker" | cut -d' ' -f1)"

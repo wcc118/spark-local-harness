@@ -44,6 +44,10 @@ codex-local-reviewer CHECKOUT --task-file PACKET.md
 `profiles/candidate-v3.json` is not installed and must not be compared until
 the corrected baseline qualification suite remains green.
 
+After review, `bin/promote-v4-worker` promotes the hardened candidate behind
+the stable entry points. It creates a private backup of the qualified baseline
+worker first and is safe to rerun after a successful promotion.
+
 ## Diagnostic dashboard
 
 The `v0.1.0` scaffold adds a localhost-only, read-only diagnostic dashboard.

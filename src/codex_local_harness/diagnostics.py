@@ -134,18 +134,71 @@ class LifecycleEvent:
         return cls(**payload)
 
 
-Record = TypeVar("Record", Adjudication, LifecycleEvent)
+@dataclass(frozen=True)
+class PublicationFailure:
+    failure_id: str
+    run_id: str
+    phase: str
+    target: str
+    error_class: str
+    observed_at: str
+    schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("failure_id", self.failure_id),
+            ("run_id", self.run_id),
+            ("phase", self.phase),
+            ("target", self.target),
+            ("error_class", self.error_class),
+        ):
+            _safe_atom(value, name)
+        _timestamp(self.observed_at)
+        if self.schema_version != DIAGNOSTIC_SCHEMA_VERSION:
+            raise ValueError("unsupported diagnostic schema version")
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> PublicationFailure:
+        return cls(**payload)
 
 
-def append_record(path: Path, record: Adjudication | LifecycleEvent) -> None:
-    """Append one sanitized diagnostic fact; existing bytes are never rewritten."""
+Record = TypeVar("Record", Adjudication, LifecycleEvent, PublicationFailure)
+
+
+def append_record(path: Path, record: Any) -> bool:
+    """Append one canonical fact; exact replay is a no-op and conflicts fail."""
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(record.as_dict(), sort_keys=True, separators=(",", ":")) + "\n"
-    with path.open("a", encoding="utf-8") as handle:
+    identity_name = next(
+        (name for name in ("adjudication_id", "event_id", "status_id", "failure_id") if hasattr(record, name)),
+        None,
+    )
+    if identity_name is None:
+        raise ValueError("record has no canonical identity")
+    identity = getattr(record, identity_name)
+    with path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                existing = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid diagnostic record at line {line_number}: {exc}") from exc
+            if existing.get(identity_name) == identity:
+                if existing != record.as_dict():
+                    raise ValueError(f"conflicting diagnostic record for {identity_name} {identity}")
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False
+        handle.seek(0, 2)
         handle.write(encoded)
         handle.flush()
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return True
 
 
 def read_records(path: Path, record_type: type[Record]) -> tuple[Record, ...]:

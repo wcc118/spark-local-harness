@@ -49,3 +49,34 @@ def test_v4_wrappers_have_valid_shell_syntax():
     for path in (ROOT / "bin").glob("codex-local-*-v4"):
         subprocess.run(["bash", "-n", str(path)], check=True)
 
+
+def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
+    install_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    install_bin.mkdir()
+    stable = install_bin / "codex-local-worker"
+    shutil.copy2(ROOT / "bin/codex-local-worker", stable)
+    environment = os.environ | {
+        "CODEX_LOCAL_INSTALL_BIN": str(install_bin),
+        "CODEX_LOCAL_BACKUP_ROOT": str(backup_root),
+        "CODEX_LOCAL_STABLE_WORKER": str(stable),
+        "CODEX_LOCAL_CANDIDATE_WORKER": str(ROOT / "bin/codex-local-worker-v4"),
+    }
+    first = subprocess.run(
+        [str(ROOT / "bin/promote-v4-worker")],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+    )
+    backup = Path(next(line.split("=", 1)[1] for line in first.stdout.splitlines() if line.startswith("backup=")))
+    assert (backup / "codex-local-worker").read_bytes() == (ROOT / "bin/codex-local-worker").read_bytes()
+    assert stable.read_bytes() == (ROOT / "bin/codex-local-worker-v4").read_bytes()
+    second = subprocess.run(
+        [str(ROOT / "bin/promote-v4-worker")],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+    )
+    assert "status=already-promoted" in second.stdout

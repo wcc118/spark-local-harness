@@ -13,6 +13,7 @@ PYTHONPATH=src python3 -m codex_local_harness.dashboard \
   --lifecycle ~/.local/share/codex-local-harness/health/lifecycle.jsonl \
   --workflow ~/.local/share/codex-local-harness/health/workflow.jsonl \
   --frontier ~/.local/share/codex-local-harness/health/frontier.jsonl \
+  --publication-failures ~/.local/share/codex-local-harness/health/publication-failures.jsonl \
   --mode live
 ```
 
@@ -42,6 +43,8 @@ shows whether displayed data is fresh.
   `not-applicable` display as `not needed`.
 - **Recorded frontier tokens** include only frontier usage present in harness
   run records. They do not estimate this interactive Codex thread.
+- **Local tokens** include finalized normalized worker runs. The total updates
+  when a run finishes; it does not estimate tokens during active inference.
 - **Interactive Codex tokens** are separate and stay `Unavailable` unless an
   authoritative measured or timestamped operator-reported value is supplied.
 - **Codex context and plan** show measured or timestamped operator-reported
@@ -61,3 +64,8 @@ changes.
 - There is no authentication because there is no non-loopback binding. A
   future remote deployment would require a separate threat model and is not
   part of `v0.1.0`.
+
+Telemetry publication is best-effort and cannot change a worker's outcome.
+Sanitized failures are retained in `publication-failures.jsonl` and displayed
+as a dashboard warning. Exact replay is idempotent; conflicting reuse of a run
+or event identity is rejected.

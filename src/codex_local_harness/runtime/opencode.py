@@ -35,6 +35,8 @@ class OpenCodeStats:
         delivery_ready: bool | None = None,
         dirty_entries: int = 0,
         generated_artifacts: int = 0,
+        repository: str | None = None,
+        pull_request: int | None = None,
     ) -> RunHealth:
         return RunHealth(
             run_id=run_id,
@@ -60,6 +62,8 @@ class OpenCodeStats:
             delivery_ready=delivery_ready,
             dirty_entries=dirty_entries,
             generated_artifacts=generated_artifacts,
+            repository=repository,
+            pull_request=pull_request,
         )
 
 
@@ -125,9 +129,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delivery-ready", choices=("true", "false", "unknown"), default="unknown")
     parser.add_argument("--dirty-entries", type=int, default=0)
     parser.add_argument("--generated-artifacts", type=int, default=0)
+    parser.add_argument("--repository")
+    parser.add_argument("--pull-request", type=int)
+    parser.add_argument("--allow-malformed", action="store_true")
     args = parser.parse_args(argv)
     try:
-        health = parse_log(args.log).as_health(
+        try:
+            stats = parse_log(args.log)
+        except ValueError:
+            if not args.allow_malformed:
+                raise
+            stats = OpenCodeStats(0, 0, 0, 0, 0, 0, 0.0)
+        health = stats.as_health(
             run_id=args.run_id,
             issue=args.issue,
             role=args.role,
@@ -141,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             delivery_ready={"true": True, "false": False, "unknown": None}[args.delivery_ready],
             dirty_entries=args.dirty_entries,
             generated_artifacts=args.generated_artifacts,
+            repository=args.repository,
+            pull_request=args.pull_request,
         )
         append_jsonl(args.records, health)
     except (OSError, ValueError) as exc:
