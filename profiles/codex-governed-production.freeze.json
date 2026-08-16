@@ -1,0 +1,26 @@
+{
+  "name": "codex-governed-production",
+  "qualified_at": "2026-08-16T17:00:00Z",
+  "source_commit": "4fcdc14b915bf657a07970f95f120905875dafea",
+  "dashboard_release": "v0.4.3",
+  "governance": {
+    "primary_orchestrator": "codex",
+    "merge_authority": "codex",
+    "local_coder_authority": "bounded-implementation",
+    "local_reviewer_authority": "advisory",
+    "local_reviewer_approval_authorizes_merge": false,
+    "human_authority": "product-priority-and-override"
+  },
+  "qualification": {
+    "full_tests_passed": 338,
+    "dashboard_live_health_passed": true,
+    "post_followup_smoke_decision": "use-with-codex-adjudication",
+    "rollback_required_before_promotion": true
+  },
+  "sha256": {
+    "worker": "9cf6887b6de75a7585395d87d955bb030d50202a84f6c3593029964e925a3634",
+    "source_bundle": "e1bce3843851f5a896c880e3f90c5e77634b79101177d020c00667672033e674",
+    "workers_config": "8370128712ba3ab874ed4c9bfc23ee4f0432f30f5e09f785130fad06723f95a7",
+    "opencode_config": "fa31d6e69cc818169da2b85a446ae928d88b6d7bf75fa075246c452c738a559e"
+  }
+}
