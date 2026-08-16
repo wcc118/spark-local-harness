@@ -125,7 +125,7 @@ def _activity_milestone(event: WorkflowEvent, milestone_events: list[WorkflowEve
     earlier = [item for item in milestone_events if (item.observed_at, item.event_id) <= (event.observed_at, event.event_id)]
     if earlier:
         return STAGE_TO_MILESTONE[earlier[-1].stage]
-    return "intake"
+    return "unassigned"
 
 
 def _operation_projection(items: list[WorkflowEvent]) -> dict[str, Any]:

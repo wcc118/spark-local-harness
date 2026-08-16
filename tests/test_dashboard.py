@@ -371,4 +371,5 @@ def test_evidence_first_case_has_pending_milestones_and_visible_activity(tmp_pat
     assert all(item["state"] == "pending" for item in snapshot["operations"][0]["milestones"])
     page = render_dashboard(snapshot)
     assert "evidence · active" in page
+    assert 'aria-label="Unassigned activities"' in page
     assert page.count('class="milestone pending"') == 8

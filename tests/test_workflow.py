@@ -145,7 +145,7 @@ def test_truthful_milestones_do_not_infer_missing_predecessors():
     states = {item["milestone"]: item["state"] for item in operation["milestones"]}
     assert set(states.values()) == {"pending"}
     assert operation["activities"] == [{
-        "activity_type": "evidence", "milestone": "intake", "state": "active",
+        "activity_type": "evidence", "milestone": "unassigned", "state": "active",
         "observed_at": "2026-08-15T18:00:00Z", "run_id": None, "role": None,
         "correction_cycle": 0, "stop_reason": None, "evidence_refs": [],
     }]
