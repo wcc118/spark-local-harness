@@ -22,6 +22,7 @@ from .evidence_packet import (
 
 RESULT_PREFIX = "REVIEW_RESULT_JSON="
 VERDICTS = {"APPROVE", "REQUEST_CHANGES", "ESCALATE"}
+INCOMPLETE_REASONS = {"wall-time-budget", "token-budget", "step-budget", "malformed-result"}
 WORKFLOW_LABELS = {
     "status/backlog",
     "status/in-progress",
@@ -185,6 +186,8 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         "IMMUTABLE_REVIEW_ENVELOPE=" + identity + "\n\n"
         + evidence
         + "Review only the checkout and commit identified above. Do not access another checkout. "
+        "First inspect the harness-observed exact-head diff already in this packet, then run at most "
+        "one smallest relevant verification command before any wider exploration. "
         "Do not change GitHub state. End with exactly one single-line machine result prefixed "
         f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
         "coder findings; never delete, regenerate, or repair them. Test execution is configured "
@@ -193,6 +196,8 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         f"another /tmp or external path. The disposable runtime home {envelope.runtime_home} is "
         "also harness-owned and may contain interpreter or package-manager runtime files only.\n\n"
         "The evidence packet contains harness-observed facts, not findings or a verdict. "
+        "In every tests entry, provenance must be reviewer-observed or task-reported. Never describe "
+        "a task-reported test as executed by you. "
         "The task below contains reported claims and requirements that still require independent judgment.\n\n"
         f"REPORTED_TASK_CLAIMS:\n{task}"
     )
@@ -318,6 +323,11 @@ def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any
     for field in ("criteria", "findings", "tests"):
         if not isinstance(result[field], list):
             raise ReviewError(f"{field} must be a list")
+    for test in result["tests"]:
+        if not isinstance(test, dict) or test.get("provenance") not in {"reviewer-observed", "task-reported"}:
+            raise ReviewError("every test requires reviewer-observed or task-reported provenance")
+        if test["provenance"] == "reviewer-observed" and not isinstance(test.get("exit_code"), int):
+            raise ReviewError("reviewer-observed tests require an integer exit_code")
     blockers = [f for f in result["findings"] if isinstance(f, dict) and f.get("severity") == "blocker"]
     if verdict == "APPROVE" and blockers:
         raise ReviewError("APPROVE cannot contain blocker findings")
@@ -414,6 +424,21 @@ def load_envelope(path: Path) -> Envelope:
     return Envelope(**data)
 
 
+def incomplete_result(envelope: Envelope, reason: str) -> dict[str, Any]:
+    if reason not in INCOMPLETE_REASONS:
+        raise ReviewError(f"invalid incomplete reason: {reason}")
+    return {
+        "schema_version": 1,
+        "status": "incomplete",
+        "reason": reason,
+        "repository": envelope.repository,
+        "issue": envelope.issue,
+        "pull_request": envelope.pull_request,
+        "reviewed_head_sha": envelope.head_sha,
+        "published": False,
+    }
+
+
 def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -438,6 +463,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     finalize.add_argument("--run-id", required=True)
     finalize.add_argument("--result-out", type=Path, required=True)
 
+    incomplete = sub.add_parser("incomplete")
+    incomplete.add_argument("--envelope", type=Path, required=True)
+    incomplete.add_argument("--reason", required=True)
+    incomplete.add_argument("--result-out", type=Path, required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
@@ -452,7 +482,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             write_json(args.envelope_out, envelope.as_dict())
             sys.stdout.write(prepare_prompt(envelope, args.task_file.read_text(encoding="utf-8"), packet))
-        else:
+        elif args.command == "finalize":
             envelope = load_envelope(args.envelope)
             audit_tool_scope(args.log, envelope)
             verify_checkout_unchanged(envelope)
@@ -460,6 +490,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             publication = publish_result(result, envelope, args.run_id)
             write_json(args.result_out, {"result": result, "publication": publication})
             print(json.dumps(publication, sort_keys=True))
+        else:
+            result = incomplete_result(load_envelope(args.envelope), args.reason)
+            write_json(args.result_out, result)
+            print("REVIEW_INCOMPLETE_JSON=" + json.dumps(result, sort_keys=True, separators=(",", ":")))
     except (OSError, ValueError, ReviewError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
