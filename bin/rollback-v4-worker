@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+(( $# == 1 )) || { echo "usage: rollback-v4-worker BACKUP_DIR" >&2; exit 2; }
+backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
+stable_worker=${CODEX_LOCAL_STABLE_WORKER:-/home/connellwc83/.local/bin/codex-local-worker}
+runtime_root=${CODEX_LOCAL_RUNTIME_ROOT:-/home/connellwc83/.local/share/codex-local-harness/runtime}
+backup_dir=$(realpath -- "$1")
+resolved_root=$(realpath -- "$backup_root")
+[[ $backup_dir == "$resolved_root"/* ]] || { echo "ERROR: backup is outside the configured root" >&2; exit 2; }
+[[ -f $backup_dir/codex-local-worker && -f $backup_dir/SHA256SUMS ]] || {
+  echo "ERROR: incomplete worker backup" >&2
+  exit 2
+}
+(cd "$backup_dir" && sha256sum -c SHA256SUMS >/dev/null)
+install -m 755 "$backup_dir/codex-local-worker" "$stable_worker"
+if [[ -f $backup_dir/runtime-target ]]; then
+  previous_runtime=$(<"$backup_dir/runtime-target")
+  [[ -d $previous_runtime/src/codex_local_harness ]] || {
+    echo "ERROR: prior runtime is unavailable: $previous_runtime" >&2
+    exit 65
+  }
+  ln -s "$previous_runtime" "$runtime_root/current.new"
+  mv -Tf "$runtime_root/current.new" "$runtime_root/current"
+fi
+printf 'status=rolled-back\nworker_sha256=%s\n' "$(sha256sum "$stable_worker" | cut -d' ' -f1)"

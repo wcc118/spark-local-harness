@@ -47,6 +47,9 @@ the corrected baseline qualification suite remains green.
 After review, `bin/promote-v4-worker` promotes the hardened candidate behind
 the stable entry points. It creates a private backup of the qualified baseline
 worker first and is safe to rerun after a successful promotion.
+The promoted worker imports a content-addressed runtime bundle rather than the
+mutable Git checkout. `bin/rollback-v4-worker BACKUP_DIR` restores the prior
+worker and runtime pointer.
 
 ## Diagnostic dashboard
 

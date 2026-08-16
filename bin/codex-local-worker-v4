@@ -184,7 +184,11 @@ if [[ $record_run == 1 && ( -z $worker_repository || -z $worker_issue ) ]]; then
   exit 2
 fi
 
-candidate_source=/home/connellwc83/projects/codex-local-harness/src
+candidate_source=${CODEX_LOCAL_SOURCE:-/home/connellwc83/.local/share/codex-local-harness/runtime/current/src}
+[[ -d $candidate_source/codex_local_harness ]] || {
+  echo "ERROR: installed harness runtime is missing: $candidate_source" >&2
+  exit 69
+}
 lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/lifecycle.jsonl}
 workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/workflow.jsonl}
 publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/publication-failures.jsonl}

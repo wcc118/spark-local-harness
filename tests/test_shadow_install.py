@@ -61,6 +61,8 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
         "CODEX_LOCAL_BACKUP_ROOT": str(backup_root),
         "CODEX_LOCAL_STABLE_WORKER": str(stable),
         "CODEX_LOCAL_CANDIDATE_WORKER": str(ROOT / "bin/codex-local-worker-v4"),
+        "CODEX_LOCAL_CANDIDATE_SOURCE": str(ROOT / "src"),
+        "CODEX_LOCAL_RUNTIME_ROOT": str(tmp_path / "runtime"),
     }
     first = subprocess.run(
         [str(ROOT / "bin/promote-v4-worker")],
@@ -72,6 +74,8 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
     backup = Path(next(line.split("=", 1)[1] for line in first.stdout.splitlines() if line.startswith("backup=")))
     assert (backup / "codex-local-worker").read_bytes() == (ROOT / "bin/codex-local-worker").read_bytes()
     assert stable.read_bytes() == (ROOT / "bin/codex-local-worker-v4").read_bytes()
+    runtime = Path(next(line.split("=", 1)[1] for line in first.stdout.splitlines() if line.startswith("runtime=")))
+    assert (runtime / "src/codex_local_harness").is_dir()
     second = subprocess.run(
         [str(ROOT / "bin/promote-v4-worker")],
         check=True,
@@ -79,4 +83,13 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
         capture_output=True,
         env=environment,
     )
-    assert "status=already-promoted" in second.stdout
+    assert "status=runtime-refreshed" in second.stdout
+    rolled_back = subprocess.run(
+        [str(ROOT / "bin/rollback-v4-worker"), str(backup)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+    )
+    assert "status=rolled-back" in rolled_back.stdout
+    assert stable.read_bytes() == (ROOT / "bin/codex-local-worker").read_bytes()
