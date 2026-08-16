@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -7,7 +8,7 @@ from pathlib import Path
 
 
 PROJECT = Path("/home/connellwc83/projects/codex/local-harness")
-CANDIDATE_PROJECT = Path(__file__).resolve().parents[1]
+RELEASE_MANIFEST = Path(__file__).resolve().parents[1] / "config" / "installed-release.json"
 PROJECT_WORKER = PROJECT / "bin/codex-local-worker"
 INSTALLED_WORKER = Path("/home/connellwc83/.local/bin/codex-local-worker")
 PROJECT_CRITIC = PROJECT / "bin/codex-local-critic"
@@ -40,11 +41,14 @@ def test_reviewer_runtime_disables_checkout_cache_writes():
 
 
 def test_installed_worker_matches_a_qualified_project_copy():
-    qualified = {
-        PROJECT_WORKER.read_bytes(),
-        (CANDIDATE_PROJECT / "bin/codex-local-worker-v4").read_bytes(),
-    }
-    assert INSTALLED_WORKER.read_bytes() in qualified
+    release = json.loads(RELEASE_MANIFEST.read_text(encoding="utf-8"))
+    installed_digest = hashlib.sha256(INSTALLED_WORKER.read_bytes()).hexdigest()
+    assert installed_digest in release["qualified_worker_sha256"]
+
+
+def test_candidate_worker_does_not_require_self_promotion():
+    candidate = Path(__file__).resolve().parents[1] / "bin" / "codex-local-worker-v4"
+    assert run(["bash", "-n", str(candidate)]).returncode == 0
 
 
 def test_critic_uses_same_sterile_inference_boundary():

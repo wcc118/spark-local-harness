@@ -146,15 +146,27 @@ install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
 install -d -m 700 "$worker_runtime_home/.config/opencode/agents" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
-jq '.permission.bash as $global_bash
-    | .mcp.github.enabled = false
+jq '.mcp.github.enabled = false
+    | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
-        "github_*": "deny", "gitea_*": "deny",
-        "bash": ($global_bash + {
-          "*": "allow", "gh": "deny", "gh *": "deny", "* gh *": "deny",
-          "git push": "deny", "git push *": "deny",
-          "curl": "deny", "curl *": "deny", "wget": "deny", "wget *": "deny"
-        })
+        "github_*": "deny", "gitea_*": "deny", "external_directory": "deny",
+        "bash": {
+          "*": "deny",
+          "git status*": "allow", "git diff*": "allow", "git log*": "allow",
+          "git show*": "allow", "git branch*": "allow", "git switch*": "allow",
+          "git checkout*": "allow", "git add*": "allow", "git commit*": "allow",
+          "python3 -m pytest*": "allow", "pytest*": "allow", "rg *": "allow",
+          "ls*": "allow", "pwd": "allow", "sed *": "allow"
+        }
+      })
+    | .agent.reviewer.permission = ((.agent.reviewer.permission // {}) + {
+        "external_directory": "deny",
+        "bash": {
+          "*": "deny", "git status*": "allow", "git diff*": "allow",
+          "git log*": "allow", "git show*": "allow", "rg *": "allow",
+          "ls*": "allow", "pwd": "allow", "sed *": "allow",
+          "python3 -m pytest*": "allow", "pytest*": "allow"
+        }
       })' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
 cp -a /home/connellwc83/.config/opencode/agents/. \
@@ -166,6 +178,22 @@ fi
 worker_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
 [[ -x $worker_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $worker_opencode" >&2; exit 2; }
 worker_path=/home/connellwc83/.local/bin:/home/connellwc83/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+worker_sandbox=${CODEX_LOCAL_SANDBOX:-container}
+worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.1.0}
+case "$worker_sandbox" in
+  container)
+    command -v docker >/dev/null || { echo "ERROR: Docker is required for worker confinement" >&2; exit 69; }
+    docker image inspect "$worker_container_image" >/dev/null 2>&1 || {
+      echo "ERROR: worker sandbox image is unavailable: $worker_container_image" >&2; exit 69;
+    }
+    ;;
+  disabled)
+    [[ ${CODEX_LOCAL_ALLOW_UNSANDBOXED:-0} == 1 ]] || {
+      echo "ERROR: disabling worker confinement requires CODEX_LOCAL_ALLOW_UNSANDBOXED=1" >&2; exit 2;
+    }
+    ;;
+  *) echo "ERROR: unsupported worker sandbox: $worker_sandbox" >&2; exit 2 ;;
+esac
 
 # Local commits need an identity, but not the operator's credential-bearing
 # global Git configuration.
@@ -270,9 +298,30 @@ elif [[ $worker_role == coder ]]; then
   execution_env=(PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$worker_runtime_home/.cache/pycache" \
     PYTEST_ADDOPTS="-p no:cacheprovider" COVERAGE_FILE="$worker_runtime_home/.cache/.coverage")
 fi
-"${worker_env[@]}" "${execution_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
-  "$worker_opencode" run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
-  --model "$worker_model" "$worker_task" >"$worker_log"
+if [[ $worker_sandbox == container ]]; then
+  repository_mount="type=bind,src=$worker_repo_path,dst=$worker_repo_path,readonly"
+  [[ $worker_role == coder ]] && repository_mount="type=bind,src=$worker_repo_path,dst=$worker_repo_path"
+  container_env=(HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="${LOGNAME:-worker}"
+    XDG_CONFIG_HOME="$worker_runtime_home/.config" XDG_DATA_HOME="$worker_runtime_home/.local/share"
+    XDG_CACHE_HOME="$worker_runtime_home/.cache" LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}"
+    NO_COLOR=1 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS="-p no:cacheprovider")
+  docker_args=(run --rm --network host --read-only --cap-drop ALL
+    --security-opt no-new-privileges --pids-limit 512 --user "$(id -u):$(id -g)"
+    --tmpfs /tmp:rw,nosuid,nodev,size=1g
+    --mount "$repository_mount"
+    --mount "type=bind,src=$worker_runtime_home,dst=$worker_runtime_home"
+    --mount "type=bind,src=$worker_opencode,dst=/usr/local/bin/opencode,readonly"
+    --workdir "$worker_repo_path")
+  for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
+  timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+    docker "${docker_args[@]}" "$worker_container_image" \
+    opencode run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
+    --model "$worker_model" "$worker_task" >"$worker_log"
+else
+  "${worker_env[@]}" "${execution_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+    "$worker_opencode" run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
+    --model "$worker_model" "$worker_task" >"$worker_log"
+fi
 inference_status=$?
 set -e
 

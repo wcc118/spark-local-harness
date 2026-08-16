@@ -7,6 +7,20 @@ This quickstart covers setting up and using the Codex Local Harness in a new rep
 - Python 3.11 or later
 - systemd user session support (Linux)
 - opencode installed and configured
+- Docker available to the invoking user
+
+Build the confined worker image once after cloning, and again whenever
+`docker/worker/Dockerfile` changes:
+
+```bash
+docker build -t codex-local-worker:0.1.0 docker/worker
+```
+
+Local workers run in this container by default. Only the selected checkout and
+a disposable OpenCode home are mounted; helper and reviewer checkouts are
+read-only. The emergency `CODEX_LOCAL_SANDBOX=disabled` path also requires the
+explicit `CODEX_LOCAL_ALLOW_UNSANDBOXED=1` acknowledgement and is not a
+qualified production route.
 
 ## Installation
 
