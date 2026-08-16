@@ -1,0 +1,22 @@
+{
+  "name": "post-followup-reviewer-smoke",
+  "frozen_at": "2026-08-16T14:55:16Z",
+  "control_source_commit": "518edf9565d416cdb9fad75966b10bc6f9ac5c79",
+  "candidate_source_commit": "35b31fb2b09ecca3ff9c00ea8c36185657e99c98",
+  "fixture_repository": "wcc118/codex-harness-benchmark",
+  "fixture_commit": "a13d4524a73152f08bd99c997f99f972a57b9144",
+  "model": {
+    "id": "Qwen/Qwen3-Coder-Next-FP8",
+    "runtime": "vllm",
+    "max_model_len": 212500,
+    "gpu_memory_utilization": 0.90,
+    "temperature": 0.2
+  },
+  "sha256": {
+    "worker": "9cf6887b6de75a7585395d87d955bb030d50202a84f6c3593029964e925a3634",
+    "review": "37cbe80fa521ef431c1bbc0d6fcd153bd9896e0b601d74db54326190176941a2",
+    "evidence_packet": "d03dfae7e7420e994a5d08c615edbab3c63a24f29dcd5bd877ed6b179ef8dbda",
+    "coder": "9d2110469fe7da53e160235095f7a4c9c82875699f14e1238105a7e6bb16eb86",
+    "task": "e1d9a149eb8a5a0203f1380341a01c87df6fe7c52e9f6a8effddda7d8fbf0063"
+  }
+}

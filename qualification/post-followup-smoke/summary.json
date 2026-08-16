@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "decision": "revise-do-not-promote",
+  "smoke_started_at": "2026-08-16T14:55:16Z",
+  "decision_recorded_at": "2026-08-16T14:59:59Z",
+  "smoke_time_to_decision_seconds": 283,
+  "harness_issue": 93,
+  "fixture_commit": "a13d4524a73152f08bd99c997f99f972a57b9144",
+  "control_source_commit": "518edf9565d416cdb9fad75966b10bc6f9ac5c79",
+  "candidate_source_commit": "35b31fb2b09ecca3ff9c00ea8c36185657e99c98",
+  "comparability": {
+    "task": "identical seeded complex FileCounter review task",
+    "hardware": "same DGX Spark",
+    "model": "Qwen/Qwen3-Coder-Next-FP8",
+    "temperature": 0.2,
+    "model_warmed_before_timed_trials": true,
+    "load_time_excluded": true,
+    "trials_sequential": true,
+    "frontier_token_telemetry": "unsupported"
+  },
+  "preflight_observation": {
+    "fixture_commit": "86db4d6cfd3acbf04af0725741c1ed1fa7a9e4a4",
+    "result": "stopped-before-inference",
+    "reason": "git diff --check detected trailing whitespace",
+    "elapsed_seconds": 1.043
+  },
+  "control": {
+    "issue": 52,
+    "pull_request": 54,
+    "run_id": "20260816T145702Z-2201720",
+    "verdict": "APPROVE",
+    "verdict_correct": false,
+    "seeded_defects_recalled": 0,
+    "seeded_defects_total": 2,
+    "terminal_result": "malformed",
+    "steps": 1,
+    "local_tokens": 6627,
+    "worker_wall_seconds": 16.828,
+    "end_to_end_seconds": 23.791
+  },
+  "candidate": {
+    "issue": 53,
+    "pull_request": 55,
+    "run_id": "20260816T145736Z-2202165",
+    "verdict": "APPROVE",
+    "verdict_correct": false,
+    "seeded_defects_noticed_in_reasoning": 2,
+    "seeded_defects_total": 2,
+    "seeded_defects_reflected_in_verdict": 0,
+    "terminal_result": "valid-but-incorrect",
+    "steps": 2,
+    "local_tokens": 18783,
+    "worker_wall_seconds": 36.931,
+    "end_to_end_seconds": 46.847,
+    "published_comment": "https://github.com/wcc118/codex-harness-benchmark/pull/55#issuecomment-5308050789"
+  },
+  "comparison": {
+    "verdict_recall_improved": false,
+    "schema_reliability_improved": true,
+    "candidate_local_token_increase": 12156,
+    "candidate_local_token_ratio": 2.834,
+    "candidate_end_to_end_seconds_increase": 23.056,
+    "candidate_end_to_end_ratio": 1.969,
+    "codex_intervention_required": true
+  },
+  "deterministic_regression": {
+    "command": "PYTHONPATH=src python3 -m pytest tests/test_coder.py tests/test_evidence_packet.py -q",
+    "passed": 24,
+    "failed": 0,
+    "issue_85_retry_coverage": true,
+    "issue_87_preflight_coverage": true,
+    "issue_86_signal_coverage": true
+  },
+  "diagnostic_conclusion": "The advisory signals directed reviewer attention to both hazards but did not control the final judgment. Reviewer authority must remain non-merge-authoritative, and promotion is stopped pending a redesigned deterministic policy gate or stronger verdict contract."
+}
