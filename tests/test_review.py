@@ -350,7 +350,7 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
 
 def test_prepare_prompt_labels_observed_packet_before_reported_claims(tmp_path):
     packet = ReviewerEvidencePacket(
-        1, "harness-observed", REPO, 7, 11, BASE_SHA, SHA, 1,
+        1, "harness-observed", REPO, 7, 11, BASE_SHA, BASE_SHA, SHA, 1,
         ("src/example.py",), False, "1 file changed", False,
         "diff --git a/src/example.py b/src/example.py\n", False, "c" * 64,
         (("pytest", "/home/test/.local/bin/pytest"),),

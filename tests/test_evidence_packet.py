@@ -26,6 +26,8 @@ class FakeRun:
         self.patch = patch
 
     def __call__(self, argv, cwd=None):
+        if argv[:2] == ["git", "merge-base"]:
+            return BASE + "\n"
         if argv[:3] == ["git", "diff", "--name-only"]:
             return "\n".join(self.files) + "\n"
         if argv[:3] == ["git", "diff", "--stat"]:
@@ -46,7 +48,7 @@ def packet(run=None):
 def test_packet_is_deterministic_head_bound_and_answer_neutral():
     value = packet()
     assert value == packet()
-    assert value.base_sha == BASE and value.head_sha == HEAD
+    assert value.base_tip_sha == BASE and value.comparison_base_sha == BASE and value.head_sha == HEAD
     assert value.provenance == "harness-observed"
     serialized = value.compact_json()
     for prohibited in ("expected_verdict", "scout_findings", "codex_conclusion", "acceptance_criteria"):

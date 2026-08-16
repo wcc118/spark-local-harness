@@ -28,7 +28,8 @@ class ReviewerEvidencePacket:
     repository: str
     issue: int
     pull_request: int
-    base_sha: str
+    base_tip_sha: str
+    comparison_base_sha: str
     head_sha: str
     changed_file_count: int
     changed_files: tuple[str, ...]
@@ -45,7 +46,7 @@ class ReviewerEvidencePacket:
             raise ValueError("invalid evidence packet metadata")
         if "/" not in self.repository or self.issue <= 0 or self.pull_request <= 0:
             raise ValueError("invalid evidence packet identity")
-        if not SHA.fullmatch(self.base_sha) or not SHA.fullmatch(self.head_sha):
+        if not all(SHA.fullmatch(value) for value in (self.base_tip_sha, self.comparison_base_sha, self.head_sha)):
             raise ValueError("evidence packet SHAs must be full lowercase Git SHAs")
         if self.changed_file_count <= 0 or not self.changed_files:
             raise ValueError("evidence packet requires changed files")
@@ -91,7 +92,10 @@ def build_reviewer_evidence_packet(
     run: Run,
     test_executables: Mapping[str, str],
 ) -> ReviewerEvidencePacket:
-    revision = f"{base_sha}...{head_sha}"
+    comparison_base_sha = run(["git", "merge-base", base_sha, head_sha], checkout).strip()
+    if not SHA.fullmatch(comparison_base_sha):
+        raise ValueError("Git returned an invalid comparison base SHA")
+    revision = f"{comparison_base_sha}..{head_sha}"
     raw_files = tuple(line for line in run(["git", "diff", "--name-only", revision], checkout).splitlines() if line)
     if len(set(raw_files)) != len(raw_files):
         raise ValueError("Git returned duplicate changed files")
@@ -111,7 +115,8 @@ def build_reviewer_evidence_packet(
         repository=repository,
         issue=issue,
         pull_request=pull_request,
-        base_sha=base_sha,
+        base_tip_sha=base_sha,
+        comparison_base_sha=comparison_base_sha,
         head_sha=head_sha,
         changed_file_count=len(raw_files),
         changed_files=raw_files[:MAX_CHANGED_FILES],
