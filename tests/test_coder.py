@@ -149,7 +149,7 @@ def test_publisher_fails_after_one_retry_and_records_both_observations(tmp_path)
     assert event.target.count(STALE) == 2 and SHA in event.target
 
 
-def test_publisher_preflight_clean_checkoutProceeds_to_push(tmp_path):
+def test_publisher_preflight_clean_checkout_proceeds_to_push(tmp_path):
     runner = CoderRun(tmp_path, status="")
     result = finalize_coder(tmp_path, REPO, 7, runner, publish=True, delay=lambda _: None)
     assert result["published"] is True
