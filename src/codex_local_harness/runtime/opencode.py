@@ -18,6 +18,9 @@ class OpenCodeStats:
     tool_calls: int
     tool_errors: int
     wall_seconds: float
+    cache_read: int = 0
+    cache_write: int = 0
+    cache_provenance: str | None = None
 
     def as_health(
         self,
@@ -52,6 +55,9 @@ class OpenCodeStats:
                 local_input=self.input_tokens,
                 local_output=self.output_tokens,
                 local_reasoning=self.reasoning_tokens,
+                local_cache_read=self.cache_read,
+                local_cache_write=self.cache_write,
+                cache_provenance=self.cache_provenance,
             ),
             failure_class=failure_class,
             turns=self.turns,
@@ -69,6 +75,8 @@ class OpenCodeStats:
 
 def parse_log(path: Path) -> OpenCodeStats:
     input_tokens = output_tokens = reasoning_tokens = turns = tool_calls = tool_errors = 0
+    cache_read = cache_write = 0
+    cache_provenance = "unsupported"  # Default when no cache object is found
     timestamps: list[int] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -93,6 +101,18 @@ def parse_log(path: Path) -> OpenCodeStats:
                     output_tokens += _non_negative_int(tokens.get("output", 0), "output tokens")
                     reasoning_tokens += _non_negative_int(tokens.get("reasoning", 0), "reasoning tokens")
                     turns += 1
+                    # Handle cache tokens if present
+                    cache_obj = tokens.get("cache")
+                    if isinstance(cache_obj, dict):
+                        # Validate and accumulate cache read/write
+                        read_val = cache_obj.get("read", 0)
+                        write_val = cache_obj.get("write", 0)
+                        cache_read += _non_negative_int(read_val, "cache read")
+                        cache_write += _non_negative_int(write_val, "cache write")
+                        cache_provenance = "observed"
+                    elif "cache" in tokens:
+                        # Malformed cache data (not a dict or missing fields)
+                        raise ValueError(f"invalid cache object at line {line_number}")
                 elif event_type == "tool_use":
                     tool_calls += 1
                     state = part.get("state") or {}
@@ -103,7 +123,7 @@ def parse_log(path: Path) -> OpenCodeStats:
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise ValueError(f"invalid OpenCode event at line {line_number}: {exc}") from exc
     wall_seconds = (max(timestamps) - min(timestamps)) / 1000 if len(timestamps) > 1 else 0.0
-    return OpenCodeStats(input_tokens, output_tokens, reasoning_tokens, turns, tool_calls, tool_errors, wall_seconds)
+    return OpenCodeStats(input_tokens, output_tokens, reasoning_tokens, turns, tool_calls, tool_errors, wall_seconds, cache_read, cache_write, cache_provenance)
 
 
 def _non_negative_int(value: Any, name: str) -> int:
@@ -139,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             if not args.allow_malformed:
                 raise
-            stats = OpenCodeStats(0, 0, 0, 0, 0, 0, 0.0)
+            stats = OpenCodeStats(0, 0, 0, 0, 0, 0, 0.0, 0, 0, "unsupported")
         health = stats.as_health(
             run_id=args.run_id,
             issue=args.issue,

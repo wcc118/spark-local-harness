@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
@@ -19,6 +20,16 @@ STATES = {
     "not-applicable",
 }
 
+# Strict OWNER/REPO regex for GitHub repositories
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def _validate_repository(value: str | None, name: str) -> None:
+    """Validate GitHub repository format: OWNER/REPO"""
+    if value is not None and value.strip() != "":
+        if not REPOSITORY_PATTERN.fullmatch(value):
+            raise ValueError(f"{name} must be a valid OWNER/REPO identifier")
+
 
 @dataclass(frozen=True)
 class WorkflowEvent:
@@ -35,6 +46,8 @@ class WorkflowEvent:
     correction_cycle: int = 0
     stop_reason: str | None = None
     evidence_refs: tuple[str, ...] = ()
+    session_id: str | None = None
+    repository: str | None = None
     schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -49,6 +62,9 @@ class WorkflowEvent:
             raise ValueError("issue and pull request must be positive")
         if self.correction_cycle < 0:
             raise ValueError("correction_cycle must be non-negative")
+        if self.session_id is not None:
+            _safe_atom(self.session_id, "session_id")
+        _validate_repository(self.repository, "repository")
         for name, value in (("run_id", self.run_id), ("role", self.role), ("model", self.model), ("stop_reason", self.stop_reason)):
             if value is not None:
                 _safe_atom(value, name)
@@ -68,11 +84,15 @@ class WorkflowEvent:
 
 
 def derive_operations(events: Iterable[WorkflowEvent]) -> tuple[dict[str, Any], ...]:
-    grouped: dict[str, list[WorkflowEvent]] = {}
+    grouped: dict[tuple[str | None, str | None, str], list[WorkflowEvent]] = {}
     for event in events:
-        grouped.setdefault(event.operation_id, []).append(event)
+        # Use "legacy" as grouping key when session_id or repository is None
+        session_id = event.session_id if event.session_id is not None else "legacy"
+        repository = event.repository if event.repository is not None else "legacy"
+        key = (session_id, repository, event.operation_id)
+        grouped.setdefault(key, []).append(event)
     operations = []
-    for operation_id, items in grouped.items():
+    for (session_id, repository, operation_id), items in grouped.items():
         latest_by_stage: dict[str, WorkflowEvent] = {}
         for event in items:
             prior = latest_by_stage.get(event.stage)
@@ -96,5 +116,7 @@ def derive_operations(events: Iterable[WorkflowEvent]) -> tuple[dict[str, Any], 
             "stop_reason": newest.stop_reason,
             "updated_at": newest.observed_at,
             "stages": stages,
+            "session_id": session_id if session_id != "legacy" else None,
+            "repository": repository if repository != "legacy" else None,
         })
     return tuple(sorted(operations, key=lambda item: (item["updated_at"], item["operation_id"]), reverse=True))

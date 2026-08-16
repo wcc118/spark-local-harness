@@ -91,3 +91,81 @@ def test_cli_can_record_malformed_result_without_claiming_token_usage(tmp_path):
     assert health.failure_class == "malformed-result"
     assert health.usage.local_total == 0
     assert health.repository == "owner/repo"
+
+
+def test_parser_handles_cache_tokens(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        {"type": "step_start", "timestamp": 1000},
+        {
+            "type": "step_finish",
+            "timestamp": 2000,
+            "part": {"tokens": {"input": 100, "output": 20, "reasoning": 5, "cache": {"read": 50, "write": 25}}},
+        },
+    ]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    stats = parse_log(path)
+    assert stats.input_tokens == 100
+    assert stats.cache_read == 50
+    assert stats.cache_write == 25
+    assert stats.cache_provenance == "observed"
+
+
+def test_parser_handles_cache_tokens_zero_values(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        {
+            "type": "step_finish",
+            "timestamp": 2000,
+            "part": {"tokens": {"input": 100, "cache": {"read": 0, "write": 0}}},
+        },
+    ]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    stats = parse_log(path)
+    assert stats.cache_read == 0
+    assert stats.cache_write == 0
+    assert stats.cache_provenance == "observed"
+
+
+def test_parser_rejects_malformed_cache(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        {
+            "type": "step_finish",
+            "timestamp": 2000,
+            "part": {"tokens": {"input": 100, "cache": "not-a-dict"}},
+        },
+    ]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid cache object"):
+        parse_log(path)
+
+
+def test_parser_rejects_negative_cache_values(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        {
+            "type": "step_finish",
+            "timestamp": 2000,
+            "part": {"tokens": {"input": 100, "cache": {"read": -1, "write": 0}}},
+        },
+    ]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    with pytest.raises(ValueError, match="cache read"):
+        parse_log(path)
+
+
+def test_parser_defaults_unsupported_when_no_cache_in_log(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        {
+            "type": "step_finish",
+            "timestamp": 2000,
+            "part": {"tokens": {"input": 100, "output": 20}},
+        },
+    ]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    stats = parse_log(path)
+    assert stats.cache_read == 0
+    assert stats.cache_write == 0
+    assert stats.cache_provenance == "unsupported"  # Default when no cache object

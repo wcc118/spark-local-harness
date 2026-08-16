@@ -223,6 +223,11 @@ publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-/home/con
 worker_operation_id=${CODEX_LOCAL_OPERATION_ID:-issue-$worker_issue}
 workflow_identity_args=()
 [[ -z $worker_pr ]] || workflow_identity_args+=(--pull-request "$worker_pr")
+# Session identity (CODEX_LOCAL_SESSION_ID with fallback to CODEX_THREAD_ID, then None)
+worker_session_id=${CODEX_LOCAL_SESSION_ID:-${CODEX_THREAD_ID:-}}
+[[ -z $worker_session_id ]] || workflow_identity_args+=(--session-id "$worker_session_id")
+# Repository (CODEX_LOCAL_REPOSITORY)
+[[ -z $worker_repository ]] || workflow_identity_args+=(--repository "$worker_repository")
 record_publication_failure() {
   local publication_phase=$1
   local publication_target=$2
