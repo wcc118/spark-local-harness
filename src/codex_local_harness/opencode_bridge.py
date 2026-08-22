@@ -66,6 +66,12 @@ def _event_payload(raw: dict[str, Any], message_roles: dict[str, str]) -> dict[s
             "timestamp": int(time.time() * 1000),
             "properties": properties,
         }
+    if event_type in {"question.asked", "question.replied", "question.rejected"}:
+        return {
+            "type": event_type,
+            "timestamp": int(time.time() * 1000),
+            "properties": properties,
+        }
     if event_type == "session.error":
         return {
             "type": "error", "timestamp": int(time.time() * 1000),

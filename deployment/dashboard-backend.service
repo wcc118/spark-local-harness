@@ -17,6 +17,8 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
     --plans %h/.local/share/codex-local-harness/health/plans.jsonl \
     --v5-runs %h/.local/share/opencode-orchestration/runs \
     --annotations %h/.local/share/codex-local-harness/health/annotations.jsonl \
+    --control-token-file %h/.config/codex-local/dashboard-control.token \
+    --control-audit-file %h/.local/share/codex-local-harness/control/decisions.jsonl \
     --host 127.0.0.1 \
     --port 8765 \
     --release v0.5.5 \
@@ -25,6 +27,7 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=%h/.local/share/codex-local-harness/control
 PrivateTmp=yes
 ProtectControlGroups=yes
 SystemCallArchitectures=native

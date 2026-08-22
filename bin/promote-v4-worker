@@ -82,6 +82,13 @@ if [[ $install_units == 1 ]]; then
     exit 2
   }
   install -d -m 700 "$user_unit_dir"
+  control_token_file=${CODEX_LOCAL_CONTROL_TOKEN_FILE:-/home/connellwc83/.config/codex-local/dashboard-control.token}
+  control_audit_dir=${CODEX_LOCAL_CONTROL_AUDIT_DIR:-/home/connellwc83/.local/share/codex-local-harness/control}
+  install -d -m 700 "$(dirname -- "$control_token_file")" "$control_audit_dir"
+  if [[ ! -s $control_token_file ]]; then
+    python3 -c 'import secrets; print(secrets.token_urlsafe(32))' >"$control_token_file"
+  fi
+  chmod 600 "$control_token_file"
   if [[ -f $user_unit_dir/dashboard-backend.service ]]; then
     install -m 600 "$user_unit_dir/dashboard-backend.service" "$backup_dir/dashboard-backend.service"
   fi

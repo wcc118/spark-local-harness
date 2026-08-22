@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .control_plane import ControlBroker, ControlError
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
@@ -891,7 +892,7 @@ FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 </svg>"""
 
 
-def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
+def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         server_version = "CodexHarnessDashboard/0.1"
 
@@ -906,6 +907,17 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
                 if route == "/favicon.svg":
                     self._send(HTTPStatus.OK, "image/svg+xml", FAVICON_SVG.encode())
                     return
+                if route.startswith("/api/control/runs/"):
+                    if broker is None:
+                        self._send(HTTPStatus.NOT_FOUND, "application/json", b'{"error":"control-disabled"}\n')
+                        return
+                    if not broker.authorized(self.headers.get("Authorization")):
+                        self._send(HTTPStatus.UNAUTHORIZED, "application/json", b'{"error":"unauthorized"}\n')
+                        return
+                    run_id = route.removeprefix("/api/control/runs/")
+                    payload = broker.snapshot(run_id)
+                    self._send(HTTPStatus.OK, "application/json", json.dumps(payload).encode())
+                    return
                 snapshot = source.snapshot(requested_session, comparison)
                 if route == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", render_dashboard(snapshot).encode())
@@ -917,19 +929,55 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
                 elif route == "/events":
                     self._events()
                 elif route == "/healthz":
-                    self._send(HTTPStatus.OK, "application/json", b'{"status":"ok","read_only":true}\n')
+                    body = json.dumps({"status": "ok", "diagnostics_read_only": True, "control_enabled": broker is not None}).encode()
+                    self._send(HTTPStatus.OK, "application/json", body)
                 else:
                     self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found\n")
+            except ControlError as exc:
+                self._send(HTTPStatus(exc.status), "application/json", json.dumps({"error": exc.code}).encode())
             except (OSError, ValueError) as exc:
                 body = json.dumps({"error": type(exc).__name__, "read_only": True}).encode()
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "application/json", body)
 
         def do_POST(self) -> None:  # noqa: N802
+            if broker is None:
+                self._method_not_allowed()
+                return
+            if not broker.authorized(self.headers.get("Authorization")):
+                self._send(HTTPStatus.UNAUTHORIZED, "application/json", b'{"error":"unauthorized"}\n')
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 2 or length > 65536:
+                    raise ControlError(400, "invalid-body-length")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ControlError(400, "invalid-body")
+                pieces = [piece for piece in urlsplit(self.path).path.split("/") if piece]
+                if len(pieces) != 6 or pieces[:3] != ["api", "control", "runs"]:
+                    raise ControlError(404, "control-route-not-found")
+                _, _, _, run_id, kind, request_id = pieces
+                actor = self.headers.get("X-Operator", "operator")
+                if kind == "permissions":
+                    broker.decide_permission(run_id, request_id, payload.get("decision"), actor)
+                elif kind == "questions":
+                    broker.answer_question(
+                        run_id, request_id, payload.get("answers"),
+                        payload.get("decision") == "reject", actor,
+                    )
+                else:
+                    raise ControlError(404, "control-route-not-found")
+                self._send(HTTPStatus.OK, "application/json", b'{"status":"accepted"}\n')
+            except json.JSONDecodeError:
+                self._send(HTTPStatus.BAD_REQUEST, "application/json", b'{"error":"invalid-json"}\n')
+            except ControlError as exc:
+                self._send(HTTPStatus(exc.status), "application/json", json.dumps({"error": exc.code}).encode())
+
+        def do_PUT(self) -> None:  # noqa: N802
             self._method_not_allowed()
 
-        do_PUT = do_POST
-        do_PATCH = do_POST
-        do_DELETE = do_POST
+        do_PATCH = do_PUT
+        do_DELETE = do_PUT
 
         def _method_not_allowed(self) -> None:
             self._send(HTTPStatus.METHOD_NOT_ALLOWED, "application/json", b'{"error":"read-only"}\n')
@@ -1495,6 +1543,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plans", type=Path)
     parser.add_argument("--v5-runs", type=Path)
     parser.add_argument("--annotations", type=Path)
+    parser.add_argument("--control-token-file", type=Path)
+    parser.add_argument("--control-audit-file", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.2.0")
@@ -1518,8 +1568,15 @@ def main(argv: list[str] | None = None) -> int:
         v5_runs=args.v5_runs,
         annotations=args.annotations,
     )
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
-    print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)
+    if bool(args.control_token_file) != bool(args.control_audit_file):
+        parser.error("control token and audit files must be configured together")
+    broker = None
+    if args.control_token_file:
+        if not args.v5_runs:
+            parser.error("control plane requires --v5-runs")
+        broker = ControlBroker(args.v5_runs, args.control_token_file, args.control_audit_file)
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(source, broker))
+    print(f"Harness dashboard: http://{args.host}:{server.server_port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
