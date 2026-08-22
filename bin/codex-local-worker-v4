@@ -210,7 +210,7 @@ jq '.mcp.github.enabled = false
         "*": "allow", "edit": "deny", "write": "deny", "task": "deny",
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
       }
-    | .agent.reviewer.steps = 80' /home/connellwc83/.config/opencode/opencode.json \
+    | .agent.reviewer.steps = 20' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
 cp -a /home/connellwc83/.config/opencode/agents/. \
   "$worker_runtime_home/.config/opencode/agents/"
