@@ -20,6 +20,7 @@ from .live_execution import live_fingerprint, project_live_execution
 from .operation_usage import OperationUsageSnapshot, derive_usage
 from .plan_event import derive_plans, read_plan_records
 from .read_model import RunView, build_run_views, summarize_views
+from .strategy import derive_strategy, read_annotations
 from .workflow import derive_operations, read_workflow_records
 
 
@@ -222,11 +223,14 @@ class DashboardSource:
     operation_usage: Path | None = None
     plans: Path | None = None
     v5_runs: Path | None = None
+    annotations: Path | None = None
 
     def _current_time(self) -> datetime:
         return self.now if self.now is not None else datetime.now(timezone.utc)
 
-    def snapshot(self, session_id: str | None = None) -> dict[str, Any]:
+    def snapshot(
+        self, session_id: str | None = None, comparison: tuple[str, str] | None = None,
+    ) -> dict[str, Any]:
         statuses: list[dict[str, Any]] = []
         runs = self._load(self.runs, "runs", read_jsonl, statuses)
         adjudications = self._load(self.adjudications, "adjudications", lambda path: read_records(path, Adjudication), statuses)
@@ -244,6 +248,9 @@ class DashboardSource:
             lambda path: read_records(path, OperationUsageSnapshot), statuses,
         ) if self.operation_usage else ()
         plan_events = self._load(self.plans, "plans", read_plan_records, statuses) if self.plans else ()
+        annotations = self._load(
+            self.annotations, "annotations", read_annotations, statuses,
+        ) if self.annotations and self.annotations.exists() else ()
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
@@ -305,6 +312,12 @@ class DashboardSource:
             })
         if criterion_states:
             live_execution["criteria_states"] = criterion_states[:64]
+        strategy = derive_strategy(
+            views, live_execution, len(scoped_failures),
+            sum(status["state"] != "ok" for status in statuses)
+            + (live_execution.get("source_state") != "ok"),
+            annotations, comparison,
+        )
 
         return {
             "schema_version": 1,
@@ -347,6 +360,7 @@ class DashboardSource:
             ],
             "attention_total": attention_total,
             "live_execution": live_execution,
+            "strategy": strategy,
         }
 
     @staticmethod
@@ -373,6 +387,7 @@ class DashboardSource:
             self.publication_failures,
             self.operation_usage,
             self.plans,
+            self.annotations,
         ) if path is not None)
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
@@ -677,6 +692,8 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         '<div class="brain-teaching" role="note"><strong>No live worker evidence yet.</strong> '
         'Start a v5 local worker or configure <code>--v5-runs</code>. Empty regions are unknown, not idle.</div>'
     )
+
+
     partial_note = "" if source_state == "ok" else (
         f'<div class="brain-teaching" role="note"><strong>Evidence {html.escape(source_state)}.</strong> '
         'The topology shows only what could be safely normalized.</div>'
@@ -744,6 +761,94 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
     )
 
 
+def _render_strategy(strategy: dict[str, Any], runs: list[dict[str, Any]], session_id: str | None) -> str:
+    derivations = strategy.get("derivations", {})
+    history_exclusions = strategy.get("facts", {}).get("run_history_exclusions", 0)
+    bottlenecks = "".join(
+        f'<li><strong>{item["count"]}</strong><span>{html.escape(str(item["kind"]).replace("-", " "))}</span>'
+        f'<small>{html.escape(str(item["source"]))}</small></li>'
+        for item in derivations.get("bottlenecks", [])
+    )
+    cohort_rows = []
+    metric_names = (
+        "delivery", "adjudication", "corrections", "latency_seconds", "tokens",
+        "tool_errors", "infrastructure_failure",
+    )
+    for cohort in derivations.get("cohorts", []):
+        cells = []
+        for name in metric_names:
+            metric = cohort["metrics"][name]
+            value = metric["value"]
+            if value is None:
+                display = "insufficient evidence"
+            elif name in {"delivery", "adjudication", "infrastructure_failure"}:
+                display = f"{value * 100:.1f}%"
+            elif name in {"latency_seconds", "tokens"}:
+                display = f"{value:.1f} mean"
+            else:
+                display = str(value)
+            cells.append(
+                f'<td><strong>{html.escape(display)}</strong><small>n={metric["numerator"]} / d={metric["denominator"]} '
+                f'· excluded {metric["exclusions"]}<br>{html.escape(str(metric["source"]))}</small></td>'
+            )
+        warning = (
+            f'<span class="sample-warning">{html.escape(cohort["sample_warning"])}</span>'
+            if cohort.get("sample_warning") else ""
+        )
+        cohort_rows.append(
+            f'<tr><th>{html.escape(cohort["model"])}<small>{html.escape(cohort["route"])} · '
+            f'{html.escape(cohort["task_class"])} · {cohort["runs"]} runs</small>{warning}</th>{"".join(cells)}</tr>'
+        )
+    cohort_html = "".join(cohort_rows) or '<tr><td colspan="8">No comparable run cohorts.</td></tr>'
+    comparison = derivations.get("comparison", {})
+    selected = comparison.get("run_ids", [])
+
+    def options(position: int) -> str:
+        selected_id = selected[position] if len(selected) > position else None
+        return "".join(
+            f'<option value="{html.escape(str(run["run_id"]), quote=True)}"'
+            f'{" selected" if run["run_id"] == selected_id else ""}>{html.escape(str(run["run_id"]))} · '
+            f'{html.escape(str(run.get("role") or "unknown"))} · {html.escape(str(run.get("model") or "unknown"))}</option>'
+            for run in runs[-128:]
+        )
+
+    session_input = (
+        f'<input type="hidden" name="session" value="{html.escape(session_id, quote=True)}">'
+        if session_id else ""
+    )
+    comparison_rows = "".join(
+        f'<tr class="{"comparison-divergence" if stage["diverges"] else ""}"><th>{html.escape(stage["stage"])}</th>'
+        f'<td>{html.escape(str(stage["left"]["value"]))}</td><td>{html.escape(str(stage["right"]["value"]))}</td>'
+        f'<td>{"diverges" if stage["diverges"] else ("aligned" if stage["comparable"] else "incomparable")}</td></tr>'
+        for stage in comparison.get("stages", [])
+    ) or '<tr><td colspan="4">Comparison waiting for selection.</td></tr>'
+    comparison_note = (
+        f'First observable divergence: {html.escape(str(comparison["first_divergence"]))}'
+        if comparison.get("first_divergence")
+        else html.escape(str(comparison.get("reason") or "Choose two distinct runs."))
+    )
+    annotations = strategy.get("facts", {}).get("annotations", [])
+    annotation_html = "".join(
+        f'<li><strong>{html.escape(str(item["kind"]))}</strong><span>{html.escape(str(item["summary"]))}</span>'
+        f'<small>runs {html.escape(", ".join(item["run_ids"]))} · evidence '
+        f'{html.escape(", ".join(item["evidence_refs"]) or "none")} · {html.escape(str(item["source"]))}</small></li>'
+        for item in annotations
+    ) or '<li class="brain-empty">No durable annotations configured.</li>'
+    return (
+        '<details class="strategy-lab"><summary><span class="eyebrow">STRATEGY LAB</span>'
+        '<strong>Evidence-backed organization diagnostics</strong><span>No synthetic score · no automatic tuning</span></summary>'
+        '<section class="strategy-section"><h3>Deterministic bottleneck counts</h3><ul class="bottleneck-grid">'
+        f'{bottlenecks}</ul></section><section class="strategy-section"><h3>Run comparison</h3>'
+        f'<form class="compare-form" method="get">{session_input}<label>Execution A<select name="compare_a" required>{options(0)}</select></label>'
+        f'<label>Execution B<select name="compare_b" required>{options(1)}</select></label><button type="submit" class="session-submit">Compare</button></form>'
+        f'<p class="comparison-note">{comparison_note}</p><div class="table-wrap"><table><thead><tr><th>Stage</th>'
+        f'<th>{html.escape(str(selected[0])) if len(selected) > 0 else "Execution A"}</th><th>{html.escape(str(selected[1])) if len(selected) > 1 else "Execution B"}</th><th>Relationship</th></tr></thead><tbody>{comparison_rows}</tbody></table></div></section>'
+        f'<section class="strategy-section"><h3>Cohorts · separate measures</h3><p class="strategy-note">Every cell shows numerator, denominator, exclusions, and source. Associations are not causal. Older run history excluded by bound: {history_exclusions}.</p>'
+        f'<div class="table-wrap"><table class="cohort-table"><thead><tr><th>Model / route / task</th><th>Delivery</th><th>Adjudication</th><th>Corrections</th><th>Latency</th><th>Tokens</th><th>Tool errors</th><th>Infrastructure</th></tr></thead><tbody>{cohort_html}</tbody></table></div></section>'
+        f'<section class="strategy-section"><h3>Human and Codex annotations</h3><p class="strategy-note">Facts and deterministic derivations above are computed; records below are attributed annotations.</p><ul class="annotation-list">{annotation_html}</ul></section></details>'
+    )
+
+
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="14" fill="#0b1020"/>
 <circle cx="32" cy="32" r="21" fill="none" stroke="#2a3552" stroke-width="4"/>
@@ -760,11 +865,14 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
             parsed_url = urlsplit(self.path)
             route = parsed_url.path
             requested_session = parse_qs(parsed_url.query).get("session", [None])[0]
+            query = parse_qs(parsed_url.query)
+            compare_values = (query.get("compare_a", [""])[0], query.get("compare_b", [""])[0])
+            comparison = compare_values if all(compare_values) else None
             try:
                 if route == "/favicon.svg":
                     self._send(HTTPStatus.OK, "image/svg+xml", FAVICON_SVG.encode())
                     return
-                snapshot = source.snapshot(requested_session)
+                snapshot = source.snapshot(requested_session, comparison)
                 if route == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", render_dashboard(snapshot).encode())
                 elif route == "/api/snapshot":
@@ -943,6 +1051,9 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     )
     accounting_html = _accounting_html(snapshot["accounting"], views)
     brain_html = _render_agent_brain(snapshot.get("live_execution", {}))
+    strategy_html = _render_strategy(
+        snapshot.get("strategy", {}), views, snapshot.get("selected_session"),
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -1016,11 +1127,15 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .omitted-count{{color:var(--muted);font-size:11px}}
 .microscope-trigger{{background:#18223a;color:#b9c9ef;border:1px solid #41527b;border-radius:6px;padding:4px 8px;font:inherit;font-size:10px;cursor:pointer;white-space:nowrap}} .microscope-trigger:hover,.microscope-trigger:focus-visible{{outline:2px solid #8faeff;outline-offset:1px;color:#fff}}
 @media (max-width:560px){{.attention-item{{grid-template-columns:55px 1fr}} .attention-reason{{grid-column:1/-1;white-space:normal}}}}
+.strategy-lab{{max-width:none;background:var(--panel);border:1px solid #41527b;border-radius:12px;margin:0 0 16px;padding:0}} .strategy-lab>summary{{cursor:pointer;display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:13px 15px}} .strategy-lab>summary strong{{font-size:15px}} .strategy-lab>summary>span:last-child{{color:var(--muted);font-size:11px;margin-left:auto}} .strategy-section{{border-top:1px solid var(--line);padding:14px}} .strategy-section h3{{margin:0 0 9px}} .strategy-note,.comparison-note{{color:var(--muted);font-size:11px}}
+.bottleneck-grid{{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px}} .bottleneck-grid li{{border:1px solid var(--line);border-radius:8px;padding:9px}} .bottleneck-grid strong,.bottleneck-grid span,.bottleneck-grid small{{display:block}} .bottleneck-grid strong{{font-size:20px}} .bottleneck-grid span{{text-transform:capitalize}} .bottleneck-grid small,.cohort-table small{{color:var(--muted);font-size:9px;white-space:normal}}
+.compare-form{{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px}} .compare-form label{{display:grid;gap:3px;color:var(--muted);font-size:10px}} .comparison-divergence{{background:#332a13}} .cohort-table th,.cohort-table td{{vertical-align:top}} .cohort-table td strong,.cohort-table td small,.cohort-table th small{{display:block;white-space:normal}} .sample-warning{{display:inline-block;color:var(--warn);font-size:9px;margin-top:4px}} .annotation-list{{list-style:none;margin:0;padding:0;display:grid;gap:6px}} .annotation-list li{{border-left:2px solid #8faeff;padding-left:9px;display:grid}} .annotation-list small{{color:var(--muted)}}
 </style>
 </head><body><main>
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
 {source_banner}
 {brain_html}
+{strategy_html}
 <details class="diagnostic-secondary"><summary>Operational verdict · {html.escape(str(verdict.get('headline', 'unknown')))}</summary>{verdict_html}</details>
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>
@@ -1345,6 +1460,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operation-usage", type=Path)
     parser.add_argument("--plans", type=Path)
     parser.add_argument("--v5-runs", type=Path)
+    parser.add_argument("--annotations", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.2.0")
@@ -1366,6 +1482,7 @@ def main(argv: list[str] | None = None) -> int:
         operation_usage=args.operation_usage,
         plans=args.plans,
         v5_runs=args.v5_runs,
+        annotations=args.annotations,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
     print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)

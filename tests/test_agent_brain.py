@@ -172,3 +172,21 @@ def test_microscope_selects_attention_runs_and_uses_bounded_criterion_states(tmp
     assert 'data-kind="run"' in page
     assert "Inspect" in page
     assert "scrollIntoView({block: 'nearest'})" in DASHBOARD_JS
+
+
+def test_strategy_lab_separates_derivations_denominators_and_annotations(tmp_path) -> None:
+    snapshot = fixture_source(tmp_path).snapshot(comparison=("run-hidden", "missing"))
+    snapshot["strategy"]["facts"]["annotations"] = [{
+        "kind": "hypothesis", "summary": "<b>route may be slow</b>",
+        "run_ids": ["run-hidden"], "evidence_refs": ["evidence:one"], "source": "operator",
+    }]
+    page = render_dashboard(snapshot)
+
+    assert "Evidence-backed organization diagnostics" in page
+    assert "No synthetic score · no automatic tuning" in page
+    assert "numerator, denominator, exclusions, and source" in page
+    assert "insufficient sample" in page
+    assert "selected run is absent from the current cohort" in page
+    assert "Facts and deterministic derivations above are computed" in page
+    assert "&lt;b&gt;route may be slow&lt;/b&gt;" in page
+    assert "<b>route may be slow</b>" not in page
