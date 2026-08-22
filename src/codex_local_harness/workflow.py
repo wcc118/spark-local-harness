@@ -296,7 +296,12 @@ def validate_append(existing: Iterable[WorkflowEvent], event: WorkflowEvent) -> 
                 raise ValueError("workflow event already exists")
             raise ValueError("conflicting workflow event_id reuse")
     if not related:
-        if event.stage not in {"intake", "routing", "local-work", "evidence"}:
+        reviewer_bootstrap = (
+            event.stage == "review"
+            and event.role == "reviewer"
+            and event.pull_request is not None
+        )
+        if event.stage not in {"intake", "routing", "local-work", "evidence"} and not reviewer_bootstrap:
             raise ValueError("new operation must begin with intake, routing, implementation, or bounded evidence")
         return
     newest = max(related, key=lambda item: (item.observed_at, item.event_id))

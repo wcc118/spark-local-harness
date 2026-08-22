@@ -15,6 +15,39 @@ def test_workflow_event_accepts_session_id_and_repository():
     assert ev.repository == "owner/repo"
 
 
+def test_reviewer_with_pull_request_can_bootstrap_observed_operation():
+    started = event(
+        "review-started", "review", "active", "2026-08-15T18:00:00Z",
+        role="reviewer", pull_request=42, run_id="review-run",
+    )
+    validate_append([], started)
+    validate_append([started], event(
+        "review-passed", "review", "passed", "2026-08-15T18:01:00Z",
+        role="reviewer", pull_request=42, run_id="review-run",
+    ))
+
+
+@pytest.mark.parametrize("changes", [
+    {},
+    {"role": "coder", "pull_request": 42},
+    {"role": "reviewer"},
+])
+def test_unbounded_review_cannot_bootstrap_observed_operation(changes):
+    with pytest.raises(ValueError, match="new operation must begin"):
+        validate_append([], event(
+            "review-started", "review", "active", "2026-08-15T18:00:00Z", **changes,
+        ))
+
+
+@pytest.mark.parametrize("stage", ["delivery", "merge", "post-merge"])
+def test_late_milestones_cannot_bootstrap_observed_operation(stage):
+    with pytest.raises(ValueError, match="new operation must begin"):
+        validate_append([], event(
+            f"{stage}-started", stage, "active", "2026-08-15T18:00:00Z",
+            role="reviewer", pull_request=42,
+        ))
+
+
 def test_workflow_derives_current_position_and_stage_history():
     operations = derive_operations([
         event("one", "intake", "passed", "2026-08-15T18:00:00Z"),

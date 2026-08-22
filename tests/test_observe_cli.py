@@ -27,3 +27,26 @@ def test_cli_uses_same_v2_contract_for_codex_and_attached_activity(tmp_path, cap
     assert (worker.actor, worker.source, worker.milestone, worker.prior_milestone, worker.activity_type) == (
         "worker", "worker-wrapper", "routing-decision", "routing-decision", "evidence",
     )
+
+
+def test_cli_publishes_first_observed_reviewer_start_and_terminal_fact(tmp_path, capsys):
+    records = tmp_path / "workflow.jsonl"
+    common = [
+        "workflow", "--records", str(records), "--operation-id", "issue-119",
+        "--issue", "119", "--pull-request", "120", "--repository", "owner/repo",
+        "--session-id", "thread-a", "--stage", "review", "--role", "reviewer",
+        "--run-id", "review-run", "--model", "review-model",
+    ]
+    assert main(common + [
+        "--event-id", "review-started", "--state", "active",
+        "--observed-at", "2026-08-22T15:00:00Z",
+    ]) == 0
+    assert main(common + [
+        "--event-id", "review-passed", "--state", "passed",
+        "--observed-at", "2026-08-22T15:01:00Z",
+    ]) == 0
+
+    started, passed = read_records(records, WorkflowEvent)
+    assert (started.stage, started.state, started.pull_request) == ("review", "active", 120)
+    assert (passed.stage, passed.state, passed.prior_milestone) == ("review", "passed", "review")
+    assert len(capsys.readouterr().out.splitlines()) == 2
