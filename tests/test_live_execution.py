@@ -129,6 +129,19 @@ def test_projects_live_loop_and_stage_budget_diagnostics(tmp_path: Path) -> None
     assert (budget["stage"], budget["observed"], budget["limit"]) == ("investigation", 160000, 180000)
 
 
+def test_diagnostic_after_pending_tool_does_not_hide_waiting_state(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _write_log(runs, "active", [
+        _event("tool_use", tool="read", status="pending"),
+        {"type": "diagnostic", "timestamp": NOW_MS, "part": {
+            "kind": "stage-budget", "severity": "warning", "stage": "investigation",
+            "reason": "near budget",
+        }},
+    ])
+    worker = next(node for node in project_live_execution(runs, now=NOW)["nodes"] if node["kind"] == "worker")
+    assert worker["state"] == "waiting-tool"
+
+
 def test_projects_waiting_states_and_terminal_results(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _write_log(runs, "thinking", [_event("step_start")])

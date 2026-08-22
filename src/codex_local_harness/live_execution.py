@@ -111,7 +111,7 @@ def _live_state(events: list[dict[str, Any]], age_seconds: float) -> tuple[str, 
         return "stale", f"no retained event for more than {STALE_AFTER_SECONDS} seconds"
     if not events:
         return "unknown", "no normalized execution event observed"
-    latest = events[-1]
+    latest = next((event for event in reversed(events) if event["kind"] != "diagnostic"), events[-1])
     if latest["kind"] == "tool-use":
         if latest.get("subject") == "test" and latest.get("status") in {"pending", "running"}:
             return "running-tests", "recognized test command is active"
