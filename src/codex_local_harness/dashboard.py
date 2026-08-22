@@ -733,6 +733,7 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         '<div><dt>Last observed</dt><dd id="brain-detail-age">—</dd></div><div><dt>Reason</dt><dd id="brain-detail-reason">—</dd></div>'
         '<div><dt>Source</dt><dd id="brain-detail-source">—</dd></div><div><dt>Run / phase</dt><dd id="brain-detail-run">—</dd></div>'
         '<div><dt>Role / model</dt><dd id="brain-detail-role">—</dd></div><div><dt>Identity</dt><dd id="brain-detail-identity">—</dd></div>'
+        '<div><dt>Objective</dt><dd id="brain-detail-objective">—</dd></div>'
         '<div><dt>Elapsed</dt><dd id="brain-detail-elapsed">—</dd></div><div><dt>Activity</dt><dd id="brain-detail-activity">—</dd></div>'
         '<div><dt>Files</dt><dd id="brain-detail-files">—</dd></div><div><dt>Durable refs</dt><dd id="brain-detail-durable">—</dd></div>'
         '<div><dt>Tokens</dt><dd id="brain-detail-tokens">—</dd></div></dl></aside></div>'
@@ -1063,9 +1064,20 @@ def _running_plan(plan: dict[str, Any] | None) -> str:
     changed = "" if plan["revision"] == 1 else (
         f'<p class="plan-change">Plan changed {age}: {html.escape(plan["revision_reason"] or "reason unavailable")}</p>'
     )
+    inspect_attrs = _microscope_attrs(
+        key=f'plan:{plan.get("session_id")}:{plan.get("issue")}', label="Running plan",
+        kind="running-plan", state="active" if plan["current_step"] else "completed",
+        observed=plan.get("observed_at"), reason=plan.get("revision_reason") or "durable plan evidence",
+        source=plan.get("source"), extra={
+            "objective": plan.get("objective"), "repository": plan.get("repository"),
+            "issue": plan.get("issue"), "session": plan.get("session_id"),
+            "phase": current,
+        },
+    )
     return (
         '<section class="running-plan">'
-        f'<div class="plan-head"><h3>Running plan</h3><span>{plan["completed_steps"]} / {plan["total_steps"]} · revision {plan["revision"]}</span></div>'
+        f'<div class="plan-head"><h3>Running plan</h3><span>{plan["completed_steps"]} / {plan["total_steps"]} · revision {plan["revision"]}</span>'
+        f'<button type="button" class="microscope-trigger" {inspect_attrs}>Inspect evidence</button></div>'
         f'<p class="plan-objective">{html.escape(plan["objective"])}</p>'
         f'<p><small>{issue} · current: {html.escape(current)} · updated {age} · source {html.escape(plan["source"])}</small></p>'
         f'{changed}{_plan_refs(plan["evidence_refs"])}{diagnostics}<ol class="plan-steps">{steps}</ol>'
@@ -1461,6 +1473,7 @@ DASHBOARD_JS = """(() => {
       'brain-detail-run': (choice.dataset.run || 'Unavailable') + ' · ' + (choice.dataset.phase || 'phase unavailable'),
       'brain-detail-role': (choice.dataset.role || 'Unavailable') + ' · ' + (choice.dataset.model || 'model unavailable'),
       'brain-detail-identity': (choice.dataset.repository || 'repository unavailable') + ' · issue ' + (choice.dataset.issue || 'unknown') + ' · session ' + (choice.dataset.session || 'unknown'),
+      'brain-detail-objective': choice.dataset.objective || 'Unavailable',
       'brain-detail-elapsed': choice.dataset.elapsed && choice.dataset.elapsed !== 'Unavailable' ? choice.dataset.elapsed + ' seconds' : 'Unavailable',
       'brain-detail-activity': 'tools ' + (choice.dataset.tools || 'unknown') + ' · tests ' + (choice.dataset.tests || 'unknown'),
       'brain-detail-files': choice.dataset.files || 'Unavailable',

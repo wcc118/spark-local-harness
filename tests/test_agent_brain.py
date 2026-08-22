@@ -150,7 +150,10 @@ def test_execution_microscope_and_chronological_rail_are_explicit(tmp_path) -> N
     assert "no failure inferred" in page
     assert "semantic acceptance" in page
     assert "File activity alone never verifies semantic completion." in page
-    for field in ("brain-detail-run", "brain-detail-role", "brain-detail-files", "brain-detail-durable"):
+    for field in (
+        "brain-detail-run", "brain-detail-role", "brain-detail-objective",
+        "brain-detail-files", "brain-detail-durable",
+    ):
         assert f'id="{field}"' in page
         assert f"'{field}'" in DASHBOARD_JS
 
