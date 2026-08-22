@@ -165,3 +165,37 @@ def test_cli_defaults_to_unrestricted_v5_agent(tmp_path, monkeypatch):
         "--log-dir", str(tmp_path / "logs"),
     ]) == 0
     assert "--agent v5-coder" in captured.read_text(encoding="utf-8")
+
+
+def test_keyboard_interrupt_stops_child_and_writes_summary(tmp_path):
+    repo = repository(tmp_path)
+    logs = tmp_path / "logs"
+
+    class InterruptingOutput:
+        def __iter__(self):
+            raise KeyboardInterrupt
+
+    class FakeProcess:
+        stdout = InterruptingOutput()
+        terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return -15 if self.terminated else 0
+
+        def kill(self):
+            self.terminated = True
+
+    process = FakeProcess()
+    result = run_worker(
+        repo, "work", issue=101, title="interrupt", role="coder",
+        model="test/model", agent="v5-coder", opencode="opencode",
+        log_dir=logs, output=io.StringIO(), popen=lambda *args, **kwargs: process,
+    )
+    assert process.terminated is True
+    assert result.exit_status == 130
+    assert result.interrupted is True
+    retained = json.loads((logs / f"{result.run_id}.result.json").read_text(encoding="utf-8"))
+    assert retained["interrupted"] is True
