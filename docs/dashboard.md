@@ -4,6 +4,57 @@ The dashboard is a visual projection of immutable diagnostic records. It is
 not an orchestration surface and deliberately has no buttons or endpoints for
 worker launch, configuration, GitHub state, or merge operations.
 
+## Operational verdict and attention queue
+
+At the top of the dashboard, a deterministic **operational verdict** provides
+an immediate summary of the harness's current state. This read-only projection
+is derived solely from existing immutable records and does not issue
+recommendations or launch actions.
+
+### Severity levels
+
+| Severity | Condition |
+|----------|-----------|
+| `CRITICAL` | Contradictions, interrupted/cancelled/timed-out runs, or failed/blocked workflow operations |
+| `DEGRADED` | Unadjudicated runs, publication failures, missing/malformed sources, or telemetry older than 30 minutes |
+| `NO-DATA` | No diagnostic or workflow records have been written; source problems remain visible without fabricating an operational conclusion |
+| `HEALTHY` | All systems nominal |
+
+### Attention queue
+
+Below the verdict, an **attention queue** displays the most urgent items
+requiring operator review:
+
+- Items are ordered by severity and then actual observed time, newest first;
+  arbitrary run IDs are never interpreted as timestamps
+- The initial view shows the 5 most urgent items; additional items are hidden
+  with a count calculated before the queue is bounded
+- Each item includes the subject, reason, and a GitHub issue link when
+  repository identity is available
+- GitHub issue links open in a new tab with `noopener noreferrer` for security
+
+### What each category means
+
+- **Contradictions**: A run claimed success but the independent evaluator
+  observed failure, or vice versa
+- **Interrupted/cancelled/timed-out**: Operations that did not complete
+  successfully due to external factors
+- **Telemetry publication failures**: Failed attempts to publish runtime metrics
+- **Missing/malformed source files**: Diagnostic ledgers that could not be read
+- **Stale sources**: Readable telemetry whose last filesystem update is more
+  than 30 minutes old; a live SSE connection does not imply fresh evidence
+- **Unadjudicated runs**: Execution exists but independent judgment has not
+  been observed; this is uncertainty, not inferred failure
+
+A run with both a claim contradiction and a terminal interruption appears as
+one incident with both reasons. Session filtering includes only publication
+failures bound to that session's runs. Global source health remains visible
+because it affects the trustworthiness of every session projection.
+
+The queue is diagnostic only; it does not automatically resolve issues or
+trigger workers. Use the GitHub issue links to navigate to the relevant work
+items for investigation.
+
 ## Start
 
 ```bash
@@ -108,6 +159,15 @@ shows whether displayed data is fresh.
 Counts are descriptive. Small samples are not evidence of architectural
 improvement, and the dashboard intentionally does not recommend or apply
 changes.
+
+### Accessibility
+
+State is conveyed by visual indicators (color) **and** explicit labels:
+- Severity chips always include the severity level text (e.g., "CRITICAL")
+- Attention items include both severity label and reason text
+- No information is conveyed by color alone
+- The attention queue is fully accessible via keyboard navigation and screen
+  readers using proper ARIA semantics
 
 ## Safety boundary
 

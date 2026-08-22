@@ -15,8 +15,8 @@
     "division_of_labor_cards_relabeled_frontier_not_codex_only": true,
     "codex_only_frontier_status_cards_left_untouched": true
   },
-  "sha256": {
-    "dashboard": "041a37b3b21402ef36dae47758f67befa62fd2e04b78f18c540a99152f05f610",
+   "sha256": {
+    "dashboard": "4ad6076e181a5a9f7dc50fd5b57857e7764fa71089209c0383de1d2a3df58701",
     "dashboard_unit": "497c5eeaa03c38230b0c4d464c86bec1dc2263dcdbcfc6a85fe93c42c7cfc013",
     "claude_usage": "5d41daf294fc4416d19c6d3937fec8b13dfd9de651d72db8e0f53c9c6fa45f45"
   }

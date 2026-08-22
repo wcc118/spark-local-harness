@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -19,6 +20,191 @@ from .operation_usage import OperationUsageSnapshot, derive_usage
 from .plan_event import derive_plans, read_plan_records
 from .read_model import RunView, build_run_views, summarize_views
 from .workflow import derive_operations, read_workflow_records
+
+
+@dataclass(frozen=True)
+class OperationalVerdict:
+    """Deterministic read-only operational status projection."""
+    severity: str  # "critical", "degraded", "no-data", "healthy"
+    headline: str
+    reasons: tuple[str, ...]
+    source_references: tuple[str, ...]
+    detail_counts: dict[str, int]
+    oldest_unadjudicated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class AttentionItem:
+    """A single item requiring operator attention, ordered by severity then recency."""
+    severity: str  # "critical", "degraded", "warning"
+    subject: str  # human-readable subject
+    reason: str  # why it needs attention
+    issue: int | None  # GitHub issue if available
+    repository: str | None
+    occurred_at: str  # ISO timestamp for recency sorting
+
+
+def _compute_operational_verdict(
+    views: tuple[RunView, ...], operations: list[dict[str, Any]],
+    publication_failures: tuple[PublicationFailure, ...], sources: list[dict[str, Any]],
+    now: datetime, run_observed_at: dict[str, str],
+) -> OperationalVerdict:
+    """Derive status from immutable evidence without inferring success."""
+    unadjudicated = [view for view in views if view.effective_outcome == "unadjudicated"]
+    contradictions = [view for view in views if view.contradiction]
+    interrupted = [view for view in views if view.lifecycle_state in {"interrupted", "cancelled", "timed-out"}]
+    publication_failed = len(publication_failures)
+    source_problems = sum(1 for s in sources if s["state"] != "ok")
+    failed_ops = [op for op in operations if op["current_state"] == "failed"]
+    blocked_ops = [op for op in operations if op["current_state"] == "blocked"]
+    stale_sources = [
+        source for source in sources
+        if source.get("state") == "ok" and source.get("mtime_epoch") is not None
+        and now.timestamp() - source["mtime_epoch"] > 1800
+    ]
+    has_records = bool(
+        views or operations or publication_failures
+        or any(source.get("records", 0) for source in sources)
+    )
+    critical_count = len(contradictions) + len(interrupted) + len(failed_ops) + len(blocked_ops)
+    degraded_count = publication_failed + source_problems + len(stale_sources) + len(unadjudicated)
+    if not has_records:
+        severity = "no-data"
+        headline = "No diagnostic data"
+    elif critical_count:
+        severity = "critical"
+        headline = (
+            "1 critical condition requires attention" if critical_count == 1
+            else f"{critical_count} critical conditions require attention"
+        )
+    elif degraded_count:
+        severity = "degraded"
+        headline = (
+            "1 diagnostic condition needs review" if degraded_count == 1
+            else f"{degraded_count} diagnostic conditions need review"
+        )
+    else:
+        severity = "healthy"
+        headline = "System healthy"
+
+    reasons = []
+    if contradictions:
+        reasons.append(f"{len(contradictions)} contradiction(s) between claim and observation")
+    if failed_ops:
+        reasons.append(f"{len(failed_ops)} failed workflow operation(s)")
+    if blocked_ops:
+        reasons.append(f"{len(blocked_ops)} blocked workflow operation(s)")
+    if interrupted:
+        reasons.append(f"{len(interrupted)} interrupted/cancelled/timed-out run(s)")
+    if publication_failed:
+        reasons.append(f"{publication_failed} telemetry publication failure(s)")
+    if source_problems:
+        reasons.append(f"{source_problems} missing or malformed source file(s)")
+    if stale_sources:
+        reasons.append(f"{len(stale_sources)} source file(s) older than 30 minutes")
+    if unadjudicated:
+        reasons.append(f"{len(unadjudicated)} unadjudicated run(s)")
+
+    source_refs = tuple(s["name"] for s in sources if s["state"] != "ok")
+    unadjudicated_times = [
+        run_observed_at[view.run_id] for view in unadjudicated
+        if view.run_id in run_observed_at
+    ]
+    oldest_unadjudicated = min(unadjudicated_times) if unadjudicated_times else None
+
+    return OperationalVerdict(
+        severity=severity,
+        headline=headline,
+        reasons=reasons,
+        source_references=source_refs,
+        detail_counts={
+            "unadjudicated": len(unadjudicated),
+            "contradictions": len(contradictions),
+            "interrupted": len(interrupted),
+            "publication_failures": publication_failed,
+            "source_problems": source_problems,
+            "failed_operations": len(failed_ops),
+            "blocked_operations": len(blocked_ops),
+        },
+        oldest_unadjudicated_at=oldest_unadjudicated,
+    )
+
+
+def _build_attention_queue(
+    views: tuple[RunView, ...], operations: list[dict[str, Any]],
+    publication_failures: tuple[PublicationFailure, ...], sources: list[dict[str, Any]],
+    now: datetime, run_observed_at: dict[str, str],
+) -> tuple[tuple[AttentionItem, ...], int]:
+    """Return the five most urgent distinct incidents and the full count."""
+    items: list[AttentionItem] = []
+    run_identity: dict[str, tuple[str | None, int | None]] = {}
+    for operation in operations:
+        repository = operation.get("repository")
+        if not isinstance(repository, str) or not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
+            repository = None
+        for run_id in operation.get("run_ids", []):
+            run_identity[run_id] = (repository, operation.get("issue"))
+
+    for view in views:
+        reasons = []
+        severity = "warning"
+        if view.contradiction:
+            severity = "critical"
+            reasons.append(f"claim '{view.claimed_status}' vs observed '{view.effective_outcome}'")
+        if view.lifecycle_state in {"interrupted", "cancelled", "timed-out"}:
+            severity = "critical"
+            reasons.append(f"lifecycle state: {view.lifecycle_state}")
+        elif view.effective_outcome == "unadjudicated":
+            reasons.append("independent adjudication not observed")
+        if reasons:
+            repository, operation_issue = run_identity.get(view.run_id, (None, None))
+            items.append(AttentionItem(
+                severity, f"Run {view.run_id[:12]}", "; ".join(reasons),
+                view.issue or operation_issue, repository, run_observed_at.get(view.run_id, ""),
+            ))
+
+    for operation in operations:
+        state = operation.get("current_state")
+        if state not in {"failed", "blocked"}:
+            continue
+        repository = operation.get("repository")
+        if not isinstance(repository, str) or not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
+            repository = None
+        items.append(AttentionItem(
+            "critical", f"Operation {str(operation.get('operation_id', 'unknown'))[:12]}",
+            f"workflow state: {state}", operation.get("issue"), repository,
+            operation.get("updated_at") or "",
+        ))
+
+    for failure in publication_failures:
+        items.append(AttentionItem(
+            "degraded", f"Publication failure: {failure.run_id[:12]}",
+            f"{failure.phase} → {failure.target} ({failure.error_class})",
+            None, None, failure.observed_at,
+        ))
+
+    for source in sources:
+        if source["state"] != "ok":
+            items.append(AttentionItem(
+                "degraded", f"Source {source['name']}", f"source state: {source['state']}",
+                None, None, "",
+            ))
+        elif source.get("mtime_epoch") is not None and now.timestamp() - source["mtime_epoch"] > 1800:
+            occurred_at = datetime.fromtimestamp(source["mtime_epoch"], timezone.utc).isoformat()
+            items.append(AttentionItem(
+                "degraded", f"Source {source['name']}", "telemetry older than 30 minutes",
+                None, None, occurred_at,
+            ))
+
+    severity_order = {"critical": 0, "degraded": 1, "warning": 2}
+    ordered = []
+    for severity in ("critical", "degraded", "warning"):
+        ordered.extend(sorted(
+            (item for item in items if item.severity == severity),
+            key=lambda item: (item.occurred_at, item.subject), reverse=True,
+        ))
+    ordered.extend(item for item in items if item.severity not in severity_order)
+    return tuple(ordered[:5]), len(ordered)
 
 
 @dataclass(frozen=True)
@@ -65,16 +251,36 @@ class DashboardSource:
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
         sessions = _derive_sessions(current_operations, self._current_time(), plans)
         selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
+        selected_run_ids: set[str] | None = None
         if selected is not None:
             current_operations = [item for item in current_operations if (item["session_id"] or "legacy") == selected]
-            run_ids = {run_id for item in current_operations for run_id in item["run_ids"]}
-            views = tuple(view for view in views if view.run_id in run_ids)
-            runs = tuple(item for item in runs if item.run_id in run_ids)
+            selected_run_ids = {run_id for item in current_operations for run_id in item["run_ids"]}
+            views = tuple(view for view in views if view.run_id in selected_run_ids)
+            runs = tuple(item for item in runs if item.run_id in selected_run_ids)
             plans = tuple(item for item in plans if (item["session_id"] or "legacy") == selected)
         operation_usage = derive_usage(usage_snapshots)
         if selected is not None:
             operation_usage = tuple(item for item in operation_usage if item["session_id"] == selected)
         accounting = _accounting(runs, views, operation_usage, current_operations)
+
+        current_time = self._current_time()
+        scoped_failures = tuple(
+            failure for failure in publication_failures
+            if selected_run_ids is None or failure.run_id in selected_run_ids
+        )
+        run_observed_at: dict[str, str] = {}
+        for record in (*adjudications, *lifecycle):
+            if selected_run_ids is None or record.run_id in selected_run_ids:
+                run_observed_at[record.run_id] = max(
+                    run_observed_at.get(record.run_id, ""), record.observed_at,
+                )
+        verdict = _compute_operational_verdict(
+            views, current_operations, scoped_failures, statuses, current_time, run_observed_at,
+        )
+        attention_queue, attention_total = _build_attention_queue(
+            views, current_operations, scoped_failures, statuses, current_time, run_observed_at,
+        )
+
         return {
             "schema_version": 1,
             "release": self.release,
@@ -95,6 +301,26 @@ class DashboardSource:
             "codex": frontier.as_dict() if frontier else FrontierStatus(
                 "unavailable", "1970-01-01T00:00:00Z", "unavailable", note_code="official-interface-unavailable"
             ).as_dict(),
+            "operational_verdict": {
+                "severity": verdict.severity,
+                "headline": verdict.headline,
+                "reasons": verdict.reasons,
+                "source_references": verdict.source_references,
+                "detail_counts": verdict.detail_counts,
+                "oldest_unadjudicated_at": verdict.oldest_unadjudicated_at,
+            },
+            "attention_queue": [
+                {
+                    "severity": item.severity,
+                    "subject": item.subject,
+                    "reason": item.reason,
+                    "issue": item.issue,
+                    "repository": item.repository,
+                    "occurred_at": item.occurred_at,
+                }
+                for item in attention_queue
+            ],
+            "attention_total": attention_total,
         }
 
     @staticmethod
@@ -192,6 +418,91 @@ def _triage_bucket(view: dict[str, Any]) -> str:
     return "clean"
 
 
+def _render_operational_verdict(
+    verdict: dict[str, Any], attention_queue: list[dict[str, Any]], attention_total: int,
+) -> str:
+    """Render the operational verdict and attention queue."""
+    severity = verdict.get("severity", "unknown")
+    headline = verdict.get("headline", "System status unknown")
+    reasons = verdict.get("reasons", [])
+    detail_counts = verdict.get("detail_counts", {})
+
+    # Severity chip
+    severity_class = {
+        "critical": "critical",
+        "degraded": "warn",
+        "no-data": "unknown",
+        "healthy": "good",
+    }.get(severity, "unknown")
+    severity_label = severity.upper()
+
+    # Reasons list
+    reasons_html = ""
+    if reasons:
+        reason_items = "".join(f'<li>{html.escape(reason)}</li>' for reason in reasons)
+        reasons_html = f'<ul class="verdict-reasons">{reason_items}</ul>'
+
+    # Detail counts
+    detail_items = []
+    for key, count in sorted(detail_counts.items()):
+        if count > 0:
+            label = key.replace("_", " ").title()
+            detail_items.append(f'<span class="detail-count">{label}: {count}</span>')
+    details_html = "".join(detail_items) if detail_items else '<span class="detail-count">All systems nominal</span>'
+
+    visible_items = attention_queue
+    omitted_count = max(0, attention_total - len(visible_items))
+
+    queue_items = []
+    for item in visible_items:
+        item_severity = item.get("severity", "warning")
+        item_sev_class = {
+            "critical": "critical",
+            "degraded": "warn",
+            "warning": "warn",
+        }.get(item_severity, "warn")
+
+        # Build subject with GitHub link if available
+        subject = html.escape(item.get("subject", "Unknown subject"))
+        issue = item.get("issue")
+        repo = item.get("repository")
+        if issue and repo:
+            url = f'https://github.com/{quote(repo, safe="/")}/issues/{issue}'
+            subject = f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">{subject}</a>'
+
+        item_html = (
+            f'<li class="attention-item {item_sev_class}">'
+            f'<span class="attention-severity">{html.escape(item_severity.upper())}</span>'
+            f'<span class="attention-subject">{subject}</span>'
+            f'<span class="attention-reason">{html.escape(item.get("reason", ""))}</span>'
+            f'</li>'
+        )
+        queue_items.append(item_html)
+
+    queue_html = ""
+    if queue_items:
+        omitted_note = f' <span class="omitted-count">({omitted_count} more hidden)</span>' if omitted_count > 0 else ""
+        queue_html = (
+            f'<details class="attention-queue" open>'
+            f'<summary class="attention-summary"><strong>Attention queue</strong>{omitted_note}</summary>'
+            f'<ul class="attention-list">{"".join(queue_items)}</ul>'
+            f'</details>'
+        )
+
+    # Main verdict container
+    verdict_html = (
+        f'<section class="operational-verdict severity-{severity_class}">'
+        f'<h2>Operational verdict</h2>'
+        f'<div class="verdict-header"><span class="verdict-severity">{severity_label}</span><strong>{html.escape(headline)}</strong></div>'
+        f'<div class="verdict-details">{details_html}</div>'
+        f'{reasons_html}'
+        f'{queue_html}'
+        f'</section>'
+    )
+
+    return verdict_html
+
+
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="14" fill="#0b1020"/>
 <circle cx="32" cy="32" r="21" fill="none" stroke="#2a3552" stroke-width="4"/>
@@ -282,6 +593,21 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
 def render_dashboard(snapshot: dict[str, Any]) -> str:
     summary = snapshot["summary"]
     views = snapshot["runs"]
+
+    # Render operational verdict and attention queue
+    verdict = snapshot.get("operational_verdict", {
+        "severity": "no-data",
+        "headline": "No diagnostic data",
+        "reasons": [],
+        "source_references": [],
+        "detail_counts": {},
+        "oldest_unadjudicated_at": None,
+    })
+    attention_queue = snapshot.get("attention_queue", [])
+    verdict_html = _render_operational_verdict(
+        verdict, attention_queue, snapshot.get("attention_total", len(attention_queue)),
+    )
+
     cards = [
         ("Runs", summary["runs"]),
         ("Adjudicated", summary["adjudicated_runs"]),
@@ -412,9 +738,28 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .rail-current{{color:var(--muted);font-size:12px}}
 .accounting-footnote{{color:var(--muted);font-size:12px;margin:8px 2px 0}}
 .card-spark{{margin-top:8px}} .sparkline{{display:block}}
-</style></head><body><main>
+</style>
+<style>
+.operational-verdict{{border:2px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;margin:0 0 16px}} .operational-verdict.severity-critical{{border-color:var(--bad)}} .operational-verdict.severity-degraded{{border-color:var(--warn)}} .operational-verdict.severity-no-data{{border-color:var(--muted);background:#1b2338}} .operational-verdict.severity-healthy{{border-color:var(--good)}}
+.verdict-header{{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}} .verdict-severity{{display:inline-block;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;text-transform:uppercase}}
+.verdict-severity.critical{{background:var(--bad);color:#000}} .verdict-severity.degraded{{background:var(--warn);color:#000}} .verdict-severity.no-data{{background:var(--muted);color:#fff}} .verdict-severity.healthy{{background:var(--good);color:#000}}
+.verdict-details{{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px}} .detail-count{{display:inline-block;padding:2px 8px;border-radius:4px;background:#2a3552;color:var(--ink);font-size:12px}}
+.verdict-reasons{{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:4px}} .verdict-reasons li{{color:var(--ink);font-size:13px}}
+.attention-queue{{max-width:600px}} .attention-summary{{cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 0;margin:8px 0 0}} .attention-summary::-webkit-details-marker{{display:none}}
+.attention-summary::before{{content:"▸";color:var(--muted);font-size:10px;width:8px}} details[open]>.attention-summary::before{{content:"▾"}}
+.attention-list{{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}}
+.attention-item{{border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;grid-template-columns:60px 1fr auto;gap:8px;align-items:center}}
+.attention-item.critical{{border-color:var(--bad)}} .attention-item.warn{{border-color:var(--warn)}}
+.attention-severity{{display:flex;justify-content:center;align-items:center;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;background:#2a3552;color:var(--ink)}}
+.attention-severity.CRITICAL{{background:var(--bad);color:#000}} .attention-severity.DEGRADED{{background:var(--warn);color:#000}}
+.attention-subject{{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.attention-reason{{color:var(--muted);font-size:12px;white-space:nowrap}}
+.omitted-count{{color:var(--muted);font-size:11px}}
+</style>
+</head><body><main>
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
 {source_banner}
+{verdict_html}
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>
 {session_picker}
