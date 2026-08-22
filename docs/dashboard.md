@@ -68,6 +68,7 @@ PYTHONPATH=src python3 -m codex_local_harness.dashboard \
   --operation-usage ~/.local/share/codex-local-harness/health/operation-usage.jsonl \
   --plans ~/.local/share/codex-local-harness/health/plans.jsonl \
   --v5-runs ~/.local/share/codex-local-harness/v5/runs \
+  --annotations ~/.local/share/codex-local-harness/health/annotations.jsonl \
   --mode live
 ```
 
