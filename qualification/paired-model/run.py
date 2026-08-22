@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,7 +43,9 @@ def load_manifest(path: Path) -> dict[str, Any]:
         raise ValueError("fixture source may not contain symlinks")
     for case in data["cases"]:
         required = {"id", "category", "role", "task", "timeout", "check"}
-        if not required.issubset(case) or case["id"] in ids:
+        if (not required.issubset(case) or case["id"] in ids
+                or not isinstance(case["id"], str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", case["id"])):
             raise ValueError("malformed or duplicate benchmark case")
         ids.add(case["id"])
         task = (path.parent / case["task"]).resolve()

@@ -33,6 +33,19 @@ def test_manifest_rejects_task_traversal(tmp_path: Path):
         MODULE.load_manifest(tmp_path / "manifest.json")
 
 
+def test_manifest_rejects_case_id_path_traversal(tmp_path: Path):
+    payload = json.loads((ROOT / "manifest.json").read_text())
+    payload["cases"][0]["id"] = "../../escape"
+    (tmp_path / "input").mkdir()
+    for case in payload["cases"]:
+        task = tmp_path / case["task"]
+        task.parent.mkdir(parents=True, exist_ok=True)
+        task.write_text("task")
+    (tmp_path / "manifest.json").write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="malformed"):
+        MODULE.load_manifest(tmp_path / "manifest.json")
+
+
 def test_event_normalization_deduplicates_tool_lifecycle_and_preserves_unknown_tokens():
     events = [
         {"type":"tool_use","part":{"callID":"one","tool":"bash","state":{"status":"running"}}},
