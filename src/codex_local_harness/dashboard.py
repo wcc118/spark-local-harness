@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .benchmark import BenchmarkAttempt, BenchmarkManifest, PairedSummary, BenchmarkMetrics
 from .control_plane import ControlBroker, ControlError
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
@@ -225,6 +226,9 @@ class DashboardSource:
     plans: Path | None = None
     v5_runs: Path | None = None
     annotations: Path | None = None
+    benchmark_manifest: Path | None = None
+    benchmark_attempts: Path | None = None
+    benchmark_summaries: Path | None = None
 
     def _current_time(self) -> datetime:
         return self.now if self.now is not None else datetime.now(timezone.utc)
@@ -252,6 +256,9 @@ class DashboardSource:
         annotations = self._load(
             self.annotations, "annotations", read_annotations, statuses,
         ) if self.annotations and self.annotations.exists() else ()
+        benchmark_manifest = self._load_benchmark_manifest(statuses) if self.benchmark_manifest else None
+        benchmark_attempts = self._load_benchmark_attempts(statuses) if self.benchmark_attempts else ()
+        benchmark_summaries = self._load_benchmark_summaries(statuses) if self.benchmark_summaries else ()
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
@@ -395,6 +402,9 @@ class DashboardSource:
             "attention_total": attention_total,
             "live_execution": live_execution,
             "strategy": strategy,
+            "benchmark_manifest": benchmark_manifest.as_dict() if benchmark_manifest else None,
+            "benchmark_attempts": [a.as_dict() for a in benchmark_attempts],
+            "benchmark_summaries": [s.as_dict() for s in benchmark_summaries],
         }
 
     @staticmethod
@@ -411,6 +421,59 @@ class DashboardSource:
         statuses.append({"name": name, "state": "ok", "file": path.name, "records": len(records), "mtime_epoch": mtime_epoch})
         return records
 
+    def _load_benchmark_manifest(self, statuses: list[dict[str, Any]]) -> BenchmarkManifest | None:
+        """Load benchmark manifest if present."""
+        if not self.benchmark_manifest or not self.benchmark_manifest.exists():
+            statuses.append({"name": "benchmark-manifest", "state": "missing", "file": "benchmark-manifest.json"})
+            return None
+        try:
+            with self.benchmark_manifest.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return BenchmarkManifest.from_dict(data)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            statuses.append({"name": "benchmark-manifest", "state": "malformed", "file": "benchmark-manifest.json"})
+            return None
+
+    def _load_benchmark_attempts(self, statuses: list[dict[str, Any]]) -> tuple[BenchmarkAttempt, ...]:
+        """Load benchmark attempts from JSONL if present."""
+        if not self.benchmark_attempts or not self.benchmark_attempts.exists():
+            statuses.append({"name": "benchmark-attempts", "state": "missing", "file": "benchmark-attempts.jsonl"})
+            return ()
+        try:
+            attempts = []
+            with self.benchmark_attempts.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    attempts.append(BenchmarkAttempt(**data))
+            statuses.append({"name": "benchmark-attempts", "state": "ok", "file": "benchmark-attempts.jsonl", "records": len(attempts)})
+            return tuple(attempts)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            statuses.append({"name": "benchmark-attempts", "state": "malformed", "file": "benchmark-attempts.jsonl"})
+            return ()
+
+    def _load_benchmark_summaries(self, statuses: list[dict[str, Any]]) -> tuple[PairedSummary, ...]:
+        """Load benchmark paired summaries from JSONL if present."""
+        if not self.benchmark_summaries or not self.benchmark_summaries.exists():
+            statuses.append({"name": "benchmark-summaries", "state": "missing", "file": "benchmark-summaries.jsonl"})
+            return ()
+        try:
+            summaries = []
+            with self.benchmark_summaries.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    summaries.append(PairedSummary(**data))
+            statuses.append({"name": "benchmark-summaries", "state": "ok", "file": "benchmark-summaries.jsonl", "records": len(summaries)})
+            return tuple(summaries)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            statuses.append({"name": "benchmark-summaries", "state": "malformed", "file": "benchmark-summaries.jsonl"})
+            return ()
+
     def paths(self) -> tuple[Path, ...]:
         return tuple(path for path in (
             self.runs,
@@ -422,6 +485,9 @@ class DashboardSource:
             self.operation_usage,
             self.plans,
             self.annotations,
+            self.benchmark_manifest,
+            self.benchmark_attempts,
+            self.benchmark_summaries,
         ) if path is not None)
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
@@ -884,6 +950,159 @@ def _render_strategy(strategy: dict[str, Any], runs: list[dict[str, Any]], sessi
     )
 
 
+def _render_benchmark(snapshot: dict[str, Any]) -> str:
+    """Render paired-model benchmark summary with case/model selectors and outcome cards."""
+    manifest = snapshot.get("benchmark_manifest")
+    attempts = snapshot.get("benchmark_attempts", [])
+    summaries = snapshot.get("benchmark_summaries", [])
+
+    if not manifest and not attempts and not summaries:
+        return '<section class="benchmark-lab" aria-labelledby="benchmark-title"><h2 id="benchmark-title">Paired-model benchmark</h2><p class="empty">No benchmark data available.</p></section>'
+
+    manifest_id = manifest.get("manifest_id") if manifest else "unknown"
+    description = manifest.get("description") if manifest else ""
+
+    # Group summaries by fixture
+    fixture_summaries: dict[str, list[dict[str, Any]]] = {}
+    for summary in summaries:
+        fixture_id = summary.get("fixture_id", "unknown")
+        fixture_summaries.setdefault(fixture_id, []).append(summary)
+
+    # Collect unique models and categories
+    models = list(set(
+        summary.get("left_model") or summary.get("right_model")
+        for summary in summaries
+        if summary.get("left_model") or summary.get("right_model")
+    ))
+    models.sort()
+
+    categories = list(set(summary.get("category") for summary in summaries if summary.get("category")))
+    categories.sort()
+
+    # Generate fixture selection options
+    fixture_ids = sorted(fixture_summaries.keys())
+    fixture_options = "".join(
+        f'<option value="{html.escape(fid)}">{html.escape(fid)}</option>'
+        for fid in fixture_ids
+    )
+
+    # Generate model options
+    model_options = "".join(
+        f'<option value="{html.escape(m)}">{html.escape(m)}</option>'
+        for m in models
+    )
+
+    # Generate category options
+    category_options = "".join(
+        f'<option value="{html.escape(c)}">{html.escape(c)}</option>'
+        for c in categories
+    )
+
+    # Generate paired comparison cards
+    cards_html = ""
+    for summary in summaries:
+        fixture_id = summary.get("fixture_id", "unknown")
+        left_model = summary.get("left_model") or "unknown"
+        right_model = summary.get("right_model") or "unknown"
+        left_tokens = summary.get("left_tokens")
+        right_tokens = summary.get("right_tokens")
+        left_elapsed = summary.get("left_elapsed")
+        right_elapsed = summary.get("right_elapsed")
+        left_correct = summary.get("left_correct")
+        right_correct = summary.get("right_correct")
+        correct_first = summary.get("correct_first")
+        tie = summary.get("tie")
+        inconclusive = summary.get("inconclusive")
+        notes = summary.get("notes", "")
+
+        # Outcome card styling
+        if correct_first:
+            outcome_class = "outcome-left-wins"
+            outcome_label = "Left model correct-first"
+        elif tie:
+            outcome_class = "outcome-tie"
+            outcome_label = "Tie: both correct"
+        elif inconclusive:
+            outcome_class = "outcome-inconclusive"
+            outcome_label = "Inconclusive: both failed"
+        else:
+            outcome_class = "outcome-mixed"
+            outcome_label = "Mixed outcomes"
+
+        # Tokens comparison
+        tokens_display = ""
+        if left_tokens is not None and right_tokens is not None:
+            tokens_display = (
+                f'<div class="metric-row"><span class="metric-label">Tokens</span>'
+                f'<span class="metric-value left">A: {left_tokens:,}</span>'
+                f'<span class="metric-value right">B: {right_tokens:,}</span></div>'
+            )
+        elif left_tokens is not None:
+            tokens_display = f'<div class="metric-row"><span class="metric-label">Tokens A</span><span class="metric-value">{left_tokens:,}</span></div>'
+        elif right_tokens is not None:
+            tokens_display = f'<div class="metric-row"><span class="metric-label">Tokens B</span><span class="metric-value">{right_tokens:,}</span></div>'
+
+        # Elapsed comparison
+        elapsed_display = ""
+        if left_elapsed is not None and right_elapsed is not None:
+            elapsed_display = (
+                f'<div class="metric-row"><span class="metric-label">Elapsed</span>'
+                f'<span class="metric-value left">A: {left_elapsed:.1f}s</span>'
+                f'<span class="metric-value right">B: {right_elapsed:.1f}s</span></div>'
+            )
+        elif left_elapsed is not None:
+            elapsed_display = f'<div class="metric-row"><span class="metric-label">Elapsed A</span><span class="metric-value">{left_elapsed:.1f}s</span></div>'
+        elif right_elapsed is not None:
+            elapsed_display = f'<div class="metric-row"><span class="metric-label">Elapsed B</span><span class="metric-value">{right_elapsed:.1f}s</span></div>'
+
+        # Correctness display
+        correct_display = ""
+        if left_correct is not None and right_correct is not None:
+            left_ok = '✓' if left_correct else '✗'
+            right_ok = '✓' if right_correct else '✗'
+            correct_display = (
+                f'<div class="metric-row"><span class="metric-label">Correct</span>'
+                f'<span class="metric-value left">{left_ok} A</span>'
+                f'<span class="metric-value right">{right_ok} B</span></div>'
+            )
+
+        # Raw run links
+        left_run_id = summary.get("left_attempt_id", "")
+        right_run_id = summary.get("right_attempt_id", "")
+
+        card_html = (
+            f'<details class="benchmark-card {outcome_class}" open>'
+            f'<summary class="benchmark-summary"><strong>{html.escape(fixture_id)}</strong>'
+            f'<span class="benchmark-label">{html.escape(outcome_label)}</span></summary>'
+            f'<div class="benchmark-metrics"><div class="metrics-left"><strong>Model A</strong>'
+            f'<span class="benchmark-model">{html.escape(left_model)}</span>{tokens_display}{elapsed_display}{correct_display}</div>'
+            f'<div class="metrics-right"><strong>Model B</strong>'
+            f'<span class="benchmark-model">{html.escape(right_model)}</span></div></div>'
+            f'<div class="benchmark-notes"><strong>Analysis:</strong> {html.escape(notes)}</div>'
+            f'<div class="benchmark-links"><a href="#run-{html.escape(left_run_id)}" class="raw-run-link">Raw run A</a>'
+            f'<a href="#run-{html.escape(right_run_id)}" class="raw-run-link">Raw run B</a></div>'
+            f'</details>'
+        )
+        cards_html += card_html
+
+    if not cards_html:
+        cards_html = '<p class="empty">No paired comparisons available.</p>'
+
+    return (
+        '<section class="benchmark-lab" aria-labelledby="benchmark-title">'
+        f'<h2 id="benchmark-title">Paired-model benchmark</h2>'
+        f'<p class="benchmark-desc">{html.escape(description)}</p>'
+        f'<div class="benchmark-controls">'
+        f'<label>Fixture<select id="fixture-selector">{fixture_options}</select></label>'
+        f'<label>Model<select id="model-selector">{model_options}</select></label>'
+        f'<label>Category<select id="category-selector">{category_options}</select></label>'
+        f'<button type="button" id="refresh-benchmarks" class="session-submit">Refresh</button>'
+        f'</div>'
+        f'<div class="benchmark-cards">{cards_html}</div>'
+        f'</section>'
+    )
+
+
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="14" fill="#0b1020"/>
 <circle cx="32" cy="32" r="21" fill="none" stroke="#2a3552" stroke-width="4"/>
@@ -1136,6 +1355,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     strategy_html = _render_strategy(
         snapshot.get("strategy", {}), views, snapshot.get("selected_session"),
     )
+    benchmark_html = _render_benchmark(snapshot)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -1230,6 +1450,7 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .transcript-toggle-btn,.transcript-clear-btn{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer}} .transcript-toggle-btn:hover,.transcript-clear-btn:hover{{color:var(--ink);border-color:var(--line)}} .transcript-toggle-btn[aria-pressed="true"]{{color:var(--ink);background:rgba(89,212,153,.1);border-color:rgba(89,212,153,.3)}}
 .console-pending-permissions,.console-pending-questions{{margin-bottom:16px}} .console-pending-permissions h4,.console-pending-questions h4{{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}}
 .console-policy{{border-top:1px solid var(--line);padding-top:12px}} .console-policy p{{color:var(--muted);font-size:11px}} .console-policy pre{{max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:10px;font-size:11px}}
+.benchmark-lab{{max-width:none;background:var(--panel);border:1px solid #41527b;border-radius:12px;margin:0 0 16px;padding:0}} .benchmark-lab>h2{{padding:14px 16px;margin:0}} .benchmark-desc{{padding:0 16px 14px;color:var(--muted);font-size:13px}} .benchmark-controls{{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin:0 16px 14px}} .benchmark-controls label{{display:grid;gap:3px;color:var(--muted);font-size:10px}} .benchmark-controls select{{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font:inherit;max-width:140px}} .benchmark-controls .session-submit{{background:var(--good);color:#000}} .benchmark-cards{{padding:0 16px 16px;display:grid;gap:12px}} .benchmark-card{{border:1px solid var(--line);border-radius:8px;padding:12px;background:rgba(255,255,255,.02)}} .benchmark-card.outcome-left-wins{{border-left:3px solid var(--good)}} .benchmark-card.outcome-tie{{border-left:3px solid var(--warn)}} .benchmark-card.outcome-inconclusive{{border-left:3px solid var(--muted)}} .benchmark-card.outcome-mixed{{border-left:3px solid var(--bad)}} .benchmark-summary{{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 10px;margin:0 0 10px}} .benchmark-summary strong{{font-size:14px}} .benchmark-label{{font-size:11px;background:rgba(255,255,255,.1);padding:2px 6px;border-radius:4px}} .benchmark-metrics{{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px 10px;background:rgba(255,255,255,.02);border-radius:6px;margin-bottom:8px}} .metrics-left,.metrics-right{{padding:8px;border-radius:6px;background:rgba(255,255,255,.03)}} .metrics-left{{border-right:1px solid var(--line)}} .benchmark-model{{display:block;font-size:13px;color:var(--ink);margin-top:4px}} .metric-row{{display:flex;justify-content:space-between;gap:8px;margin:4px 0;font-size:12px}} .metric-label{{color:var(--muted)}} .metric-value{{font-weight:600}} .metric-value.left{{color:var(--good)}} .metric-value.right{{color:#8faeff}} .benchmark-notes{{padding:8px 10px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);margin-top:8px}} .benchmark-links{{padding:8px 10px;display:flex;gap:8px;flex-wrap:wrap}} .raw-run-link{{display:inline-block;padding:4px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--muted);text-decoration:none}} .raw-run-link:hover{{color:var(--ink);border-color:var(--ink)}} .benchmark-cards .empty{{color:var(--muted);text-align:center;padding:20px}}
 .permissions-list,.questions-list{{display:grid;gap:10px}} .empty-message{{color:var(--muted);font-size:12px;text-align:center;padding:12px}} .permission-card,.question-card{{border:1px solid var(--line);border-radius:8px;padding:12px;background:rgba(255,255,255,.03)}}
 .permission-card{{border-left:3px solid var(--warn)}} .question-card{{border-left:3px solid #8faeff}}
 .permission-id,.question-id{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}}
@@ -1250,6 +1471,7 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 {source_banner}
 {brain_html}
 {strategy_html}
+{benchmark_html}
 <details class="diagnostic-secondary"><summary>Operational verdict · {html.escape(str(verdict.get('headline', 'unknown')))}</summary>{verdict_html}</details>
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>

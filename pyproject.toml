@@ -20,6 +20,7 @@ codex-harness-operation-usage = "codex_local_harness.operation_usage:main"
 codex-harness-claude-usage = "codex_local_harness.claude_usage:main"
 codex-harness-plan = "codex_local_harness.plan_cli:main"
 codex-local-worker-v5 = "codex_local_harness.v5_runner:main"
+codex-harness-benchmark = "codex_local_harness.benchmark_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
