@@ -190,7 +190,7 @@ def test_dashboard_backend_requires_dashboard_backend_service():
 def test_dashboard_backend_release_version():
     """Verify dashboard-backend.service uses the current release."""
     content = read_unit("dashboard-backend.service")
-    assert "--release v0.5.6" in content
+    assert "--release v0.6.0" in content
 
 
 def test_dashboard_backend_live_mode():
