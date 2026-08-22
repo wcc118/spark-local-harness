@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RUNS = 32
 MAX_EVENTS_PER_RUN = 40
 MAX_EVENTS = 160
 MAX_NODES = 128
 MAX_EDGES = 192
+MAX_SIGNALS = 64
+MAX_HANDOFFS = 64
 STALE_AFTER_SECONDS = 300
 _TEST_COMMAND = re.compile(r"(^|\s|/)(pytest|tox|nox|cargo test|go test|npm test|pnpm test|yarn test)(\s|$)")
 
@@ -108,14 +110,69 @@ def _live_state(events: list[dict[str, Any]], age_seconds: float) -> tuple[str, 
     return "waiting-inference", "model step completed without terminal run evidence"
 
 
-def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None) -> dict[str, Any]:
+def _safe_paths(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item)[:256] for item in value[:24] if isinstance(item, str)]
+
+
+def _safe_number(value: Any) -> float | int | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _diagnostic_signals(run_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    tool_counts: dict[str, int] = {}
+    previous_time: datetime | None = None
+    for event in events:
+        if event["kind"] == "tool-use":
+            tool = str(event.get("tool") or "unknown")
+            tool_counts[tool] = tool_counts.get(tool, 0) + 1
+            if event.get("status") in {"error", "failed"}:
+                signals.append({
+                    "kind": "tool-error", "run_id": run_id, "severity": "notice",
+                    "observed_at": event.get("observed_at"), "source_ref": event["source_ref"],
+                    "reason": f"tool {tool} reported {event.get('status')}; no semantic failure inferred",
+                })
+        observed_at = event.get("observed_at")
+        try:
+            current_time = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        except ValueError:
+            current_time = None
+        if previous_time is not None and current_time is not None:
+            silence = (current_time - previous_time).total_seconds()
+            if silence >= 120:
+                signals.append({
+                    "kind": "silent-interval", "run_id": run_id, "severity": "notice",
+                    "observed_at": observed_at, "source_ref": event["source_ref"],
+                    "reason": f"{int(silence)} seconds between retained events; no failure inferred",
+                })
+        previous_time = current_time or previous_time
+    for tool, count in sorted(tool_counts.items()):
+        if count > 1:
+            signals.append({
+                "kind": "repeated-tool", "run_id": run_id, "severity": "notice",
+                "observed_at": events[-1].get("observed_at") if events else None,
+                "source_ref": events[-1]["source_ref"] if events else f"v5-run:{run_id}",
+                "reason": f"tool {tool} observed {count} times; repetition is not classified as failure",
+            })
+    return signals
+
+
+def project_live_execution(
+    runs_dir: Path | None, *, now: datetime | None = None, session_id: str | None = None,
+) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     empty = {
         "schema_version": SCHEMA_VERSION,
         "observed_at": now.isoformat(),
         "source_state": "unavailable" if runs_dir is None else "missing",
         "nodes": [], "edges": [], "events": [],
-        "truncated": {"runs": 0, "nodes": 0, "edges": 0, "events": 0},
+        "signals": [], "handoffs": [],
+        "criteria_states": [
+            {"criterion": "semantic acceptance", "state": "unknown", "reason": "no criterion evidence supplied"},
+        ],
+        "truncated": {"runs": 0, "nodes": 0, "edges": 0, "events": 0, "signals": 0, "handoffs": 0},
         "diagnostics": [],
     }
     if runs_dir is None or not runs_dir.is_dir():
@@ -131,6 +188,8 @@ def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str, str], dict[str, Any]] = {}
     all_events: list[dict[str, Any]] = []
+    all_signals: list[dict[str, Any]] = []
+    handoffs: list[dict[str, Any]] = []
     diagnostics: list[str] = []
 
     for log_path in selected:
@@ -138,6 +197,9 @@ def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None
         events, malformed, partial_tail = _read_events(log_path)
         result_path = runs_dir / f"{run_id}.result.json"
         result, result_malformed = _safe_result(result_path) if result_path.exists() else (None, False)
+        result_session = (result or {}).get("session_id")
+        if session_id is not None and result_session != session_id:
+            continue
         observed_at = max((event["observed_at"] or "" for event in events), default="")
         if not observed_at:
             observed_at = datetime.fromtimestamp(log_path.stat().st_mtime, timezone.utc).isoformat()
@@ -158,7 +220,29 @@ def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None
                 str((result or {})["session_id"])[:128]
                 if isinstance((result or {}).get("session_id"), str) else None
             ),
+            "phase": state,
+            "elapsed_seconds": _safe_number((result or {}).get("elapsed_seconds")),
+            "tool_calls": _safe_number((result or {}).get("tool_calls")),
+            "test_observations": len((result or {}).get("tests", [])) if isinstance((result or {}).get("tests"), list) else 0,
+            "files_observed": _safe_paths((result or {}).get("changed_paths")),
+            "branch": str((result or {}).get("branch"))[:256] if isinstance((result or {}).get("branch"), str) else None,
+            "commit": str((result or {}).get("head_sha"))[:40] if isinstance((result or {}).get("head_sha"), str) else None,
+            "pull_request": (result or {}).get("pull_request") if isinstance((result or {}).get("pull_request"), int) else None,
+            "token_usage": None,
         }
+        all_signals.extend(_diagnostic_signals(run_id, events))
+        if result is not None:
+            all_events.append({
+                "kind": "run-result", "status": state, "run_id": run_id,
+                "observed_at": observed_at, "source_ref": source_ref,
+                "reason": reason,
+            })
+            handoffs.append({
+                "kind": "retained-result", "from": role, "to": "codex",
+                "run_id": run_id, "state": state, "observed_at": observed_at,
+                "source_ref": source_ref,
+                "reason": "worker result became available for orchestrator judgment",
+            })
         if model != "unknown":
             model_id = f"model:{model}"
             nodes[model_id] = {
@@ -210,9 +294,17 @@ def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None
 
     ordered_nodes = sorted(nodes.values(), key=lambda item: (item["kind"], item["id"]))
     ordered_edges = sorted(edges.values(), key=lambda item: (item["kind"], item["source"], item["target"]))
-    ordered_events = sorted(
+    newest_events = sorted(
         all_events, key=lambda item: (item.get("observed_at") or "", item["run_id"], item["source_ref"]),
         reverse=True,
+    )[:MAX_EVENTS]
+    ordered_events = list(reversed(newest_events))
+    ordered_signals = sorted(
+        all_signals, key=lambda item: (item.get("observed_at") or "", item["run_id"], item["kind"]),
+        reverse=True,
+    )
+    ordered_handoffs = sorted(
+        handoffs, key=lambda item: (item.get("observed_at") or "", item["run_id"]), reverse=True,
     )
     source_state = "malformed" if any("malformed" in item for item in diagnostics) else ("partial" if diagnostics else "ok")
     return {
@@ -222,11 +314,18 @@ def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None
         "nodes": ordered_nodes[:MAX_NODES],
         "edges": ordered_edges[:MAX_EDGES],
         "events": ordered_events[:MAX_EVENTS],
+        "signals": ordered_signals[:MAX_SIGNALS],
+        "handoffs": ordered_handoffs[:MAX_HANDOFFS],
+        "criteria_states": [
+            {"criterion": "semantic acceptance", "state": "unknown", "reason": "no criterion evidence supplied"},
+        ],
         "truncated": {
             "runs": max(0, len(logs) - len(selected)),
             "nodes": max(0, len(ordered_nodes) - MAX_NODES),
             "edges": max(0, len(ordered_edges) - MAX_EDGES),
-            "events": max(0, len(ordered_events) - MAX_EVENTS),
+            "events": max(0, len(all_events) - MAX_EVENTS),
+            "signals": max(0, len(ordered_signals) - MAX_SIGNALS),
+            "handoffs": max(0, len(ordered_handoffs) - MAX_HANDOFFS),
         },
         "diagnostics": sorted(diagnostics),
     }

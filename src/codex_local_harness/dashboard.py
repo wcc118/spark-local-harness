@@ -282,6 +282,29 @@ class DashboardSource:
         attention_queue, attention_total = _build_attention_queue(
             views, current_operations, scoped_failures, statuses, current_time, run_observed_at,
         )
+        live_execution = project_live_execution(
+            self.v5_runs, now=current_time, session_id=selected,
+        )
+        criterion_states = []
+        for view in views:
+            if view.contradiction:
+                criterion_state = "contradicted"
+                criterion_reason = "worker claim conflicts with independent observation"
+            elif view.effective_outcome == "unadjudicated":
+                criterion_state = "unknown"
+                criterion_reason = "independent criterion judgment is absent"
+            elif view.effective_outcome in {"passed", "success"}:
+                criterion_state = "verified"
+                criterion_reason = "independent run outcome supports the recorded claim"
+            else:
+                criterion_state = "evidence-observed"
+                criterion_reason = f'independent outcome observed: {view.effective_outcome}'
+            criterion_states.append({
+                "criterion": f"run {view.run_id} outcome", "state": criterion_state,
+                "reason": criterion_reason, "run_id": view.run_id,
+            })
+        if criterion_states:
+            live_execution["criteria_states"] = criterion_states[:64]
 
         return {
             "schema_version": 1,
@@ -323,7 +346,7 @@ class DashboardSource:
                 for item in attention_queue
             ],
             "attention_total": attention_total,
-            "live_execution": project_live_execution(self.v5_runs, now=current_time),
+            "live_execution": live_execution,
         }
 
     @staticmethod
@@ -474,11 +497,19 @@ def _render_operational_verdict(
             url = f'https://github.com/{quote(repo, safe="/")}/issues/{issue}'
             subject = f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">{subject}</a>'
 
+        inspect_attrs = _microscope_attrs(
+            key=f'attention:{item.get("subject")}:{item.get("occurred_at")}',
+            label=item.get("subject", "Attention item"), kind="attention",
+            state=item_severity, observed=item.get("occurred_at"), reason=item.get("reason"),
+            source="operational-attention-queue", extra={"repository": repo, "issue": issue},
+        )
+
         item_html = (
             f'<li class="attention-item {item_sev_class}">'
             f'<span class="attention-severity">{html.escape(item_severity.upper())}</span>'
             f'<span class="attention-subject">{subject}</span>'
             f'<span class="attention-reason">{html.escape(item.get("reason", ""))}</span>'
+            f'<button type="button" class="microscope-trigger" {inspect_attrs}>Inspect</button>'
             f'</li>'
         )
         queue_items.append(item_html)
@@ -557,6 +588,23 @@ def _brain_age(observed_at: Any, projection_time: Any) -> str:
     return _format_age(max(0.0, (current - observed).total_seconds()))
 
 
+def _microscope_attrs(
+    *, key: Any, label: Any, kind: Any, state: Any, observed: Any,
+    reason: Any, source: Any, age: Any = "time unknown", extra: dict[str, Any] | None = None,
+) -> str:
+    values = {
+        "brain-key": key, "label": label, "kind": kind, "state": _brain_state(state),
+        "age": age, "observed": observed or "Observation time unavailable",
+        "reason": reason or "Derivation reason unavailable",
+        "source": source or "Evidence reference unavailable",
+        **(extra or {}),
+    }
+    return " ".join(
+        f'data-{name}="{html.escape(str(value) if value is not None else "Unavailable", quote=True)}"'
+        for name, value in values.items()
+    )
+
+
 def _brain_button(item: dict[str, Any], index: int, projection_time: Any, *, edge: bool = False) -> str:
     state = _brain_state(item.get("state"))
     if edge:
@@ -574,15 +622,21 @@ def _brain_button(item: dict[str, Any], index: int, projection_time: Any, *, edg
     source = str(item.get("source_ref") or "Evidence reference unavailable")
     age = _brain_age(item.get("observed_at"), projection_time)
     selection_key = str(item.get("id") or f'{item.get("source")}:{item.get("target")}:{kind}')
-    attributes = (
-        f'data-brain-key="{html.escape(selection_key, quote=True)}" '
-        f'data-label="{html.escape(label, quote=True)}" '
-        f'data-kind="{html.escape(kind, quote=True)}" '
-        f'data-state="{html.escape(state, quote=True)}" '
-        f'data-age="{html.escape(age, quote=True)}" '
-        f'data-observed="{html.escape(observed, quote=True)}" '
-        f'data-reason="{html.escape(reason, quote=True)}" '
-        f'data-source="{html.escape(source, quote=True)}"'
+    files = item.get("files_observed") if isinstance(item.get("files_observed"), list) else []
+    durable = " · ".join(
+        f"{name} {item.get(name)}" for name in ("branch", "commit", "pull_request") if item.get(name)
+    )
+    attributes = _microscope_attrs(
+        key=selection_key, label=label, kind=kind, state=state, observed=observed,
+        reason=reason, source=source, age=age,
+        extra={
+            "run": item.get("run_id"), "role": item.get("role"), "model": item.get("model"),
+            "repository": item.get("repository"), "issue": item.get("issue"),
+            "session": item.get("session_id"), "phase": item.get("phase"),
+            "elapsed": item.get("elapsed_seconds"), "tools": item.get("tool_calls"),
+            "tests": item.get("test_observations"), "files": ", ".join(str(path) for path in files),
+            "durable": durable, "tokens": item.get("token_usage"),
+        },
     )
     if edge:
         return (
@@ -628,6 +682,42 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         'The topology shows only what could be safely normalized.</div>'
     )
     diagnostics_block = f'<ul class="brain-diagnostics">{diagnostic_html}</ul>' if diagnostics else ""
+    event_items = []
+    for index, event in enumerate(list(projection.get("events") or ())[:160]):
+        if not isinstance(event, dict):
+            continue
+        kind = str(event.get("kind") or "event")
+        state = _brain_state(event.get("status"))
+        observed = event.get("observed_at") or "time unknown"
+        attrs = _microscope_attrs(
+            key=f'event:{event.get("source_ref")}:{index}', label=f'{kind} · {event.get("run_id", "unknown")}',
+            kind=kind, state=state, observed=observed, reason=event.get("reason"),
+            source=event.get("source_ref"), age=_brain_age(event.get("observed_at"), projection_time),
+            extra={"run": event.get("run_id"), "phase": event.get("status")},
+        )
+        event_items.append(
+            f'<li><button type="button" class="brain-event state-{state}" {attrs}>'
+            f'<time>{html.escape(str(observed))}</time><strong>{html.escape(kind)}</strong>'
+            f'<span>{html.escape(str(event.get("reason") or "normalized event"))}</span>'
+            f'<small>{html.escape(str(event.get("source_ref") or "source unavailable"))}</small></button></li>'
+        )
+    event_rail = "".join(event_items) or '<li class="brain-empty">No normalized events observed.</li>'
+    handoff_items = "".join(
+        f'<li><strong>{html.escape(str(item.get("from", "unknown")))} → {html.escape(str(item.get("to", "unknown")))}</strong>'
+        f'<span>{html.escape(str(item.get("reason", "evidence unavailable")))}</span></li>'
+        for item in list(projection.get("handoffs") or ())[:64] if isinstance(item, dict)
+    ) or '<li class="brain-empty">No evidence-backed handoff observed.</li>'
+    signal_items = "".join(
+        f'<li><strong>{html.escape(str(item.get("kind", "notice")))}</strong>'
+        f'<span>{html.escape(str(item.get("reason", "diagnostic evidence unavailable")))}</span></li>'
+        for item in list(projection.get("signals") or ())[:64] if isinstance(item, dict)
+    ) or '<li class="brain-empty">No repeated activity, tool error, or long silence observed.</li>'
+    criteria_items = "".join(
+        f'<li><span class="criterion-state">{html.escape(str(item.get("state", "unknown")))}</span>'
+        f'<strong>{html.escape(str(item.get("criterion", "criterion")))}</strong>'
+        f'<small>{html.escape(str(item.get("reason", "evidence unavailable")))}</small></li>'
+        for item in list(projection.get("criteria_states") or ()) if isinstance(item, dict)
+    )
     return (
         '<section class="agent-brain" aria-labelledby="agent-brain-title">'
         '<div class="brain-heading"><div><span class="eyebrow">LIVE EXECUTION MODEL</span>'
@@ -641,7 +731,15 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         '<span class="eyebrow">SELECTED EVIDENCE</span><h3 id="brain-detail-title">Choose a node or signal</h3>'
         '<dl><div><dt>Kind</dt><dd id="brain-detail-kind">—</dd></div><div><dt>State</dt><dd id="brain-detail-state">—</dd></div>'
         '<div><dt>Last observed</dt><dd id="brain-detail-age">—</dd></div><div><dt>Reason</dt><dd id="brain-detail-reason">—</dd></div>'
-        '<div><dt>Source</dt><dd id="brain-detail-source">—</dd></div></dl></aside></div></section>'
+        '<div><dt>Source</dt><dd id="brain-detail-source">—</dd></div><div><dt>Run / phase</dt><dd id="brain-detail-run">—</dd></div>'
+        '<div><dt>Role / model</dt><dd id="brain-detail-role">—</dd></div><div><dt>Identity</dt><dd id="brain-detail-identity">—</dd></div>'
+        '<div><dt>Elapsed</dt><dd id="brain-detail-elapsed">—</dd></div><div><dt>Activity</dt><dd id="brain-detail-activity">—</dd></div>'
+        '<div><dt>Files</dt><dd id="brain-detail-files">—</dd></div><div><dt>Durable refs</dt><dd id="brain-detail-durable">—</dd></div>'
+        '<div><dt>Tokens</dt><dd id="brain-detail-tokens">—</dd></div></dl></aside></div>'
+        '<div class="microscope-grid"><section class="event-rail" aria-labelledby="event-rail-title"><h3 id="event-rail-title">Chronological evidence rail</h3>'
+        f'<ol>{event_rail}</ol></section><section class="microscope-notices"><h3>Evidence handoffs</h3><ul>{handoff_items}</ul>'
+        f'<h3>Neutral diagnostics</h3><ul>{signal_items}</ul><h3>Acceptance evidence</h3><ul class="criteria-list">{criteria_items}</ul>'
+        '<p class="brain-caution">File activity alone never verifies semantic completion.</p></section></div></section>'
     )
 
 
@@ -890,11 +988,14 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .state-active,.state-running,.state-running-tests{{border-color:var(--good)}} .state-waiting-inference,.state-waiting-tool,.state-pending{{border-color:var(--warn)}} .state-failed,.state-interrupted,.state-error{{border-color:var(--bad)}} .state-stale{{border-style:dashed;color:var(--warn)}} .state-unknown,.state-unavailable{{border-style:dotted;color:var(--muted)}} .state-completed{{border-color:#526483;color:#aebad5}}
 .brain-lower{{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);gap:10px;margin-top:10px}} .brain-signals,.brain-inspector{{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(11,16,32,.58);min-width:0}} .brain-edge-list{{display:flex;gap:6px;overflow:auto;padding:8px 2px 2px}} .brain-edge{{position:relative;flex:0 0 min(245px,75vw)}} .brain-edge.state-active,.brain-edge.state-running,.brain-edge.state-running-tests,.brain-edge.state-waiting-inference,.brain-edge.state-waiting-tool{{background:linear-gradient(90deg,#18223a,#243654,#18223a);background-size:200% 100%}}
 .brain-inspector dl{{margin:8px 0 0;display:grid;gap:7px}} .brain-inspector dl div{{display:grid;grid-template-columns:90px 1fr;gap:8px}} .brain-inspector dt{{color:var(--muted);font-size:10px;text-transform:uppercase}} .brain-inspector dd{{margin:0;overflow-wrap:anywhere}} .brain-teaching{{border-left:3px solid var(--warn);background:#272417;padding:9px 11px;margin-bottom:10px;color:var(--muted)}} .brain-diagnostics{{color:var(--warn);font-size:11px}}
+.microscope-grid{{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:10px;margin-top:10px}} .event-rail,.microscope-notices{{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(11,16,32,.58);min-width:0}} .event-rail h3,.microscope-notices h3{{margin:0 0 8px;font-size:13px}} .event-rail ol{{list-style:none;margin:0;padding:0 0 0 12px;border-left:2px solid var(--line);display:grid;gap:5px;max-height:360px;overflow:auto}} .event-rail li{{position:relative}} .event-rail li::before{{content:"";position:absolute;left:-17px;top:13px;width:8px;height:8px;border-radius:50%;background:#7085b3}}
+.brain-event{{display:grid;grid-template-columns:minmax(135px,.7fr) minmax(90px,.35fr) minmax(180px,1fr);gap:8px;width:100%;background:#141d31;border:1px solid var(--line);border-radius:7px;padding:7px;color:var(--ink);font:inherit;text-align:left;cursor:pointer}} .brain-event time,.brain-event small{{color:var(--muted);font-size:10px;overflow-wrap:anywhere}} .brain-event span{{overflow-wrap:anywhere}} .brain-event:hover,.brain-event:focus-visible{{outline:2px solid #8faeff;outline-offset:1px}}
+.microscope-notices ul{{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:5px}} .microscope-notices li{{display:grid;border-left:2px solid var(--line);padding-left:8px}} .microscope-notices li span,.microscope-notices li small{{color:var(--muted);font-size:10px}} .criterion-state{{color:var(--warn);font-size:9px;text-transform:uppercase}} .brain-caution{{color:var(--warn);font-size:11px;border-top:1px solid var(--line);padding-top:8px}}
 .diagnostic-secondary{{margin:0 0 16px}} .diagnostic-secondary>summary{{cursor:pointer;color:var(--muted);margin:0 0 8px}} .diagnostic-secondary .operational-verdict{{margin:0}}
 @media (prefers-reduced-motion:no-preference){{.brain-edge.state-active,.brain-edge.state-running,.brain-edge.state-running-tests,.brain-edge.state-waiting-inference,.brain-edge.state-waiting-tool{{animation:brain-signal 2.4s linear infinite}}@keyframes brain-signal{{to{{background-position:-200% 0}}}}}}
 @media (prefers-reduced-motion:reduce){{.brain-edge{{animation:none!important}}}}
-@media (max-width:900px){{.brain-map{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"executive routing" "intake action" "verification tools" "memory memory"}} .brain-lower{{grid-template-columns:1fr}}}}
-@media (max-width:560px){{.agent-brain{{padding:12px;border-radius:12px}} .brain-map{{grid-template-columns:1fr;grid-template-areas:"executive" "routing" "action" "verification" "tools" "intake" "memory"}} .brain-region{{min-height:0}} .brain-edge{{flex-basis:82vw}} .brain-inspector dl div{{grid-template-columns:72px 1fr}}}}
+@media (max-width:900px){{.brain-map{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"executive routing" "intake action" "verification tools" "memory memory"}} .brain-lower,.microscope-grid{{grid-template-columns:1fr}}}}
+@media (max-width:560px){{.agent-brain{{padding:12px;border-radius:12px}} .brain-map{{grid-template-columns:1fr;grid-template-areas:"executive" "routing" "action" "verification" "tools" "intake" "memory"}} .brain-region{{min-height:0}} .brain-edge{{flex-basis:82vw}} .brain-inspector dl div{{grid-template-columns:72px 1fr}} .brain-event{{grid-template-columns:1fr;gap:2px}}}}
 </style>
 <style>
 .operational-verdict{{border:2px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;margin:0 0 16px}} .operational-verdict.severity-critical{{border-color:var(--bad)}} .operational-verdict.severity-degraded{{border-color:var(--warn)}} .operational-verdict.severity-no-data{{border-color:var(--muted);background:#1b2338}} .operational-verdict.severity-healthy{{border-color:var(--good)}}
@@ -905,13 +1006,15 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .attention-queue{{max-width:600px}} .attention-summary{{cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 0;margin:8px 0 0}} .attention-summary::-webkit-details-marker{{display:none}}
 .attention-summary::before{{content:"▸";color:var(--muted);font-size:10px;width:8px}} details[open]>.attention-summary::before{{content:"▾"}}
 .attention-list{{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}}
-.attention-item{{border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;grid-template-columns:60px 1fr auto;gap:8px;align-items:center}}
+.attention-item{{border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;grid-template-columns:60px minmax(120px,1fr) minmax(160px,2fr) auto;gap:8px;align-items:center}}
 .attention-item.critical{{border-color:var(--bad)}} .attention-item.warn{{border-color:var(--warn)}}
 .attention-severity{{display:flex;justify-content:center;align-items:center;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;background:#2a3552;color:var(--ink)}}
 .attention-severity.CRITICAL{{background:var(--bad);color:#000}} .attention-severity.DEGRADED{{background:var(--warn);color:#000}}
 .attention-subject{{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .attention-reason{{color:var(--muted);font-size:12px;white-space:nowrap}}
 .omitted-count{{color:var(--muted);font-size:11px}}
+.microscope-trigger{{background:#18223a;color:#b9c9ef;border:1px solid #41527b;border-radius:6px;padding:4px 8px;font:inherit;font-size:10px;cursor:pointer;white-space:nowrap}} .microscope-trigger:hover,.microscope-trigger:focus-visible{{outline:2px solid #8faeff;outline-offset:1px;color:#fff}}
+@media (max-width:560px){{.attention-item{{grid-template-columns:55px 1fr}} .attention-reason{{grid-column:1/-1;white-space:normal}}}}
 </style>
 </head><body><main>
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
@@ -1018,7 +1121,18 @@ def _operation(operation: dict[str, Any]) -> str:
         f'<span class="rail-current">{html.escape(operation["current_milestone"])} · {html.escape(operation["current_state"])}</span></summary>'
     )
     flow = f'<details class="flow-toggle" data-details-id="{flow_id}">{flow_summary}<div class="flow" aria-label="Delivery milestones">{milestones}</div></details>'
-    return f'<section class="operation"><h3>Current workflow</h3><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span></div>{diagnostics}{flow}{unassigned_html}{loop}</section>'
+    inspect_attrs = _microscope_attrs(
+        key=f'operation:{operation.get("operation_id")}', label=operation.get("operation_id"),
+        kind="workflow-operation", state=operation.get("current_state"),
+        observed=operation.get("updated_at"),
+        reason=f'{operation.get("current_milestone")} / {operation.get("current_state")}',
+        source="workflow-ledger", extra={
+            "repository": operation.get("repository"), "issue": operation.get("issue"),
+            "session": operation.get("session_id"), "phase": operation.get("current_milestone"),
+        },
+    )
+    inspect = f'<button type="button" class="microscope-trigger" {inspect_attrs}>Inspect evidence</button>'
+    return f'<section class="operation"><h3>Current workflow</h3><div class="operation-head"><strong>{title}</strong><span>{issue_text} · session {session} · {html.escape(operation["current_milestone"])} / {html.escape(operation["current_state"])}{stop}</span>{inspect}</div>{diagnostics}{flow}{unassigned_html}{loop}</section>'
 
 
 def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
@@ -1187,8 +1301,19 @@ def _run_row(view: dict[str, Any]) -> str:
     )
     search = html.escape(" ".join(str(field).lower() for field in search_fields if field is not None))
     run_id = html.escape(str(view["run_id"]))
+    inspect_attrs = _microscope_attrs(
+        key=f'run:{view["run_id"]}', label=f'Run {view["run_id"]}', kind="run",
+        state=view["effective_outcome"], observed=None,
+        reason=f'claim {view["claimed_status"] or "none"}; observed {view["effective_outcome"]}',
+        source=" · ".join(str(item) for item in view["evidence_refs"]), extra={
+            "run": view["run_id"], "role": view["role"], "model": view["model"],
+            "issue": view["issue"], "phase": view["lifecycle_state"],
+            "elapsed": view["wall_seconds"], "tokens": view["local_tokens"],
+        },
+    )
     return (
-        f'<tr class="{css}" data-triage="{triage}" data-search="{search}"><td><code>{run_id}</code><br>issue {view["issue"] or "—"}</td>'
+        f'<tr class="{css}" data-triage="{triage}" data-search="{search}"><td><code>{run_id}</code><br>issue {view["issue"] or "—"}'
+        f'<br><button type="button" class="microscope-trigger" {inspect_attrs}>Inspect</button></td>'
         f'<td>{role_model}</td><td>{html.escape(str(view["task_class"] or "unknown"))}</td>'
         f'<td>{html.escape(str(view["claimed_status"] or "none"))}</td><td class="{outcome}">{outcome}</td>'
         f'<td>{html.escape(str(view["lifecycle_state"]))}</td><td>{html.escape(str(view["delivery_ready"]))}</td>'
@@ -1333,11 +1458,23 @@ DASHBOARD_JS = """(() => {
       'brain-detail-age': choice.dataset.age + ' · ' + choice.dataset.observed,
       'brain-detail-reason': choice.dataset.reason,
       'brain-detail-source': choice.dataset.source,
+      'brain-detail-run': (choice.dataset.run || 'Unavailable') + ' · ' + (choice.dataset.phase || 'phase unavailable'),
+      'brain-detail-role': (choice.dataset.role || 'Unavailable') + ' · ' + (choice.dataset.model || 'model unavailable'),
+      'brain-detail-identity': (choice.dataset.repository || 'repository unavailable') + ' · issue ' + (choice.dataset.issue || 'unknown') + ' · session ' + (choice.dataset.session || 'unknown'),
+      'brain-detail-elapsed': choice.dataset.elapsed && choice.dataset.elapsed !== 'Unavailable' ? choice.dataset.elapsed + ' seconds' : 'Unavailable',
+      'brain-detail-activity': 'tools ' + (choice.dataset.tools || 'unknown') + ' · tests ' + (choice.dataset.tests || 'unknown'),
+      'brain-detail-files': choice.dataset.files || 'Unavailable',
+      'brain-detail-durable': choice.dataset.durable || 'Unavailable',
+      'brain-detail-tokens': choice.dataset.tokens || 'Unavailable',
     };
     Object.entries(fields).forEach(([id, value]) => {
       const target = document.getElementById(id);
       if (target) { target.textContent = value || 'Unavailable'; }
     });
+    if (choice.classList.contains('microscope-trigger')) {
+      const inspector = document.querySelector('.brain-inspector');
+      if (inspector) { inspector.scrollIntoView({block: 'nearest'}); }
+    }
   };
 
   document.addEventListener('click', (event) => {
