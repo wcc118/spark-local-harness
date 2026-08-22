@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
+from .live_execution import live_fingerprint, project_live_execution
 from .operation_usage import OperationUsageSnapshot, derive_usage
 from .plan_event import derive_plans, read_plan_records
 from .read_model import RunView, build_run_views, summarize_views
@@ -220,6 +221,7 @@ class DashboardSource:
     now: datetime | None = None
     operation_usage: Path | None = None
     plans: Path | None = None
+    v5_runs: Path | None = None
 
     def _current_time(self) -> datetime:
         return self.now if self.now is not None else datetime.now(timezone.utc)
@@ -321,6 +323,7 @@ class DashboardSource:
                 for item in attention_queue
             ],
             "attention_total": attention_total,
+            "live_execution": project_live_execution(self.v5_runs, now=current_time),
         }
 
     @staticmethod
@@ -357,6 +360,7 @@ class DashboardSource:
                 result.append((str(path), stat.st_mtime_ns, stat.st_size))
             except FileNotFoundError:
                 result.append((str(path), 0, 0))
+        result.extend((f"v5:{name}", mtime, size) for name, mtime, size in live_fingerprint(self.v5_runs))
         return tuple(result)
 
     def _freshness(self, statuses: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1049,6 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--publication-failures", type=Path)
     parser.add_argument("--operation-usage", type=Path)
     parser.add_argument("--plans", type=Path)
+    parser.add_argument("--v5-runs", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.2.0")
@@ -1069,6 +1074,7 @@ def main(argv: list[str] | None = None) -> int:
         args.mode,
         operation_usage=args.operation_usage,
         plans=args.plans,
+        v5_runs=args.v5_runs,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
     print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)
