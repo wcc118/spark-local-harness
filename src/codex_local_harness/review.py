@@ -288,7 +288,7 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
         normalized = []
         for value in values:
             if field in {"issue", "pull_request"} and isinstance(value, str):
-                match = re.fullmatch(r"(?:(?P<repo>[^#\s]+)#)?(?P<number>\d+)", value.strip())
+                match = re.fullmatch(r"(?:(?P<repo>[^#\s]+)?#)?(?P<number>\d+)", value.strip())
                 if match and match.group("repo") not in {None, envelope.repository}:
                     raise ReviewError(f"result identity mismatch for {field}")
                 value = int(match.group("number")) if match else value

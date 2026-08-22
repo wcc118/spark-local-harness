@@ -360,7 +360,7 @@ def test_canonicalize_preserves_valid_schema(tmp_path):
 def test_canonicalize_observed_nested_identity_shape(tmp_path):
     raw = {
         "identity": {
-            "repository": REPO, "issue": 7, "pull_request": 11,
+            "repository": REPO, "issue": "#7", "pull_request": "#11",
             "exact_head": SHA,
         },
         "verdict": "APPROVE", "criteria": [], "findings": [], "tests": [],
