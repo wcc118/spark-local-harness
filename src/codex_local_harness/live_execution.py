@@ -65,7 +65,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, bool]:
         normalized: dict[str, Any] = {
             "kind": event_type.replace("_", "-"),
             "observed_at": observed_at,
-            "source_ref": f"v5-log:{path.name}:{max(1, len(lines) - MAX_EVENTS_PER_RUN + index + 1)}",
+            "source_ref": f"v5-log:{path.name}:{max(0, len(lines) - MAX_EVENTS_PER_RUN) + index + 1}",
             "reason": "normalized retained v5 execution event",
         }
         if event_type == "tool_use":
@@ -77,6 +77,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, bool]:
             normalized.update({
                 "tool": tool,
                 "status": status,
+                "call_id": str(part.get("callID") or "")[:128] or None,
                 "subject": "test" if tool == "bash" and _TEST_COMMAND.search(command) else tool,
             })
         elif event_type == "step_finish":
@@ -124,12 +125,13 @@ def _safe_number(value: Any) -> float | int | None:
 
 def _diagnostic_signals(run_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
-    tool_counts: dict[str, int] = {}
+    tool_calls: dict[str, set[str]] = {}
     previous_time: datetime | None = None
     for event in events:
         if event["kind"] == "tool-use":
             tool = str(event.get("tool") or "unknown")
-            tool_counts[tool] = tool_counts.get(tool, 0) + 1
+            call_identity = str(event.get("call_id") or event["source_ref"])
+            tool_calls.setdefault(tool, set()).add(call_identity)
             if event.get("status") in {"error", "failed"}:
                 signals.append({
                     "kind": "tool-error", "run_id": run_id, "severity": "notice",
@@ -150,7 +152,8 @@ def _diagnostic_signals(run_id: str, events: list[dict[str, Any]]) -> list[dict[
                     "reason": f"{int(silence)} seconds between retained events; no failure inferred",
                 })
         previous_time = current_time or previous_time
-    for tool, count in sorted(tool_counts.items()):
+    for tool, identities in sorted(tool_calls.items()):
+        count = len(identities)
         if count > 1:
             signals.append({
                 "kind": "repeated-tool", "run_id": run_id, "severity": "notice",
@@ -224,11 +227,15 @@ def project_live_execution(
         role = str(identity.get("role") or "worker")[:32]
         model = str(identity.get("model") or "unknown")[:128]
         repository = str(identity.get("repository") or "")[:256]
-        observed_tool_calls = sum(event["kind"] == "tool-use" for event in events)
-        observed_tool_errors = sum(
-            event["kind"] == "tool-use" and event.get("status") in {"error", "failed"}
+        observed_calls = {
+            str(event.get("call_id") or event["source_ref"])
+            for event in events if event["kind"] == "tool-use"
+        }
+        observed_error_calls = {
+            str(event.get("call_id") or event["source_ref"])
             for event in events
-        )
+            if event["kind"] == "tool-use" and event.get("status") in {"error", "failed"}
+        }
         recorded_tool_calls = _safe_number(identity.get("tool_calls")) or 0
         worker_id = f"worker:{run_id}"
         nodes[worker_id] = {
@@ -243,8 +250,8 @@ def project_live_execution(
             ),
             "phase": state,
             "elapsed_seconds": _safe_number(identity.get("elapsed_seconds")),
-            "tool_calls": max(recorded_tool_calls, observed_tool_calls),
-            "tool_errors": observed_tool_errors,
+            "tool_calls": max(recorded_tool_calls, len(observed_calls)),
+            "tool_errors": len(observed_error_calls),
             "test_observations": len(identity.get("tests", [])) if isinstance(identity.get("tests"), list) else 0,
             "files_observed": _safe_paths(identity.get("changed_paths")),
             "branch": str(identity.get("branch"))[:256] if isinstance(identity.get("branch"), str) else None,

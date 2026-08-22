@@ -18,12 +18,30 @@ task_temp=
 review_runtime_tmp=
 worker_runtime_home=
 worker_isolation_root=
+worker_server_pid=
+worker_server_container=
+worker_control=
 isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-/home/connellwc83/.local/share/opencode-orchestration/isolated-checkouts}
 diagnostic_started=0
 diagnostic_finalized=0
 worker_started_epoch=
 cleanup() {
   cleanup_status=$?
+  if [[ -n $worker_server_container ]]; then
+    docker stop --time 5 "$worker_server_container" >/dev/null 2>&1 || true
+  fi
+  if [[ -n $worker_server_pid ]]; then
+    wait "$worker_server_pid" 2>/dev/null || true
+  fi
+  if [[ -n $worker_control && -f $worker_control && $cleanup_status != 0 ]]; then
+    control_state=failed
+    case "$cleanup_status" in
+      124|137) control_state=timed-out ;;
+      130|143) control_state=interrupted ;;
+    esac
+    jq --arg state "$control_state" '.state = $state' "$worker_control" >"$worker_control.tmp" \
+      && chmod 600 "$worker_control.tmp" && mv "$worker_control.tmp" "$worker_control" || true
+  fi
   if [[ $diagnostic_started == 1 && $diagnostic_finalized == 0 ]]; then
     diagnostic_event=cancelled
     case "$cleanup_status" in
@@ -147,6 +165,8 @@ install -d -m 700 "$worker_log_dir"
 worker_log="$worker_log_dir/$worker_run_id.jsonl"
 worker_envelope="$worker_log_dir/$worker_run_id.envelope.json"
 worker_result="$worker_log_dir/$worker_run_id.result.json"
+worker_control="$worker_log_dir/$worker_run_id.control.json"
+worker_control_secret="$worker_log_dir/$worker_run_id.control.secret"
 umask 077
 
 # Inference must never inherit the operator's authenticated home or ambient
@@ -345,10 +365,46 @@ if [[ $worker_sandbox == container ]]; then
     --mount "type=bind,src=$worker_opencode,dst=/usr/local/bin/opencode,readonly"
     --workdir "$worker_repo_path")
   for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
-  timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
-    docker "${docker_args[@]}" "$worker_container_image" \
-    opencode run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
-    --model "$worker_model" "$worker_task" >"$worker_log"
+  if [[ ${CODEX_LOCAL_SESSION_BRIDGE:-1} == 1 ]]; then
+    worker_server_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+    worker_server_password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+    worker_server_env="$worker_runtime_home/opencode-server.env"
+    printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$worker_server_password" >"$worker_server_env"
+    printf '%s\n' "$worker_server_password" >"$worker_control_secret"
+    chmod 600 "$worker_server_env" "$worker_control_secret"
+    unset worker_server_password
+    worker_server_container="codex-worker-$worker_run_id"
+    docker "${docker_args[@]}" --name "$worker_server_container" \
+      --env-file "$worker_server_env" "$worker_container_image" \
+      opencode serve --hostname 127.0.0.1 --port "$worker_server_port" \
+      >"$worker_runtime_home/opencode-server.log" 2>&1 &
+    worker_server_pid=$!
+    timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+      env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.opencode_bridge \
+      --base-url "http://127.0.0.1:$worker_server_port" \
+      --password-file "$worker_control_secret" --run-id "$worker_run_id" \
+      --task-file "$worker_task_file" --agent "$worker_agent" --model "$worker_model" \
+      --log "$worker_log" --control "$worker_control" --secret "$worker_control_secret" \
+      --timeout "$worker_timeout"
+    bridge_status=$?
+    if [[ -f $worker_control && $bridge_status != 0 ]]; then
+      control_state=failed
+      [[ $bridge_status == 124 || $bridge_status == 137 ]] && control_state=timed-out
+      [[ $bridge_status == 130 || $bridge_status == 143 ]] && control_state=interrupted
+      jq --arg state "$control_state" '.state = $state' "$worker_control" >"$worker_control.tmp" \
+        && chmod 600 "$worker_control.tmp" && mv "$worker_control.tmp" "$worker_control" || true
+    fi
+    docker stop --time 5 "$worker_server_container" >/dev/null 2>&1 || true
+    wait "$worker_server_pid" 2>/dev/null || true
+    worker_server_pid=
+    worker_server_container=
+    (( bridge_status == 0 ))
+  else
+    timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+      docker "${docker_args[@]}" "$worker_container_image" \
+      opencode run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
+      --model "$worker_model" "$worker_task" >"$worker_log"
+  fi
 else
   "${worker_env[@]}" "${execution_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
     "$worker_opencode" run --format json --dir "$worker_repo_path" --agent "$worker_agent" \

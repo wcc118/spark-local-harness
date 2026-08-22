@@ -36,6 +36,7 @@ def test_container_worker_cannot_write_outside_checkout(tmp_path):
         "CODEX_LOCAL_OPENCODE": str(fake),
         "CODEX_LOCAL_SOURCE": str(ROOT / "src"),
         "CODEX_LOCAL_CONTAINER_IMAGE": "codex-local-worker:0.1.0",
+        "CODEX_LOCAL_SESSION_BRIDGE": "0",
     }
 
     completed = subprocess.run(
