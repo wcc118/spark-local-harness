@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .control_plane import ControlBroker, ControlError
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
 from .health import read_jsonl
@@ -891,7 +892,7 @@ FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 </svg>"""
 
 
-def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
+def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         server_version = "CodexHarnessDashboard/0.1"
 
@@ -906,6 +907,17 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
                 if route == "/favicon.svg":
                     self._send(HTTPStatus.OK, "image/svg+xml", FAVICON_SVG.encode())
                     return
+                if route.startswith("/api/control/runs/"):
+                    if broker is None:
+                        self._send(HTTPStatus.NOT_FOUND, "application/json", b'{"error":"control-disabled"}\n')
+                        return
+                    if not broker.authorized(self.headers.get("Authorization")):
+                        self._send(HTTPStatus.UNAUTHORIZED, "application/json", b'{"error":"unauthorized"}\n')
+                        return
+                    run_id = route.removeprefix("/api/control/runs/")
+                    payload = broker.snapshot(run_id)
+                    self._send(HTTPStatus.OK, "application/json", json.dumps(payload).encode())
+                    return
                 snapshot = source.snapshot(requested_session, comparison)
                 if route == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", render_dashboard(snapshot).encode())
@@ -917,19 +929,55 @@ def make_handler(source: DashboardSource) -> type[BaseHTTPRequestHandler]:
                 elif route == "/events":
                     self._events()
                 elif route == "/healthz":
-                    self._send(HTTPStatus.OK, "application/json", b'{"status":"ok","read_only":true}\n')
+                    body = json.dumps({"status": "ok", "diagnostics_read_only": True, "control_enabled": broker is not None}).encode()
+                    self._send(HTTPStatus.OK, "application/json", body)
                 else:
                     self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found\n")
+            except ControlError as exc:
+                self._send(HTTPStatus(exc.status), "application/json", json.dumps({"error": exc.code}).encode())
             except (OSError, ValueError) as exc:
                 body = json.dumps({"error": type(exc).__name__, "read_only": True}).encode()
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "application/json", body)
 
         def do_POST(self) -> None:  # noqa: N802
+            if broker is None:
+                self._method_not_allowed()
+                return
+            if not broker.authorized(self.headers.get("Authorization")):
+                self._send(HTTPStatus.UNAUTHORIZED, "application/json", b'{"error":"unauthorized"}\n')
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 2 or length > 65536:
+                    raise ControlError(400, "invalid-body-length")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ControlError(400, "invalid-body")
+                pieces = [piece for piece in urlsplit(self.path).path.split("/") if piece]
+                if len(pieces) != 6 or pieces[:3] != ["api", "control", "runs"]:
+                    raise ControlError(404, "control-route-not-found")
+                _, _, _, run_id, kind, request_id = pieces
+                actor = self.headers.get("X-Operator", "operator")
+                if kind == "permissions":
+                    broker.decide_permission(run_id, request_id, payload.get("decision"), actor)
+                elif kind == "questions":
+                    broker.answer_question(
+                        run_id, request_id, payload.get("answers"),
+                        payload.get("decision") == "reject", actor,
+                    )
+                else:
+                    raise ControlError(404, "control-route-not-found")
+                self._send(HTTPStatus.OK, "application/json", b'{"status":"accepted"}\n')
+            except json.JSONDecodeError:
+                self._send(HTTPStatus.BAD_REQUEST, "application/json", b'{"error":"invalid-json"}\n')
+            except ControlError as exc:
+                self._send(HTTPStatus(exc.status), "application/json", json.dumps({"error": exc.code}).encode())
+
+        def do_PUT(self) -> None:  # noqa: N802
             self._method_not_allowed()
 
-        do_PUT = do_POST
-        do_PATCH = do_POST
-        do_DELETE = do_POST
+        do_PATCH = do_PUT
+        do_DELETE = do_PUT
 
         def _method_not_allowed(self) -> None:
             self._send(HTTPStatus.METHOD_NOT_ALLOWED, "application/json", b'{"error":"read-only"}\n')
@@ -1164,6 +1212,38 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .strategy-lab{{max-width:none;background:var(--panel);border:1px solid #41527b;border-radius:12px;margin:0 0 16px;padding:0}} .strategy-lab>summary{{cursor:pointer;display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:13px 15px}} .strategy-lab>summary strong{{font-size:15px}} .strategy-lab>summary>span:last-child{{color:var(--muted);font-size:11px;margin-left:auto}} .strategy-section{{border-top:1px solid var(--line);padding:14px}} .strategy-section h3{{margin:0 0 9px}} .strategy-note,.comparison-note{{color:var(--muted);font-size:11px}}
 .bottleneck-grid{{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px}} .bottleneck-grid li{{border:1px solid var(--line);border-radius:8px;padding:9px}} .bottleneck-grid strong,.bottleneck-grid span,.bottleneck-grid small{{display:block}} .bottleneck-grid strong{{font-size:20px}} .bottleneck-grid span{{text-transform:capitalize}} .bottleneck-grid small,.cohort-table small{{color:var(--muted);font-size:9px;white-space:normal}}
 .compare-form{{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px}} .compare-form label{{display:grid;gap:3px;color:var(--muted);font-size:10px}} .comparison-divergence{{background:#332a13}} .cohort-table th,.cohort-table td{{vertical-align:top}} .cohort-table td strong,.cohort-table td small,.cohort-table th small{{display:block;white-space:normal}} .sample-warning{{display:inline-block;color:var(--warn);font-size:9px;margin-top:4px}} .annotation-list{{list-style:none;margin:0;padding:0;display:grid;gap:6px}} .annotation-list li{{border-left:2px solid #8faeff;padding-left:9px;display:grid}} .annotation-list small{{color:var(--muted)}}
+.console-wrapper{{margin-top:22px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}}
+.console-placeholder{{padding:20px;text-align:center}} .console-placeholder .console-open-btn{{background:linear-gradient(135deg,var(--good),#3bb57d);color:#000;border:none;border-radius:8px;padding:12px 24px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(89,212,153,.3);transition:transform .15s,box-shadow .15s}} .console-placeholder .console-open-btn:hover{{transform:translateY(-1px);box-shadow:0 6px 16px rgba(89,212,153,.4)}} .console-placeholder .console-open-btn:active{{transform:translateY(0)}}
+.console-panel{{padding:0}} .console-panel[hidden]{{display:none}}
+.console-header{{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);background:rgba(21,28,48,.6)}} .console-header h3{{margin:0;font-size:15px}}
+.console-close-btn{{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:4px 8px;line-height:1;border-radius:4px}} .console-close-btn:hover{{color:var(--ink);background:rgba(42,53,82,.5)}}
+.console-connection-form{{padding:20px;max-width:480px;margin:0 auto}} .console-warning{{background:#3a1e2a;border-left:3px solid var(--bad);color:var(--warn);padding:10px 12px;margin:0 0 16px;border-radius:4px;font-size:12px}}
+.form-group{{margin-bottom:14px}} .form-group label{{display:block;color:var(--muted);font-size:11px;font-weight:600;margin-bottom:6px}} .form-group input{{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;box-sizing:border-box;transition:border-color .15s}} .form-group input:focus{{outline:none;border-color:var(--good)}} .form-group small{{display:block;color:var(--muted);font-size:11px;margin-top:5px}}
+.console-submit-btn{{width:100%;background:var(--good);color:#000;border:none;border-radius:7px;padding:12px;font-weight:600;cursor:pointer;font:inherit}} .console-submit-btn:hover{{background:#4bc48d}} .console-submit-btn:disabled{{opacity:.6;cursor:not-allowed}}
+.console-connected{{padding:16px}} .console-status{{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}} .status-indicator{{width:10px;height:10px;border-radius:50%;background:#343946;display:inline-block}} .status-indicator.connected{{background:var(--good);box-shadow:0 0 0 3px rgba(89,212,153,.3)}} .status-indicator.error{{background:var(--bad)}} .status-indicator.loading{{background:var(--warn);animation:status-pulse 1.5s ease-in-out infinite}} @keyframes status-pulse{{0%,100%{{opacity:1}}50%{{opacity:.4}}}}
+.console-disconnect-btn{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}} .console-disconnect-btn:hover{{color:var(--ink);border-color:var(--line)}}
+.console-controls{{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}}
+.console-run-info,.console-session-info{{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px;background:rgba(42,53,82,.3);padding:4px 8px;border-radius:4px}} .console-run-info strong,.console-session-info strong{{color:var(--ink)}}
+.console-filters{{display:flex;gap:8px}} .console-filters label{{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:11px;background:rgba(42,53,82,.3);padding:3px 8px;border-radius:4px;cursor:pointer}} .console-filters label:hover{{background:rgba(42,53,82,.5)}} .console-filters input{{width:12px;height:12px;margin:0;cursor:pointer}}
+.console-transcript{{max-height:320px;overflow-y:auto;margin-bottom:12px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-family:monospace;font-size:12px}} .console-transcript .transcript-empty{{color:var(--muted);font-style:italic}} .console-transcript .event{{padding:6px 8px;margin:4px 0;border-left:3px solid var(--line);background:rgba(255,255,255,.02);border-radius:0 6px 6px 0}} .console-transcript .event.dialogue{{border-color:#8faeff}} .console-transcript .event.tool{{border-color:#59d499}} .console-transcript .event.error{{border-color:var(--bad)}} .console-transcript .event-time{{color:var(--muted);font-size:10px;display:block;margin-bottom:2px}} .console-transcript .event-content{{color:var(--ink);white-space:pre-wrap;word-break:break-word}}
+.transcript-footer{{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}}
+.transcript-toggle-btn,.transcript-clear-btn{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer}} .transcript-toggle-btn:hover,.transcript-clear-btn:hover{{color:var(--ink);border-color:var(--line)}} .transcript-toggle-btn[aria-pressed="true"]{{color:var(--ink);background:rgba(89,212,153,.1);border-color:rgba(89,212,153,.3)}}
+.console-pending-permissions,.console-pending-questions{{margin-bottom:16px}} .console-pending-permissions h4,.console-pending-questions h4{{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}}
+.console-policy{{border-top:1px solid var(--line);padding-top:12px}} .console-policy p{{color:var(--muted);font-size:11px}} .console-policy pre{{max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:10px;font-size:11px}}
+.permissions-list,.questions-list{{display:grid;gap:10px}} .empty-message{{color:var(--muted);font-size:12px;text-align:center;padding:12px}} .permission-card,.question-card{{border:1px solid var(--line);border-radius:8px;padding:12px;background:rgba(255,255,255,.03)}}
+.permission-card{{border-left:3px solid var(--warn)}} .question-card{{border-left:3px solid #8faeff}}
+.permission-id,.question-id{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}}
+.permission-pattern,.question-text{{color:var(--ink);font-size:13px;margin:4px 0}}
+.question-header,.permission-header{{color:var(--warn);font-size:12px;margin-bottom:6px}}
+.permission-options,.question-options{{display:grid;gap:6px;margin:8px 0}}
+.permission-option{{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);cursor:pointer;transition:border-color .15s}} .permission-option:hover{{border-color:var(--warn)}}
+.question-option{{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);cursor:pointer;transition:border-color .15s}} .question-option:hover{{border-color:#8faeff}} .question-option.selected{{border-color:#8faeff;background:rgba(143,174,255,.1)}}
+.permission-actions{{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}}
+.question-actions{{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}}
+.console-btn{{padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;font:inherit}} .console-btn.once{{background:#1a2b4a;border:1px solid #4a6b9a;color:#8faeff}} .console-btn.once:hover{{background:#233b6a}} .console-btn.always{{background:#2a2417;border:1px solid var(--warn);color:var(--warn)}} .console-btn.always:hover{{background:#3a3427}} .console-btn.reject{{background:#3a1e2a;border:1px solid var(--bad);color:var(--bad)}} .console-btn.reject:hover{{background:#4a2e3a}} .console-btn:disabled{{opacity:.5;cursor:not-allowed}}
+.console-btn.submit-question{{background:var(--good);color:#000}} .console-btn.submit-question:hover{{background:#4bc48d}} .console-btn.reject-question{{background:#3a1e2a;border:1px solid var(--bad);color:var(--bad)}}
+.console-btn.question-select{{background:var(--panel);color:var(--ink);border:1px solid var(--line)}} .console-btn.question-select:hover{{background:rgba(42,53,82,.5)}} .console-btn.question-select.selected{{border-color:#8faeff;box-shadow:0 0 0 1px var(--ink)}}
+@media (max-width:560px){{.console-wrapper{{border-radius:0;border-left:none;border-right:none}} .console-panel{{padding:0}} .console-header{{padding:12px}} .console-header h3{{font-size:14px}} .console-connection-form{{padding:16px}} .console-status{{flex-direction:column;align-items:flex-start}} .console-controls{{flex-direction:column;align-items:stretch}} .console-filters{{flex-wrap:wrap}} .console-filters label{{flex:1}} .console-transcript{{max-height:240px}} .permissions-list,.questions-list{{grid-template-columns:1fr}} .permission-actions{{flex-direction:column}} .question-actions{{flex-direction:column}}}}
 </style>
 </head><body><main>
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
@@ -1178,6 +1258,77 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 <h2>Current operations</h2>{operations}
 <h2>Run history</h2>
 {triage_toolbar}
+<h2>Live OpenCode console</h2>
+<div class="console-wrapper" id="live-control-console">
+  <div class="console-placeholder" id="console-placeholder">
+    <button type="button" id="open-console-btn" class="console-open-btn">Open Control Console</button>
+  </div>
+  <div class="console-panel" id="console-panel" hidden>
+    <div class="console-header">
+      <h3>Live OpenCode control panel</h3>
+      <button type="button" id="close-console-btn" class="console-close-btn" aria-label="Close console">×</button>
+    </div>
+    <div class="console-connection-form" id="connection-form">
+      <p class="console-warning">
+        ⚠️ <strong>Sensitive content warning:</strong> Raw prompts, outputs, commands, paths, and secrets may appear in the transcript. Only use this console with trusted operators in a secure environment.
+      </p>
+      <form id="console-login-form">
+        <div class="form-group">
+          <label for="console-run-id">Run ID</label>
+          <input type="text" id="console-run-id" name="run_id" placeholder="e.g., run-abc123" required aria-describedby="run-id-hint">
+          <small id="run-id-hint">Obtain from the dashboard run history or workflow operations</small>
+        </div>
+        <div class="form-group">
+          <label for="console-operator">Operator name</label>
+          <input type="text" id="console-operator" name="operator" placeholder="e.g., operator-name" required>
+        </div>
+        <div class="form-group">
+          <label for="console-token">Bearer token</label>
+          <input type="password" id="console-token" name="token" placeholder="Bearer TOKEN" required autocomplete="off">
+          <small>Token is stored only in sessionStorage and never in localStorage, URL, or logs</small>
+        </div>
+        <button type="submit" class="console-submit-btn">Connect</button>
+      </form>
+    </div>
+    <div class="console-connected" id="console-connected" hidden>
+      <div class="console-status">
+        <span class="status-indicator" id="console-status-indicator"></span>
+        <span id="console-status-text">Connected</span>
+        <button type="button" id="console-disconnect-btn" class="console-disconnect-btn">Disconnect</button>
+      </div>
+      <div class="console-controls">
+        <span class="console-run-info" id="console-run-info"></span>
+        <span class="console-session-info" id="console-session-info"></span>
+        <div class="console-filters" id="console-filters">
+          <label><input type="checkbox" class="filter-checkbox" data-filter="dialogue" checked> Dialogue</label>
+          <label><input type="checkbox" class="filter-checkbox" data-filter="tool" checked> Tool</label>
+          <label><input type="checkbox" class="filter-checkbox" data-filter="error" checked> Error</label>
+        </div>
+      </div>
+      <div class="console-transcript" id="console-transcript">
+        <div class="transcript-empty">No transcript events yet. Waiting for activity...</div>
+      </div>
+      <div class="transcript-footer">
+        <button type="button" id="transcript-autoscroll-btn" class="transcript-toggle-btn" aria-pressed="true">Autoscroll</button>
+        <button type="button" id="transcript-clear-btn" class="transcript-clear-btn">Clear</button>
+      </div>
+      <div class="console-pending-permissions" id="console-pending-permissions">
+        <h4>Pending permissions</h4>
+        <div class="permissions-list" id="permissions-list"></div>
+        <p class="empty-message" id="permissions-empty">No pending permissions</p>
+      </div>
+      <div class="console-pending-questions" id="console-pending-questions">
+        <h4>Pending questions</h4>
+        <div class="questions-list" id="questions-list"></div>
+        <p class="empty-message" id="questions-empty">No pending questions</p>
+      </div>
+      <details class="console-policy"><summary>Effective permission policy</summary>
+        <p>Server-resolved global and role rules, shown in evaluation order.</p>
+        <pre id="console-policy-rules">Unavailable</pre>
+      </details>
+    </div>
+  </div>
+</div>
 <div class="table-wrap"><table><thead><tr><th class="sortable" data-sort="text">Run</th><th class="sortable" data-sort="text">Role / model</th><th class="sortable" data-sort="text">Task</th><th class="sortable" data-sort="text">Claim</th><th class="sortable" data-sort="text">Observed</th><th class="sortable" data-sort="text">Lifecycle</th><th class="sortable" data-sort="text">Delivery</th><th class="sortable" data-sort="num">Time</th><th class="sortable" data-sort="num">Tokens L/F</th><th>Evidence</th></tr></thead><tbody id="run-history-body">{rows}</tbody></table></div>
 <p class="table-empty-note" id="run-empty-note" hidden>No runs match this filter.</p>
 <footer>Unknown and unadjudicated are first-class states. A contradiction means observed evidence disagrees with the worker claim.</footer>
@@ -1495,6 +1646,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plans", type=Path)
     parser.add_argument("--v5-runs", type=Path)
     parser.add_argument("--annotations", type=Path)
+    parser.add_argument("--control-token-file", type=Path)
+    parser.add_argument("--control-audit-file", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--release", default="v0.2.0")
@@ -1518,8 +1671,15 @@ def main(argv: list[str] | None = None) -> int:
         v5_runs=args.v5_runs,
         annotations=args.annotations,
     )
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(source))
-    print(f"Read-only diagnostics: http://{args.host}:{server.server_port}", flush=True)
+    if bool(args.control_token_file) != bool(args.control_audit_file):
+        parser.error("control token and audit files must be configured together")
+    broker = None
+    if args.control_token_file:
+        if not args.v5_runs:
+            parser.error("control plane requires --v5-runs")
+        broker = ControlBroker(args.v5_runs, args.control_token_file, args.control_audit_file)
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(source, broker))
+    print(f"Harness dashboard: http://{args.host}:{server.server_port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1643,7 +1803,16 @@ DASHBOARD_JS = """(() => {
 
   document.addEventListener('click', (event) => {
     const brainChoice = event.target.closest('[data-brain-key]');
-    if (brainChoice) { showBrainDetail(brainChoice); return; }
+    if (brainChoice) {
+      showBrainDetail(brainChoice);
+      const runId = brainChoice.dataset.run;
+      if (runId && consolePlaceholder) {
+        openConsole();
+        const runInput = document.getElementById('console-run-id');
+        if (runInput) { runInput.value = runId; }
+      }
+      return;
+    }
     const tab = event.target.closest('.triage-tab');
     if (tab) { activeFilter = tab.dataset.filter; applyFilters(); return; }
     const header = event.target.closest('th.sortable');
@@ -1684,6 +1853,9 @@ DASHBOARD_JS = """(() => {
     const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
     const current = document.querySelector('main');
     const replacement = parsed.querySelector('main');
+    const liveConsole = document.getElementById('live-control-console');
+    const replacementConsole = replacement && replacement.querySelector('#live-control-console');
+    if (liveConsole && replacementConsole) { replacementConsole.replaceWith(liveConsole); }
     if (current && replacement) { current.replaceWith(replacement); }
     applyState();
     window.scrollTo(0, scrollY);
@@ -1694,6 +1866,578 @@ DASHBOARD_JS = """(() => {
     if (initial) { initial = false; } else { refresh().catch(() => connection('stale', 'var(--bad)')); }
   });
   events.addEventListener('error', () => connection('disconnected', 'var(--bad)'));
+
+  // ===================== CONTROL CONSOLE =====================
+  let consoleRunning = false;
+  let consoleToken = null;
+  let consoleOperator = null;
+  let consoleRunId = null;
+  let consoleSessionId = null;
+  let consolePoller = null;
+  let consoleConnected = false;
+  let consoleAutoscroll = true;
+  let consoleFilters = { dialogue: true, tool: true, error: true };
+
+  const openConsoleBtn = document.getElementById('open-console-btn');
+  const closeConsoleBtn = document.getElementById('close-console-btn');
+  const consolePanel = document.getElementById('console-panel');
+  const consolePlaceholder = document.getElementById('console-placeholder');
+  const connectionForm = document.getElementById('console-login-form');
+  const consoleConnectedSection = document.getElementById('console-connected');
+  const consoleRunInfo = document.getElementById('console-run-info');
+  const consoleSessionInfo = document.getElementById('console-session-info');
+  const consoleStatusText = document.getElementById('console-status-text');
+  const statusIndicator = document.getElementById('console-status-indicator');
+  const consoleTranscript = document.getElementById('console-transcript');
+  const transcriptAutoscrollBtn = document.getElementById('transcript-autoscroll-btn');
+  const transcriptClearBtn = document.getElementById('transcript-clear-btn');
+  const consoleFiltersContainer = document.getElementById('console-filters');
+  const consoleDisconnectBtn = document.getElementById('console-disconnect-btn');
+  const permissionsList = document.getElementById('permissions-list');
+  const permissionsEmpty = document.getElementById('permissions-empty');
+  const questionsList = document.getElementById('questions-list');
+  const questionsEmpty = document.getElementById('questions-empty');
+  const consolePolicyRules = document.getElementById('console-policy-rules');
+
+  const openConsole = () => {
+    consolePlaceholder.hidden = true;
+    consolePanel.hidden = false;
+    // Check if we already have a stored token and run ID
+    const storedToken = sessionStorage.getItem('consoleToken');
+    const storedRunId = sessionStorage.getItem('consoleRunId');
+    if (storedToken && storedRunId) {
+      // Auto-connect if we have stored credentials
+      connectionForm.hidden = true;
+      consoleConnectedSection.hidden = false;
+      connectConsole(storedRunId, storedToken);
+    } else {
+      connectionForm.hidden = false;
+      consoleConnectedSection.hidden = true;
+    }
+  };
+
+  const closeConsole = () => {
+    disconnectConsole();
+    consolePanel.hidden = true;
+    consolePlaceholder.hidden = false;
+  };
+
+  const disconnectConsole = () => {
+    consoleConnected = false;
+    consoleRunning = false;
+    consoleToken = null;
+    consoleOperator = null;
+    consoleRunId = null;
+    consoleSessionId = null;
+    if (consolePoller) {
+      clearInterval(consolePoller);
+      consolePoller = null;
+    }
+    // Don't clear sessionStorage here - keep token for convenience
+    connectionForm.hidden = false;
+    consoleConnectedSection.hidden = true;
+    connectionForm.reset();
+  };
+
+  const updateStatus = (text, state) => {
+    consoleStatusText.textContent = text;
+    if (state === 'connected') {
+      statusIndicator.className = 'status-indicator connected';
+    } else if (state === 'error') {
+      statusIndicator.className = 'status-indicator error';
+    } else if (state === 'loading') {
+      statusIndicator.className = 'status-indicator loading';
+    } else {
+      statusIndicator.className = 'status-indicator';
+    }
+  };
+
+  const connectConsole = (runId, token, operatorName) => {
+    consoleRunId = runId;
+    consoleToken = token;
+    consoleOperator = operatorName || 'operator';
+
+    connectionForm.hidden = true;
+    consoleConnectedSection.hidden = false;
+    consoleConnected = true;
+    consoleRunning = true;
+
+    updateStatus('Connecting...', 'loading');
+
+    // Keep credentials only for this browser tab.
+    sessionStorage.setItem('consoleToken', consoleToken);
+    sessionStorage.setItem('consoleRunId', consoleRunId);
+
+    // Start polling
+    if (consolePoller) clearInterval(consolePoller);
+    consolePoller = setInterval(pollConsoleSnapshot, 1000);
+
+    // Initial poll
+    pollConsoleSnapshot();
+
+    // If brain/worker trigger clicked, scroll to console
+    if (consolePanel.querySelector('.brain-node') || consolePanel.querySelector('[data-brain-key]')) {
+      setTimeout(() => {
+        consolePanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    }
+  };
+
+  const pollConsoleSnapshot = async () => {
+    if (!consoleConnected || !consoleRunId) return;
+
+    updateStatus('Updating...', 'loading');
+
+    try {
+      const response = await fetch(`/api/control/runs/${encodeURIComponent(consoleRunId)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${consoleToken}`,
+          'X-Operator': consoleOperator
+        }
+      });
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          updateStatus('Unauthorized - invalid token', 'error');
+          consoleConnected = false;
+          return;
+        }
+        if (response.status === 404) {
+          updateStatus('Run not found', 'error');
+          consoleConnected = false;
+          return;
+        }
+        if (response.status === 409) {
+          updateStatus('Run not controllable', 'error');
+          consoleConnected = false;
+          return;
+        }
+        updateStatus('Connection error', 'error');
+        return;
+      }
+
+      const data = await response.json();
+
+      // Store session ID for later use
+      if (data.session_id) {
+        consoleSessionId = data.session_id;
+        const label = document.createElement('strong');
+        label.textContent = 'Session: ';
+        consoleSessionInfo.replaceChildren(label, document.createTextNode(data.session_id));
+      }
+
+      // Update connection status
+      if ((data.pending_permissions || []).length) {
+        updateStatus('Waiting for permission', 'loading');
+      } else if ((data.pending_questions || []).length) {
+        updateStatus('Waiting for answer', 'loading');
+      } else if (data.state === 'active' || data.state === 'running') {
+        updateStatus('Generating / active', 'connected');
+      } else if (data.state === 'completed') {
+        updateStatus('Completed', 'connected');
+      } else if (data.state === 'failed') {
+        updateStatus('Failed', 'error');
+      } else {
+        updateStatus(`Running (${data.state || 'unknown'})`, 'connected');
+      }
+
+      // Render transcript events
+      renderTranscriptEvents(data.events || [], data.events_truncated);
+
+      // Render pending permissions
+      renderPendingPermissions(data.pending_permissions || []);
+
+      // Render pending questions
+      renderPendingQuestions(data.pending_questions || []);
+      consolePolicyRules.textContent = JSON.stringify(data.effective_policy || {source: 'unavailable'}, null, 2);
+
+    } catch (err) {
+      updateStatus('Disconnected', 'error');
+      consoleConnected = false;
+    }
+  };
+
+  const renderTranscriptEvents = (events, truncated) => {
+    const container = consoleTranscript;
+    container.replaceChildren();
+
+    // Apply filters
+    const filteredEvents = events.filter(event => {
+      const kind = String(event.kind || event.type || 'unknown').toLowerCase();
+      return consoleFilters.dialogue && (kind.includes('dialogue') || kind.includes('response') || kind === 'text' || kind === 'reasoning') ||
+             consoleFilters.tool && (kind.includes('tool') || kind.includes('action')) ||
+             consoleFilters.error && (kind.includes('error') || kind.includes('exception'));
+    });
+
+    if (filteredEvents.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'transcript-empty';
+      empty.textContent = 'No matching transcript events yet.';
+      container.appendChild(empty);
+      return;
+    }
+
+    filteredEvents.forEach(event => {
+      const rawTime = event.observed_at || event.timestamp || '';
+      const time = typeof rawTime === 'number' ? new Date(rawTime).toLocaleTimeString() : rawTime;
+      const type = event.kind || event.type || 'unknown';
+      const content = event.part || event.content || event;
+
+      const div = document.createElement('div');
+      div.className = `event ${type}`;
+
+      // Construct all event-derived content as DOM text nodes.
+      const timeEl = document.createElement('span');
+      timeEl.className = 'event-time';
+      timeEl.textContent = time || 'unknown time';
+
+      const contentEl = document.createElement('span');
+      contentEl.className = 'event-content';
+
+      // Extract text content safely
+      if (typeof content === 'string') {
+        contentEl.textContent = content;
+      } else if (content && typeof content === 'object') {
+        // Try to extract text from common formats
+        const text = content.text || content.content || JSON.stringify(content, null, 2);
+        contentEl.textContent = text;
+      } else {
+        contentEl.textContent = JSON.stringify(content, null, 2);
+      }
+
+      div.appendChild(timeEl);
+      div.appendChild(contentEl);
+      container.appendChild(div);
+    });
+
+    // Autoscroll
+    if (consoleAutoscroll) {
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // Show truncation indicator
+    if (truncated) {
+      const note = document.createElement('div');
+      note.className = 'transcript-empty';
+      note.textContent = '… (transcript truncated)';
+      container.appendChild(note);
+    }
+  };
+
+  const renderPendingPermissions = (permissions) => {
+    permissionsList.replaceChildren();
+
+    if (permissions.length === 0) {
+      permissionsEmpty.hidden = false;
+      return;
+    }
+
+    permissionsEmpty.hidden = true;
+
+    permissions.forEach(permission => {
+      const card = document.createElement('div');
+      card.className = 'permission-card';
+
+      const idEl = document.createElement('div');
+      idEl.className = 'permission-id';
+      idEl.textContent = `Permission request ${permission.id || 'unknown'}`;
+
+      const headerEl = document.createElement('div');
+      headerEl.className = 'permission-header';
+      headerEl.textContent = permission.permission || 'unknown permission type';
+
+      const patternsEl = document.createElement('div');
+      patternsEl.className = 'permission-pattern';
+      patternsEl.textContent = `Pattern: ${Array.isArray(permission.patterns) ? permission.patterns.join(', ') : String(permission.patterns || 'any')}`;
+
+      const alwaysPatterns = permission.always;
+      if (alwaysPatterns && alwaysPatterns.length > 0) {
+        const alwaysEl = document.createElement('div');
+        alwaysEl.className = 'permission-pattern';
+        alwaysEl.textContent = `Proposed durable pattern: ${Array.isArray(alwaysPatterns) ? alwaysPatterns.join(', ') : String(alwaysPatterns)}`;
+        card.appendChild(alwaysEl);
+      }
+      const evaluationEl = document.createElement('div');
+      evaluationEl.className = 'permission-pattern';
+      const evaluations = permission.policy_evaluation || [];
+      evaluationEl.textContent = evaluations.length
+        ? `Winning rule: ${evaluations.map((item) => item.winner ? `${item.winner.layer} ${item.winner.pattern} → ${item.winner.effect}` : `${item.resource} → no match`).join('; ')}`
+        : 'Winning rule: unavailable';
+      card.appendChild(evaluationEl);
+
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'permission-actions';
+
+      const onceBtn = document.createElement('button');
+      onceBtn.className = 'console-btn once';
+      onceBtn.textContent = 'Once';
+      onceBtn.onclick = () => handlePermissionDecision(permission.id, 'once');
+
+      const alwaysBtn = document.createElement('button');
+      alwaysBtn.className = 'console-btn always';
+      alwaysBtn.textContent = 'Always';
+      alwaysBtn.onclick = () => handlePermissionAlways(permission);
+
+      const rejectBtn = document.createElement('button');
+      rejectBtn.className = 'console-btn reject';
+      rejectBtn.textContent = 'Reject';
+      rejectBtn.onclick = () => handlePermissionDecision(permission.id, 'reject');
+
+      actionsEl.appendChild(onceBtn);
+      actionsEl.appendChild(alwaysBtn);
+      actionsEl.appendChild(rejectBtn);
+
+      card.appendChild(idEl);
+      card.appendChild(headerEl);
+      card.appendChild(patternsEl);
+      card.appendChild(actionsEl);
+      permissionsList.appendChild(card);
+    });
+  };
+
+  const handlePermissionAlways = (permission) => {
+    const patterns = permission.always || permission.patterns;
+    const patternText = Array.isArray(patterns) ? patterns.join(', ') : String(patterns || 'pattern not specified');
+
+    if (confirm(`Approve this pattern permanently?\n\nPattern: ${patternText}\n\nThis will create a durable rule allowing this action.`)) {
+      handlePermissionDecision(permission.id, 'always');
+    }
+  };
+
+  const handlePermissionDecision = (permissionId, decision) => {
+    if (!consoleRunId || !consoleToken) return;
+
+    const btns = permissionsList.querySelectorAll('button');
+    btns.forEach(btn => btn.disabled = true);
+
+    fetch(`/api/control/runs/${encodeURIComponent(consoleRunId)}/permissions/${encodeURIComponent(permissionId)}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${consoleToken}`,
+        'Content-Type': 'application/json',
+        'X-Operator': consoleOperator
+      },
+      body: JSON.stringify({ decision })
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error('Permission decision failed');
+      }
+      await response.json();
+      // Refresh snapshot to show updated state
+      pollConsoleSnapshot();
+    }).catch((err) => {
+      alert(`Failed to submit decision: ${err.message}`);
+    }).finally(() => {
+      btns.forEach(btn => btn.disabled = false);
+    });
+  };
+
+  const renderPendingQuestions = (questions) => {
+    questionsList.replaceChildren();
+
+    if (questions.length === 0) {
+      questionsEmpty.hidden = false;
+      return;
+    }
+
+    questionsEmpty.hidden = true;
+
+    questions.forEach(question => {
+      const card = document.createElement('div');
+      card.className = 'question-card';
+
+      const idEl = document.createElement('div');
+      idEl.className = 'question-id';
+      idEl.textContent = `Question request ${question.id || 'unknown'}`;
+
+      const questionContainer = document.createElement('div');
+      questionContainer.className = 'question-options';
+
+      // Create answer buttons for each question
+      const questionItems = question.questions || [];
+      questionContainer.dataset.questionCount = questionItems.length;
+
+      questionItems.forEach((q, qIndex) => {
+        const item = document.createElement('div');
+        item.className = 'question-item';
+        item.dataset.qIndex = String(qIndex);
+        const header = document.createElement('div');
+        header.className = 'question-header';
+        header.textContent = q.question || q.header || 'Question';
+
+        const optionsDiv = document.createElement('div');
+        optionsDiv.className = 'question-options';
+
+        const options = q.options || [];
+        options.forEach(opt => {
+          const btn = document.createElement('button');
+          btn.className = 'console-btn question-select';
+          btn.textContent = opt.label || 'Option';
+          btn.dataset.qIndex = qIndex;
+          btn.dataset.multiple = String(Boolean(q.multiple));
+          btn.onclick = () => toggleQuestionOption(btn);
+          optionsDiv.appendChild(btn);
+        });
+
+        item.appendChild(header);
+        item.appendChild(optionsDiv);
+        questionContainer.appendChild(item);
+      });
+
+      card.appendChild(idEl);
+      card.appendChild(questionContainer);
+
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'question-actions';
+
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'console-btn submit-question';
+      submitBtn.textContent = 'Submit Answer';
+      submitBtn.onclick = () => submitQuestionAnswers(question.id, card);
+
+      const rejectBtn = document.createElement('button');
+      rejectBtn.className = 'console-btn reject-question';
+      rejectBtn.textContent = 'Reject';
+      rejectBtn.onclick = () => rejectQuestion(question.id);
+
+      actionsEl.appendChild(submitBtn);
+      actionsEl.appendChild(rejectBtn);
+
+      card.appendChild(actionsEl);
+      questionsList.appendChild(card);
+    });
+  };
+
+  const toggleQuestionOption = (btn) => {
+    if (btn.dataset.multiple !== 'true') {
+      btn.closest('.question-item').querySelectorAll('.question-select.selected').forEach((choice) => {
+        if (choice !== btn) choice.classList.remove('selected');
+      });
+    }
+    btn.classList.toggle('selected');
+  };
+
+  const submitQuestionAnswers = (questionId, card) => {
+    const items = Array.from(card.querySelectorAll('.question-item'));
+    const answers = items.map((item) => Array.from(item.querySelectorAll('.question-select.selected'), (choice) => choice.textContent));
+    const missing = answers.findIndex((answer) => answer.length === 0);
+    if (missing !== -1) { alert(`Please select at least one option for question ${missing + 1}`); return; }
+
+    if (!consoleRunId || !consoleToken) return;
+
+    const btns = questionsList.querySelectorAll('button');
+    btns.forEach(btn => btn.disabled = true);
+
+    fetch(`/api/control/runs/${encodeURIComponent(consoleRunId)}/questions/${encodeURIComponent(questionId)}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${consoleToken}`,
+        'Content-Type': 'application/json',
+        'X-Operator': consoleOperator
+      },
+      body: JSON.stringify({ answers })
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error('Question answer failed');
+      }
+      await response.json();
+      // Refresh snapshot to show updated state
+      pollConsoleSnapshot();
+    }).catch((err) => {
+      alert(`Failed to submit answers: ${err.message}`);
+    }).finally(() => {
+      btns.forEach(btn => btn.disabled = false);
+    });
+  };
+
+  const rejectQuestion = (questionId) => {
+    if (!consoleRunId || !consoleToken) return;
+
+    if (!confirm('Reject this question request?')) return;
+
+    const btns = questionsList.querySelectorAll('button');
+    btns.forEach(btn => btn.disabled = true);
+
+    fetch(`/api/control/runs/${encodeURIComponent(consoleRunId)}/questions/${encodeURIComponent(questionId)}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${consoleToken}`,
+        'Content-Type': 'application/json',
+        'X-Operator': consoleOperator
+      },
+      body: JSON.stringify({ decision: 'reject' })
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error('Question rejection failed');
+      }
+      await response.json();
+      pollConsoleSnapshot();
+    }).catch((err) => {
+      alert(`Failed to reject question: ${err.message}`);
+    }).finally(() => {
+      btns.forEach(btn => btn.disabled = false);
+    });
+  };
+
+  // Event listeners for console controls
+  if (openConsoleBtn) {
+    openConsoleBtn.addEventListener('click', openConsole);
+  }
+
+  if (closeConsoleBtn) {
+    closeConsoleBtn.addEventListener('click', closeConsole);
+  }
+
+  if (consoleDisconnectBtn) {
+    consoleDisconnectBtn.addEventListener('click', disconnectConsole);
+  }
+
+  if (connectionForm) {
+    connectionForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const runId = document.getElementById('console-run-id').value.trim();
+      const token = document.getElementById('console-token').value.trim();
+      const operator = document.getElementById('console-operator').value.trim() || 'operator';
+
+      if (!runId || !token) {
+        alert('Please provide run ID, operator name, and token');
+        return;
+      }
+
+      connectConsole(runId, token, operator);
+    });
+  }
+
+  if (transcriptAutoscrollBtn) {
+    transcriptAutoscrollBtn.addEventListener('click', () => {
+      consoleAutoscroll = !consoleAutoscroll;
+      transcriptAutoscrollBtn.setAttribute('aria-pressed', String(consoleAutoscroll));
+      if (consoleAutoscroll && consoleTranscript) {
+        consoleTranscript.scrollTop = consoleTranscript.scrollHeight;
+      }
+    });
+  }
+
+  if (transcriptClearBtn) {
+    transcriptClearBtn.addEventListener('click', () => {
+      const empty = document.createElement('div');
+      empty.className = 'transcript-empty';
+      empty.textContent = 'Transcript cleared';
+      consoleTranscript.replaceChildren(empty);
+    });
+  }
+
+  if (consoleFiltersContainer) {
+    consoleFiltersContainer.addEventListener('change', (e) => {
+      if (e.target.classList.contains('filter-checkbox')) {
+        const filterType = e.target.dataset.filter;
+        consoleFilters[filterType] = e.target.checked;
+        // Re-render transcript with new filters
+        pollConsoleSnapshot();
+      }
+    });
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', applyState);

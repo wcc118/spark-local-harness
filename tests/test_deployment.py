@@ -189,13 +189,20 @@ def test_dashboard_backend_requires_dashboard_backend_service():
 def test_dashboard_backend_release_version():
     """Verify dashboard-backend.service uses the current release."""
     content = read_unit("dashboard-backend.service")
-    assert "--release v0.5.5" in content
+    assert "--release v0.5.6" in content
 
 
 def test_dashboard_backend_live_mode():
     """Verify dashboard-backend.service uses live mode."""
     content = read_unit("dashboard-backend.service")
     assert "--mode live" in content
+
+
+def test_dashboard_control_plane_has_private_token_and_narrow_audit_write_path():
+    content = read_unit("dashboard-backend.service")
+    assert "--control-token-file %h/.config/codex-local/dashboard-control.token" in content
+    assert "--control-audit-file %h/.local/share/codex-local-harness/control/decisions.jsonl" in content
+    assert "ReadWritePaths=%h/.local/share/codex-local-harness/control" in content
 
 
 def test_units_have_standard_output_redirection():

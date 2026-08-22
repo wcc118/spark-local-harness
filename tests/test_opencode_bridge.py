@@ -32,6 +32,12 @@ class FakeOpenCode(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorized"})
         elif self.path == "/global/health":
             self._json(200, {"healthy": True, "version": "test"})
+        elif self.path == "/config":
+            self._json(200, {
+                "permission": {"bash": "ask"},
+                "agent": {"coder": {"permission": {"edit": "allow"}}},
+                "provider": {"secret": "must-not-be-retained"},
+            })
         elif self.path == "/event":
             events = [
                 {"type": "message.part.updated", "properties": {
@@ -48,9 +54,15 @@ class FakeOpenCode(BaseHTTPRequestHandler):
                 {"type": "message.part.updated", "properties": {
                     "part": {"type": "text", "sessionID": "session-123", "messageID": "assistant-1", "text": "done"},
                 }},
+                {"type": "message.part.updated", "properties": {
+                    "part": {"type": "reasoning", "sessionID": "session-123", "messageID": "assistant-1", "text": "thinking"},
+                }},
                 {"type": "permission.updated", "properties": {
                     "id": "permission-1", "sessionID": "session-123", "type": "bash",
                     "pattern": "pytest -q", "title": "Run tests", "metadata": {},
+                }},
+                {"type": "question.asked", "properties": {
+                    "id": "que-1", "sessionID": "session-123", "questions": [],
                 }},
                 {"type": "session.status", "properties": {
                     "sessionID": "session-123", "status": {"type": "idle"},
@@ -113,12 +125,19 @@ def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, 
     assert descriptor == {
         "schema_version": 1, "run_id": "run-1", "session_id": "session-123",
         "base_url": fake_server, "credential_file": None, "state": "completed",
+        "effective_policy": {
+            "source": "opencode-server-resolved", "evaluation_order": ["global", "role:coder"],
+            "global": {"bash": "ask"}, "role": {"edit": "allow"},
+        },
     }
     assert not secret.exists()
     events = [json.loads(line) for line in log.read_text().splitlines()]
-    assert [event["type"] for event in events] == ["tool_use", "text", "permission.updated"]
+    assert [event["type"] for event in events] == [
+        "tool_use", "text", "reasoning", "permission.updated", "question.asked",
+    ]
     assert events[1]["part"]["text"] == "done"
     assert "PRIVATE OTHER" not in log.read_text()
+    assert "must-not-be-retained" not in control.read_text()
     assert FakeOpenCode.prompt == {
         "agent": "coder", "model": {"providerID": "vllm", "modelID": "model-name"},
         "parts": [{"type": "text", "text": "Do work"}],

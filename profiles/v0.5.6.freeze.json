@@ -1,0 +1,17 @@
+{
+  "release": "v0.5.6",
+  "predecessor": "v0.5.5",
+  "issues": [120, 124],
+  "scope": "authenticated-opencode-operator-console",
+  "validation": {
+    "tests_passed": 439,
+    "production_smoke_required_after_merge": true
+  },
+  "sha256": {
+    "control_plane": "c979548afb574530bd5e73b5a7dd0cd1844ac4bd36e9dde4703cbd5cb52e8d5e",
+    "dashboard": "7d949ce4ea3754b65d1fb6320508189b37ace3f35bd87e70a2480edacf298803",
+    "bridge": "5a618bd4b90223933683e63a7d9739ee01c3f5f6c23ea8d48e35b80d8d5c2141",
+    "dashboard_unit": "29db1be90be9179cc06a9f23e6920d256a7ec0ae38ba7792db023329289b4b17",
+    "promoter": "496bd039e5b0de9629925c3d8cef7186646b82204809274334b1f487dcf6f0e6"
+  }
+}
