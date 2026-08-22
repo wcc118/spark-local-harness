@@ -24,3 +24,7 @@ python3 qualification/paired-model/run.py \
 The 2026-08-22 controlled run produced 10/10 correct for Coder Next and 0/10
 for Qwen 3.8; every Qwen attempt timed out. Raw events and workspaces remain in
 the operator data directory and are intentionally not committed.
+
+Coder Next remains the default. To run a deliberate Qwen 3.8 experiment, use
+`CODEX_LOCAL_TIER=experimental-qwen38` with the appropriate stable worker entry
+point. This tier is retained for diagnosis and is not production-qualified.
