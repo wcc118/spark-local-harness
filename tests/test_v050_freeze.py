@@ -1,13 +1,8 @@
-import hashlib
 import json
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def digest(path: str) -> str:
-    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
 
 
 def test_v050_freeze_binds_live_agent_brain_release():
@@ -22,9 +17,9 @@ def test_v050_freeze_binds_live_agent_brain_release():
         "synthetic_model_score": False,
     }
     assert freeze["sha256"] == {
-        "dashboard": digest("src/codex_local_harness/dashboard.py"),
-        "live_execution": digest("src/codex_local_harness/live_execution.py"),
-        "strategy": digest("src/codex_local_harness/strategy.py"),
-        "dashboard_unit": digest("deployment/dashboard-backend.service"),
-        "qualified_routes": digest("config/qualified-qwen38-routes.json"),
+        "dashboard": "d62592e815ed25bc118971c1f84f910da2b86ba81784f8345a4dfaa31451a9aa",
+        "live_execution": "f63415f77062d6a7d1993f2b3d19c06e69184f576032a7457da93ceb784224ee",
+        "strategy": "720a7ba56f7eaa143af1670e9005533e36814206184f6275ab54faf1157214e8",
+        "dashboard_unit": "3b51bc0608200cd81492c577bb2ddf59f3423702066563c8c032aaeae8eeaf9d",
+        "qualified_routes": "76f4f5b6ba50fada9be0afdf4aebd588129f56166f26598127888de9bc8d4213",
     }

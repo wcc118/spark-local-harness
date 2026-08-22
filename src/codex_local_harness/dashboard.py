@@ -289,8 +289,41 @@ class DashboardSource:
         attention_queue, attention_total = _build_attention_queue(
             views, current_operations, scoped_failures, statuses, current_time, run_observed_at,
         )
+        health_by_id = {run.run_id: run for run in runs}
+        operation_by_run_id = {
+            run_id: operation
+            for operation in current_operations
+            for run_id in operation["run_ids"]
+        }
+        run_evidence: dict[str, dict[str, Any]] = {}
+        for view in views:
+            health = health_by_id.get(view.run_id)
+            operation = operation_by_run_id.get(view.run_id, {})
+            terminal_state = None
+            if view.lifecycle_state == "completed":
+                terminal_state = (
+                    "completed"
+                    if view.lifecycle_exit_status in {None, 0}
+                    and view.claimed_status != "failure"
+                    else "failed"
+                )
+            elif view.lifecycle_state in {"interrupted", "cancelled", "timed-out"}:
+                terminal_state = view.lifecycle_state
+            run_evidence[view.run_id] = {
+                "terminal_state": terminal_state,
+                "source_ref": f"lifecycle:{view.run_id}:{view.lifecycle_state}",
+                "role": view.role,
+                "model": view.model,
+                "repository": health.repository if health else operation.get("repository"),
+                "issue": view.issue,
+                "session_id": operation.get("session_id"),
+                "elapsed_seconds": view.wall_seconds,
+                "tool_calls": view.tool_calls,
+                "pull_request": health.pull_request if health else operation.get("pull_request"),
+                "token_usage": view.local_tokens + view.frontier_tokens,
+            }
         live_execution = project_live_execution(
-            self.v5_runs, now=current_time, session_id=selected,
+            self.v5_runs, now=current_time, session_id=selected, run_evidence=run_evidence,
         )
         criterion_states = []
         for view in views:

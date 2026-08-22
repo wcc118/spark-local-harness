@@ -111,6 +111,36 @@ def test_projects_waiting_states_and_terminal_results(tmp_path: Path) -> None:
     }
 
 
+def test_canonical_evidence_closes_helper_run_without_result_file(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _write_log(runs, "helper-run", [_event("step_start"), _event("step_finish")])
+
+    snapshot = project_live_execution(runs, now=NOW, run_evidence={
+        "helper-run": {
+            "terminal_state": "completed",
+            "source_ref": "lifecycle:helper-run:completed",
+            "role": "helper",
+            "model": "lmstudio/qwen/qwen3.8-27b",
+            "repository": "wcc118/codex-local-harness",
+            "issue": 117,
+            "elapsed_seconds": 58.9,
+            "tool_calls": 2,
+            "token_usage": 22868,
+        },
+    })
+
+    worker = next(node for node in snapshot["nodes"] if node["kind"] == "worker")
+    assert worker["state"] == "completed"
+    assert worker["role"] == "helper"
+    assert worker["model"] == "lmstudio/qwen/qwen3.8-27b"
+    assert worker["repository"] == "wcc118/codex-local-harness"
+    assert worker["issue"] == 117
+    assert worker["tool_calls"] == 2
+    assert worker["token_usage"] == 22868
+    assert worker["source_ref"] == "lifecycle:helper-run:completed"
+    assert snapshot["handoffs"][0]["from"] == "helper"
+
+
 def test_stale_partial_malformed_and_bounds(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     path = _write_log(runs, "partial", [_event("step_start")], partial=True)
