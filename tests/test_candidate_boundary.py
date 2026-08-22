@@ -32,6 +32,8 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "helper) default_worker_timeout=300" in content
     assert "reviewer) default_worker_timeout=120" in content
     assert "CODEX_LOCAL_REVIEWER_TOKEN_BUDGET" in content
+    assert "CODEX_LOCAL_MAX_TASK_CHARS" in content
+    assert "pass issue references and bounded evidence instead of transcripts" in content
     assert ".agent.reviewer.steps = 4" in content
     assert '.agent.reviewer.permission = {"*": "deny"}' in content
     assert '"*": "deny",\n          "git status*"' not in content

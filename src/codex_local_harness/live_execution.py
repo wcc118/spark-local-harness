@@ -58,7 +58,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, bool]:
             malformed += 1
             continue
         event_type = raw.get("type")
-        if event_type not in {"step_start", "step_finish", "tool_use"}:
+        if event_type not in {"step_start", "step_finish", "tool_use", "diagnostic"}:
             continue
         part = raw.get("part") if isinstance(raw.get("part"), dict) else {}
         observed_at = _iso_from_millis(raw.get("timestamp"))
@@ -68,7 +68,19 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, bool]:
             "source_ref": f"v5-log:{path.name}:{max(0, len(lines) - MAX_EVENTS_PER_RUN) + index + 1}",
             "reason": "normalized retained v5 execution event",
         }
-        if event_type == "tool_use":
+        if event_type == "diagnostic":
+            normalized.update({
+                "kind": "diagnostic", "diagnostic_kind": str(part.get("kind") or "unknown")[:48],
+                "severity": str(part.get("severity") or "notice")[:16],
+                "stage": str(part.get("stage") or "unknown")[:32],
+                "reason": str(part.get("reason") or "observable diagnostic")[:256],
+                "metric": str(part.get("metric") or "")[:32] or None,
+                "observed": _safe_number(part.get("observed")),
+                "limit": _safe_number(part.get("limit")),
+                "count": _safe_number(part.get("count")),
+                "fingerprint": str(part.get("fingerprint") or "")[:32] or None,
+            })
+        elif event_type == "tool_use":
             state = part.get("state") if isinstance(part.get("state"), dict) else {}
             tool = str(part.get("tool") or "unknown")[:48]
             status = str(state.get("status") or "unknown")[:32]
@@ -128,6 +140,16 @@ def _diagnostic_signals(run_id: str, events: list[dict[str, Any]]) -> list[dict[
     tool_calls: dict[str, set[str]] = {}
     previous_time: datetime | None = None
     for event in events:
+        if event["kind"] == "diagnostic":
+            signals.append({
+                "kind": event.get("diagnostic_kind", "diagnostic"), "run_id": run_id,
+                "severity": event.get("severity", "notice"), "observed_at": event.get("observed_at"),
+                "source_ref": event["source_ref"], "reason": event.get("reason", "observable diagnostic"),
+                "stage": event.get("stage"), "metric": event.get("metric"),
+                "observed": event.get("observed"), "limit": event.get("limit"),
+                "count": event.get("count"), "fingerprint": event.get("fingerprint"),
+            })
+            continue
         if event["kind"] == "tool-use":
             tool = str(event.get("tool") or "unknown")
             call_identity = str(event.get("call_id") or event["source_ref"])

@@ -70,9 +70,21 @@ reports `evidence-observed`, `contradicted`, or `verified`. Handoffs mean only
 that a retained worker result became available to Codex; the UI does not infer
 an unobserved coder-to-reviewer conversation.
 
-Neutral diagnostic notices call out repeated tool categories, tool-reported
-errors, and intervals of at least two minutes between retained events. Their
-text explicitly avoids calling these signals failures. Command bodies, test
+Live diagnostics now fingerprint observable tool name/input pairs and emit an
+`exploration-loop` warning after three distinct calls repeat the same request.
+Lifecycle updates for one call ID are deduplicated. Fingerprints are hashes;
+command bodies and paths are not copied into the projection.
+
+The bridge also classifies observable activity into `investigation`,
+`implementation`, `testing`, or `review` and emits `stage-budget` warnings at
+80 percent and critical signals after the configured tool, token, or wall-time
+budget. Defaults are defined in `execution_diagnostics.py`; operators can set
+`CODEX_LOCAL_STAGE_BUDGETS` to a JSON object containing per-stage overrides.
+These are diagnostic budgets, not inferred failure verdicts or private thought
+timers. The dashboard uses them to show where work is consuming its allowance.
+
+Other neutral notices call out tool-reported errors and intervals of at least
+two minutes between retained events. Command bodies, test
 commands, prompts, output, and private reasoning are excluded. File names are
 bounded to retained changed-path evidence. Raw artifact download is disabled;
 source references are identifiers rather than browser-accessible file paths.

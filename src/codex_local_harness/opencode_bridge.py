@@ -10,6 +10,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .execution_diagnostics import ExecutionDiagnostics, load_stage_budgets
+
 
 class BridgeError(RuntimeError):
     pass
@@ -111,6 +113,7 @@ def run_bridge(
     model: str, log: Path, control: Path, secret: Path, timeout: float,
 ) -> int:
     deadline = time.monotonic() + timeout
+    diagnostics = ExecutionDiagnostics(agent, load_stage_budgets(os.environ.get("CODEX_LOCAL_STAGE_BUDGETS")))
     while True:
         try:
             health = _request(base_url, password, "GET", "/global/health")
@@ -174,6 +177,8 @@ def run_bridge(
             normalized = _event_payload(raw, message_roles)
             if normalized is not None:
                 _append_event(log, normalized)
+                for diagnostic in diagnostics.observe(normalized):
+                    _append_event(log, diagnostic)
             if raw.get("type") == "session.error":
                 terminal_error = True
             if raw.get("type") == "session.status":

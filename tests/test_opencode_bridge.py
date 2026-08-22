@@ -133,9 +133,10 @@ def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, 
     assert not secret.exists()
     events = [json.loads(line) for line in log.read_text().splitlines()]
     assert [event["type"] for event in events] == [
-        "tool_use", "text", "reasoning", "permission.updated", "question.asked",
+        "tool_use", "diagnostic", "text", "reasoning", "permission.updated", "question.asked",
     ]
-    assert events[1]["part"]["text"] == "done"
+    assert events[1]["part"]["kind"] == "stage-transition"
+    assert events[2]["part"]["text"] == "done"
     assert "PRIVATE OTHER" not in log.read_text()
     assert "must-not-be-retained" not in control.read_text()
     assert FakeOpenCode.prompt == {

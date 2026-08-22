@@ -108,6 +108,27 @@ def test_active_projection_counts_observed_tools_and_surfaces_latest_error(tmp_p
     assert any(signal["kind"] == "tool-error" for signal in snapshot["signals"])
 
 
+def test_projects_live_loop_and_stage_budget_diagnostics(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _write_log(runs, "expensive", [{
+        "type": "diagnostic", "timestamp": NOW_MS, "part": {
+            "kind": "exploration-loop", "severity": "critical", "stage": "investigation",
+            "reason": "same request completed 4 times", "count": 4, "fingerprint": "deadbeef",
+        },
+    }, {
+        "type": "diagnostic", "timestamp": NOW_MS, "part": {
+            "kind": "stage-budget", "severity": "warning", "stage": "investigation",
+            "reason": "investigation tokens observed at 160000 of 180000",
+            "metric": "tokens", "observed": 160000, "limit": 180000,
+        },
+    }])
+
+    signals = project_live_execution(runs, now=NOW)["signals"]
+    assert {item["kind"] for item in signals} >= {"exploration-loop", "stage-budget"}
+    budget = next(item for item in signals if item["kind"] == "stage-budget")
+    assert (budget["stage"], budget["observed"], budget["limit"]) == ("investigation", 160000, 180000)
+
+
 def test_projects_waiting_states_and_terminal_results(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _write_log(runs, "thinking", [_event("step_start")])

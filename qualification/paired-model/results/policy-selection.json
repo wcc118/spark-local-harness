@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "variant": "baseline",
+    "runs": 10,
+    "correct": 10,
+    "elapsed_seconds": 603.553,
+    "tool_calls": 126,
+    "tool_errors": 2,
+    "tokens": 1250223,
+    "corrections": 0
+  },
+  "candidate": {
+    "variant": "compact-v1",
+    "runs": 10,
+    "correct": 8,
+    "hidden_oracle_passes": 10,
+    "timed_out": 2,
+    "elapsed_seconds": 684.484,
+    "tool_calls": 173,
+    "tool_errors": 52,
+    "tokens": 2484342,
+    "corrections": 0
+  },
+  "correctness_retained": false,
+  "non_worse": false,
+  "improved_metrics": [],
+  "promoted": false,
+  "decision": "baseline",
+  "rule": "Promote only a 10/10 completed candidate that is non-worse on every measured cost and improves at least one.",
+  "evidence": "compact-v1 timed out on UI and diagnosis despite leaving oracle-passing partial work; it used 2.0x tokens and more time, tools, and tool errors than baseline."
+}
