@@ -1,7 +1,7 @@
 ---
 description: Bounded independent reviewer for one immutable issue and PR
 mode: primary
-steps: 80
+steps: 20
 permission:
   edit: deny
   write: deny
@@ -24,6 +24,12 @@ The harness supplies an immutable read-only checkout, the exact-head diff, and
 deterministic preflight evidence. Inspect the changed files and their relevant
 interfaces with read, glob, grep, and non-mutating bash commands. The checkout
 is mounted read-only. Do not install packages or invoke git/GitHub mutations.
+
+Use at most 12 tool calls. Start with the exact diff and acceptance criteria,
+inspect only directly affected interfaces, run one focused verification command,
+then serialize the result. Do not explore unrelated release history. The only
+valid verdict strings are `APPROVE`, `REQUEST_CHANGES`, and `ESCALATE`; `PASS`
+is invalid. Reserve enough context to emit the exact `REVIEW_RESULT_JSON` schema.
 
 Distinguish evidence precisely. Every `tests` entry must include `provenance`
 equal to `harness-observed`, `reviewer-observed`, or `task-reported`. Do not turn
