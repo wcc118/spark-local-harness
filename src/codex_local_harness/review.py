@@ -244,6 +244,84 @@ def parse_result(log_path: Path) -> dict[str, Any]:
     return result
 
 
+def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
+    """Convert a small, documented reviewer compatibility vocabulary to schema v1.
+
+    This boundary changes representation only.  It rejects unknown fields and
+    verifies every model-supplied identity before filling canonical identity
+    fields from the immutable harness envelope.
+    """
+    allowed = {
+        "schema_version", "verdict", "repository", "repo", "issue", "pull_request", "pr",
+        "reviewed_head_sha", "head", "head_sha", "criteria", "findings", "tests",
+        "confidence", "summary", "escalation_reason", "escalation",
+    }
+    unknown = sorted(set(result) - allowed)
+    if unknown:
+        raise ReviewError(f"structured result has unsupported fields: {unknown}")
+
+    def supplied(*names: str) -> list[Any]:
+        return [result[name] for name in names if name in result]
+
+    expected_aliases = {
+        "repository": (envelope.repository, supplied("repository", "repo")),
+        "issue": (envelope.issue, supplied("issue")),
+        "pull_request": (envelope.pull_request, supplied("pull_request", "pr")),
+        "reviewed_head_sha": (envelope.head_sha, supplied("reviewed_head_sha", "head", "head_sha")),
+    }
+    for field, (expected, values) in expected_aliases.items():
+        if not values:
+            continue
+        normalized = []
+        for value in values:
+            if field in {"issue", "pull_request"} and isinstance(value, str):
+                match = re.fullmatch(r"(?:[^#\s]+#)?(\d+)", value.strip())
+                value = int(match.group(1)) if match else value
+            normalized.append(value)
+        if any(value != expected for value in normalized):
+            raise ReviewError(f"result identity mismatch for {field}")
+
+    verdict_aliases = {"PASS": "APPROVE", "FAIL": "REQUEST_CHANGES"}
+    verdict = verdict_aliases.get(result.get("verdict"), result.get("verdict"))
+
+    criteria = result.get("criteria", [])
+    if isinstance(criteria, dict):
+        criteria = [
+            {"criterion": str(name), "status": str(status), "evidence": "reviewer assertion"}
+            for name, status in criteria.items()
+        ]
+    findings = result.get("findings", [])
+    if all(isinstance(item, str) for item in findings) if isinstance(findings, list) else False:
+        findings = [{"severity": "note", "message": item} for item in findings]
+    tests = result.get("tests", [])
+    if isinstance(tests, dict):
+        tests = [
+            {"command": str(command), "status": str(status), "provenance": "task-reported"}
+            for command, status in tests.items()
+        ]
+
+    confidence = result.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        if not 0 <= confidence <= 1:
+            raise ReviewError("numeric confidence must be between zero and one")
+        confidence = "high" if confidence >= 0.8 else "medium" if confidence >= 0.5 else "low"
+
+    return {
+        "schema_version": result.get("schema_version", 1),
+        "verdict": verdict,
+        "repository": envelope.repository,
+        "issue": envelope.issue,
+        "pull_request": envelope.pull_request,
+        "reviewed_head_sha": envelope.head_sha,
+        "criteria": criteria,
+        "findings": findings,
+        "tests": tests,
+        "confidence": confidence,
+        "summary": result.get("summary"),
+        "escalation_reason": result.get("escalation_reason", result.get("escalation")),
+    }
+
+
 def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
     checkout = Path(envelope.checkout).resolve()
     trusted_tool_roots = (Path.home() / ".local/bin", Path.home() / "bin")
@@ -502,7 +580,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             envelope = load_envelope(args.envelope)
             audit_tool_scope(args.log, envelope)
             verify_checkout_unchanged(envelope)
-            result = validate_result(parse_result(args.log), envelope)
+            result = validate_result(canonicalize_result(parse_result(args.log), envelope), envelope)
             publication = publish_result(result, envelope, args.run_id)
             write_json(args.result_out, {"result": result, "publication": publication})
             print(json.dumps(publication, sort_keys=True))

@@ -11,6 +11,7 @@ from codex_local_harness.review import (
     ReviewError,
     audit_tool_scope,
     build_envelope,
+    canonicalize_result,
     normalize_remote,
     parse_result,
     prepare_prompt,
@@ -317,6 +318,45 @@ def test_validate_result_accepts_all_verdicts(tmp_path):
     assert validate_result(valid_result(), env)["verdict"] == "APPROVE"
     assert validate_result(valid_result(verdict="REQUEST_CHANGES"), env)["verdict"] == "REQUEST_CHANGES"
     assert validate_result(valid_result(verdict="ESCALATE", escalation_reason="conflict"), env)["verdict"] == "ESCALATE"
+
+
+def test_canonicalize_observed_coder_next_alias_shape(tmp_path):
+    raw = {
+        "verdict": "PASS",
+        "issue": f"{REPO}#7",
+        "pr": 11,
+        "head": SHA,
+        "criteria": {"requirements": "pass", "tests": "pass"},
+        "findings": ["No blocking findings."],
+        "tests": {"pytest -q": "reported passing"},
+        "confidence": 0.95,
+        "summary": "The bounded change satisfies the issue.",
+    }
+    canonical = canonicalize_result(raw, envelope(tmp_path))
+    assert validate_result(canonical, envelope(tmp_path))["verdict"] == "APPROVE"
+    assert canonical["confidence"] == "high"
+    assert canonical["tests"][0]["provenance"] == "task-reported"
+
+
+def test_canonicalize_preserves_valid_schema(tmp_path):
+    result = valid_result()
+    assert canonicalize_result(result, envelope(tmp_path)) == result
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"issue": 8},
+        {"pr": 12},
+        {"head": "c" * 40},
+        {"unexpected": "value"},
+        {"confidence": 1.2},
+    ],
+)
+def test_canonicalize_rejects_conflicting_or_ambiguous_results(tmp_path, changes):
+    raw = {"verdict": "PASS", "summary": "Looks correct.", "confidence": "high", **changes}
+    with pytest.raises(ReviewError):
+        canonicalize_result(raw, envelope(tmp_path))
 
 
 def test_validate_result_normalizes_omitted_optional_escalation_reason(tmp_path):
