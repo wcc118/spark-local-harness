@@ -507,6 +507,144 @@ def _render_operational_verdict(
     return verdict_html
 
 
+_BRAIN_REGIONS = (
+    ("intake", "Intake + repository", "Observed checkout and task boundary"),
+    ("executive", "Codex executive", "Durable orchestration evidence"),
+    ("routing", "Routing + inference", "Observed model endpoint activity"),
+    ("action", "Coder + action", "Local worker execution"),
+    ("verification", "Review + verification", "Reviewer and test evidence"),
+    ("tools", "Tools", "Observable external actions"),
+    ("memory", "Durable memory", "Issue, workflow, and retained result state"),
+)
+_BRAIN_STATES = {
+    "active", "running", "running-tests", "waiting-inference", "waiting-tool",
+    "stale", "completed", "failed", "interrupted", "unavailable", "unknown",
+    "pending", "error",
+}
+
+
+def _brain_region(node: dict[str, Any]) -> str:
+    kind = str(node.get("kind") or "unknown")
+    role = str(node.get("role") or "").lower()
+    if kind == "repository":
+        return "intake"
+    if kind in {"codex", "executive"}:
+        return "executive"
+    if kind in {"model", "router"}:
+        return "routing"
+    if kind == "test" or role == "reviewer":
+        return "verification"
+    if kind == "tool":
+        return "tools"
+    if kind in {"workflow", "issue", "memory"}:
+        return "memory"
+    return "action"
+
+
+def _brain_state(value: Any) -> str:
+    state = str(value or "unknown")
+    return state if state in _BRAIN_STATES else "unknown"
+
+
+def _brain_age(observed_at: Any, projection_time: Any) -> str:
+    if not isinstance(observed_at, str):
+        return "time unknown"
+    try:
+        observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        current = datetime.fromisoformat(str(projection_time).replace("Z", "+00:00"))
+    except ValueError:
+        return "time unknown"
+    return _format_age(max(0.0, (current - observed).total_seconds()))
+
+
+def _brain_button(item: dict[str, Any], index: int, projection_time: Any, *, edge: bool = False) -> str:
+    state = _brain_state(item.get("state"))
+    if edge:
+        label = f'{item.get("source", "unknown")} → {item.get("target", "unknown")}'
+        kind = str(item.get("kind") or "signal")
+        css = "brain-edge"
+        prefix = "brain-edge"
+    else:
+        label = str(item.get("label") or item.get("id") or "Unknown node")
+        kind = str(item.get("kind") or "unknown")
+        css = "brain-node"
+        prefix = "brain-node"
+    observed = str(item.get("observed_at") or "Observation time unavailable")
+    reason = str(item.get("reason") or "Derivation reason unavailable")
+    source = str(item.get("source_ref") or "Evidence reference unavailable")
+    age = _brain_age(item.get("observed_at"), projection_time)
+    selection_key = str(item.get("id") or f'{item.get("source")}:{item.get("target")}:{kind}')
+    attributes = (
+        f'data-brain-key="{html.escape(selection_key, quote=True)}" '
+        f'data-label="{html.escape(label, quote=True)}" '
+        f'data-kind="{html.escape(kind, quote=True)}" '
+        f'data-state="{html.escape(state, quote=True)}" '
+        f'data-age="{html.escape(age, quote=True)}" '
+        f'data-observed="{html.escape(observed, quote=True)}" '
+        f'data-reason="{html.escape(reason, quote=True)}" '
+        f'data-source="{html.escape(source, quote=True)}"'
+    )
+    if edge:
+        return (
+            f'<button type="button" id="{prefix}-{index}" class="{css} state-{state}" {attributes}>'
+            f'<span>{html.escape(label)}</span><small>{html.escape(kind)} · {html.escape(state)}</small></button>'
+        )
+    return (
+        f'<button type="button" id="{prefix}-{index}" class="{css} state-{state}" {attributes}>'
+        f'<span class="brain-node-kind">{html.escape(kind)}</span><strong>{html.escape(label)}</strong>'
+        f'<span class="brain-node-state">{html.escape(state)}</span><small>{html.escape(age)}</small></button>'
+    )
+
+
+def _render_agent_brain(projection: dict[str, Any]) -> str:
+    nodes = list(projection.get("nodes") or ())[:128]
+    edges = list(projection.get("edges") or ())[:192]
+    projection_time = projection.get("observed_at")
+    region_nodes: dict[str, list[str]] = {key: [] for key, _, _ in _BRAIN_REGIONS}
+    for index, node in enumerate(nodes):
+        if isinstance(node, dict):
+            region_nodes[_brain_region(node)].append(_brain_button(node, index, projection_time))
+    regions = []
+    for key, title, description in _BRAIN_REGIONS:
+        content = "".join(region_nodes[key]) or '<p class="brain-region-empty">No current evidence</p>'
+        regions.append(
+            f'<section class="brain-region region-{key}" aria-labelledby="brain-region-{key}">'
+            f'<h3 id="brain-region-{key}">{html.escape(title)}</h3><p>{html.escape(description)}</p>'
+            f'<div class="brain-region-nodes">{content}</div></section>'
+        )
+    signals = "".join(
+        _brain_button(edge, index, projection_time, edge=True)
+        for index, edge in enumerate(edges) if isinstance(edge, dict)
+    ) or '<p class="brain-empty">No directed activity has been observed yet.</p>'
+    source_state = str(projection.get("source_state") or "unavailable")
+    diagnostics = list(projection.get("diagnostics") or ())
+    diagnostic_html = "".join(f'<li>{html.escape(str(item))}</li>' for item in diagnostics)
+    empty_note = "" if nodes else (
+        '<div class="brain-teaching" role="note"><strong>No live worker evidence yet.</strong> '
+        'Start a v5 local worker or configure <code>--v5-runs</code>. Empty regions are unknown, not idle.</div>'
+    )
+    partial_note = "" if source_state == "ok" else (
+        f'<div class="brain-teaching" role="note"><strong>Evidence {html.escape(source_state)}.</strong> '
+        'The topology shows only what could be safely normalized.</div>'
+    )
+    diagnostics_block = f'<ul class="brain-diagnostics">{diagnostic_html}</ul>' if diagnostics else ""
+    return (
+        '<section class="agent-brain" aria-labelledby="agent-brain-title">'
+        '<div class="brain-heading"><div><span class="eyebrow">LIVE EXECUTION MODEL</span>'
+        '<h2 id="agent-brain-title">Agent brain</h2><p>Observable coordination, not private reasoning or chain-of-thought.</p></div>'
+        f'<span class="brain-source state-{_brain_state(source_state)}">evidence · {html.escape(source_state)}</span></div>'
+        f'{empty_note}{partial_note}{diagnostics_block}'
+        f'<div class="brain-map">{"".join(regions)}</div>'
+        '<div class="brain-lower"><section class="brain-signals" aria-labelledby="brain-signals-title">'
+        f'<h3 id="brain-signals-title">Observed signal paths</h3><div class="brain-edge-list">{signals}</div></section>'
+        '<aside class="brain-inspector" aria-live="polite" aria-labelledby="brain-detail-title">'
+        '<span class="eyebrow">SELECTED EVIDENCE</span><h3 id="brain-detail-title">Choose a node or signal</h3>'
+        '<dl><div><dt>Kind</dt><dd id="brain-detail-kind">—</dd></div><div><dt>State</dt><dd id="brain-detail-state">—</dd></div>'
+        '<div><dt>Last observed</dt><dd id="brain-detail-age">—</dd></div><div><dt>Reason</dt><dd id="brain-detail-reason">—</dd></div>'
+        '<div><dt>Source</dt><dd id="brain-detail-source">—</dd></div></dl></aside></div></section>'
+    )
+
+
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="14" fill="#0b1020"/>
 <circle cx="32" cy="32" r="21" fill="none" stroke="#2a3552" stroke-width="4"/>
@@ -705,6 +843,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         '<button type="submit" class="session-submit">Go</button></form>'
     )
     accounting_html = _accounting_html(snapshot["accounting"], views)
+    brain_html = _render_agent_brain(snapshot.get("live_execution", {}))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -742,6 +881,20 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .rail-current{{color:var(--muted);font-size:12px}}
 .accounting-footnote{{color:var(--muted);font-size:12px;margin:8px 2px 0}}
 .card-spark{{margin-top:8px}} .sparkline{{display:block}}
+.agent-brain{{background:linear-gradient(145deg,#101a31,#12182a 55%,#17172a);border:1px solid #41527b;border-radius:16px;padding:20px;margin:0 0 18px;box-shadow:0 18px 55px rgba(0,0,0,.22)}}
+.brain-heading{{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:15px}} .brain-heading h2{{font-size:25px;margin:2px 0}} .brain-heading p{{color:var(--muted);margin:0}} .eyebrow{{color:#8faeff;font-size:10px;font-weight:800;letter-spacing:.14em}}
+.brain-source,.brain-node-state{{border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:10px;font-weight:700;text-transform:uppercase}} .brain-source{{white-space:nowrap}}
+.brain-map{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-areas:"intake executive executive routing" "memory action verification tools";gap:10px}} .region-intake{{grid-area:intake}} .region-executive{{grid-area:executive}} .region-routing{{grid-area:routing}} .region-action{{grid-area:action}} .region-verification{{grid-area:verification}} .region-tools{{grid-area:tools}} .region-memory{{grid-area:memory}}
+.brain-region{{min-width:0;min-height:135px;border:1px solid var(--line);border-radius:12px;padding:11px;background:rgba(11,16,32,.58)}} .brain-region h3,.brain-signals h3,.brain-inspector h3{{margin:0;font-size:13px}} .brain-region>p{{color:var(--muted);font-size:10px;margin:2px 0 9px}} .brain-region-nodes{{display:grid;gap:6px}} .brain-region-empty,.brain-empty{{color:#68738e;font-size:11px;margin:12px 0}}
+.brain-node,.brain-edge{{font:inherit;color:var(--ink);text-align:left;cursor:pointer;background:#18223a;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}} .brain-node:hover,.brain-node:focus-visible,.brain-edge:hover,.brain-edge:focus-visible,.brain-select-active{{outline:2px solid #8faeff;outline-offset:1px}} .brain-node strong,.brain-node small,.brain-edge span,.brain-edge small{{display:block;overflow-wrap:anywhere}} .brain-node-kind{{display:block;color:var(--muted);font-size:9px;text-transform:uppercase}} .brain-node-state{{display:inline-block;margin:5px 5px 0 0}} .brain-node small,.brain-edge small{{color:var(--muted);font-size:9px;margin-top:3px}}
+.state-active,.state-running,.state-running-tests{{border-color:var(--good)}} .state-waiting-inference,.state-waiting-tool,.state-pending{{border-color:var(--warn)}} .state-failed,.state-interrupted,.state-error{{border-color:var(--bad)}} .state-stale{{border-style:dashed;color:var(--warn)}} .state-unknown,.state-unavailable{{border-style:dotted;color:var(--muted)}} .state-completed{{border-color:#526483;color:#aebad5}}
+.brain-lower{{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);gap:10px;margin-top:10px}} .brain-signals,.brain-inspector{{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(11,16,32,.58);min-width:0}} .brain-edge-list{{display:flex;gap:6px;overflow:auto;padding:8px 2px 2px}} .brain-edge{{position:relative;flex:0 0 min(245px,75vw)}} .brain-edge.state-active,.brain-edge.state-running,.brain-edge.state-running-tests,.brain-edge.state-waiting-inference,.brain-edge.state-waiting-tool{{background:linear-gradient(90deg,#18223a,#243654,#18223a);background-size:200% 100%}}
+.brain-inspector dl{{margin:8px 0 0;display:grid;gap:7px}} .brain-inspector dl div{{display:grid;grid-template-columns:90px 1fr;gap:8px}} .brain-inspector dt{{color:var(--muted);font-size:10px;text-transform:uppercase}} .brain-inspector dd{{margin:0;overflow-wrap:anywhere}} .brain-teaching{{border-left:3px solid var(--warn);background:#272417;padding:9px 11px;margin-bottom:10px;color:var(--muted)}} .brain-diagnostics{{color:var(--warn);font-size:11px}}
+.diagnostic-secondary{{margin:0 0 16px}} .diagnostic-secondary>summary{{cursor:pointer;color:var(--muted);margin:0 0 8px}} .diagnostic-secondary .operational-verdict{{margin:0}}
+@media (prefers-reduced-motion:no-preference){{.brain-edge.state-active,.brain-edge.state-running,.brain-edge.state-running-tests,.brain-edge.state-waiting-inference,.brain-edge.state-waiting-tool{{animation:brain-signal 2.4s linear infinite}}@keyframes brain-signal{{to{{background-position:-200% 0}}}}}}
+@media (prefers-reduced-motion:reduce){{.brain-edge{{animation:none!important}}}}
+@media (max-width:900px){{.brain-map{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"executive routing" "intake action" "verification tools" "memory memory"}} .brain-lower{{grid-template-columns:1fr}}}}
+@media (max-width:560px){{.agent-brain{{padding:12px;border-radius:12px}} .brain-map{{grid-template-columns:1fr;grid-template-areas:"executive" "routing" "action" "verification" "tools" "intake" "memory"}} .brain-region{{min-height:0}} .brain-edge{{flex-basis:82vw}} .brain-inspector dl div{{grid-template-columns:72px 1fr}}}}
 </style>
 <style>
 .operational-verdict{{border:2px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;margin:0 0 16px}} .operational-verdict.severity-critical{{border-color:var(--bad)}} .operational-verdict.severity-degraded{{border-color:var(--warn)}} .operational-verdict.severity-no-data{{border-color:var(--muted);background:#1b2338}} .operational-verdict.severity-healthy{{border-color:var(--good)}}
@@ -763,7 +916,8 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 </head><body><main>
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
 {source_banner}
-{verdict_html}
+{brain_html}
+<details class="diagnostic-secondary"><summary>Operational verdict · {html.escape(str(verdict.get('headline', 'unknown')))}</summary>{verdict_html}</details>
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>
 {session_picker}
@@ -1092,6 +1246,7 @@ DASHBOARD_JS = """(() => {
   let activeFilter = null;
   let searchTerm = '';
   let sortState = null;
+  let selectedBrainKey = null;
   const openDetailIds = new Set();
 
   const events = new EventSource('/events' + window.location.search);
@@ -1158,9 +1313,36 @@ DASHBOARD_JS = """(() => {
     document.querySelectorAll('details[data-details-id]').forEach((el) => {
       if (openDetailIds.has(el.dataset.detailsId)) { el.open = true; }
     });
+    const choices = Array.from(document.querySelectorAll('[data-brain-key]'));
+    const selected = choices.find((el) => el.dataset.brainKey === selectedBrainKey)
+      || choices.find((el) => el.classList.contains('state-running-tests') || el.classList.contains('state-waiting-tool') || el.classList.contains('state-waiting-inference'))
+      || choices[0];
+    if (selected) { showBrainDetail(selected); }
+  };
+
+  const showBrainDetail = (choice) => {
+    selectedBrainKey = choice.dataset.brainKey;
+    document.querySelectorAll('[data-brain-key]').forEach((item) => {
+      item.classList.toggle('brain-select-active', item.dataset.brainKey === selectedBrainKey);
+      item.setAttribute('aria-pressed', item.dataset.brainKey === selectedBrainKey ? 'true' : 'false');
+    });
+    const fields = {
+      'brain-detail-title': choice.dataset.label,
+      'brain-detail-kind': choice.dataset.kind,
+      'brain-detail-state': choice.dataset.state,
+      'brain-detail-age': choice.dataset.age + ' · ' + choice.dataset.observed,
+      'brain-detail-reason': choice.dataset.reason,
+      'brain-detail-source': choice.dataset.source,
+    };
+    Object.entries(fields).forEach(([id, value]) => {
+      const target = document.getElementById(id);
+      if (target) { target.textContent = value || 'Unavailable'; }
+    });
   };
 
   document.addEventListener('click', (event) => {
+    const brainChoice = event.target.closest('[data-brain-key]');
+    if (brainChoice) { showBrainDetail(brainChoice); return; }
     const tab = event.target.closest('.triage-tab');
     if (tab) { activeFilter = tab.dataset.filter; applyFilters(); return; }
     const header = event.target.closest('th.sortable');

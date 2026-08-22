@@ -31,3 +31,24 @@ Repository, role, model, and issue identity are included only when retained
 evidence provides them. Current v5 result files provide repository, role, and
 model identity after termination; active logs still expose the running worker
 and its observable tool/test transitions without inventing unavailable labels.
+
+## Agent brain view
+
+The visual topology is an execution model, not a picture of literal model
+cognition. It never displays private reasoning or chain-of-thought. Its stable
+regions map observed evidence as follows:
+
+- **Intake + repository** — retained checkout identity and task boundary.
+- **Codex executive** — official orchestration evidence when available.
+- **Routing + inference** — retained model and endpoint identity.
+- **Coder + action** — local worker execution, including helper/coder roles.
+- **Review + verification** — reviewer roles and recognized test activity.
+- **Tools** — normalized external tool use without commands or output.
+- **Durable memory** — issue/workflow/result evidence when supplied.
+
+An empty region means evidence is absent; it does not mean that component is
+idle. Signal animation marks a recent, observable directed relationship only.
+It does not imply hidden communication. Selecting a node or signal exposes its
+state, observation age, derivation reason, and retained source reference. The
+same interaction works by keyboard, and reduced-motion preferences disable
+signal animation without removing state text.
