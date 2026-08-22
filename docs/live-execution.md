@@ -2,7 +2,7 @@
 
 The dashboard can project retained v5 worker events into a bounded, read-only
 topology. Pass the v5 run directory with `--v5-runs`. The default deployment
-uses `~/.local/share/codex-local-harness/v5/runs`.
+uses `~/.local/share/opencode-orchestration/runs`.
 
 The `live_execution` snapshot member contains normalized nodes, edges, and
 events. It reports worker, model, repository, tool, and test relationships and

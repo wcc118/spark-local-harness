@@ -1,0 +1,27 @@
+{
+  "release": "v0.5.1",
+  "predecessor": "v0.5.0",
+  "issues": [117],
+  "scope": "live-source-routing-hotfix",
+  "governance": {
+    "orchestrator": "codex",
+    "dashboard_authority": "read-only",
+    "private_reasoning_capture": false,
+    "automatic_harness_tuning": false,
+    "synthetic_model_score": false
+  },
+  "validation": {
+    "tests_passed": 394,
+    "compileall_passed": true,
+    "javascript_parse_passed": true,
+    "diff_check_passed": true,
+    "production_smoke_required_after_merge": true
+  },
+  "sha256": {
+    "dashboard": "f8b707f717a1a4d6c971fd7051e54563ff7b904b04a187ade496306938ff1af5",
+    "live_execution": "63841aaceab76d579018540b2ba252a035132be0d7738d789c154d90a9064872",
+    "strategy": "720a7ba56f7eaa143af1670e9005533e36814206184f6275ab54faf1157214e8",
+    "dashboard_unit": "e03fd5ed964b1b3d0fdfaf2af89b279107aac2c8f11508368cc745181cbdd18c",
+    "qualified_routes": "76f4f5b6ba50fada9be0afdf4aebd588129f56166f26598127888de9bc8d4213"
+  }
+}

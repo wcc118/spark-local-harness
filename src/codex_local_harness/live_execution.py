@@ -161,6 +161,7 @@ def _diagnostic_signals(run_id: str, events: list[dict[str, Any]]) -> list[dict[
 
 def project_live_execution(
     runs_dir: Path | None, *, now: datetime | None = None, session_id: str | None = None,
+    run_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     empty = {
@@ -191,47 +192,59 @@ def project_live_execution(
     all_signals: list[dict[str, Any]] = []
     handoffs: list[dict[str, Any]] = []
     diagnostics: list[str] = []
+    run_evidence = run_evidence or {}
 
     for log_path in selected:
         run_id = log_path.stem
         events, malformed, partial_tail = _read_events(log_path)
         result_path = runs_dir / f"{run_id}.result.json"
         result, result_malformed = _safe_result(result_path) if result_path.exists() else (None, False)
-        result_session = (result or {}).get("session_id")
+        canonical = run_evidence.get(run_id, {})
+        identity = result or canonical
+        result_session = identity.get("session_id")
         if session_id is not None and result_session != session_id:
             continue
         observed_at = max((event["observed_at"] or "" for event in events), default="")
         if not observed_at:
             observed_at = datetime.fromtimestamp(log_path.stat().st_mtime, timezone.utc).isoformat()
         age_seconds = max(0.0, now.timestamp() - log_path.stat().st_mtime)
-        state, reason = _terminal_state(result) if result is not None else _live_state(events, age_seconds)
-        source_ref = f"v5-result:{result_path.name}" if result is not None else f"v5-log:{log_path.name}"
-        role = str((result or {}).get("role") or "worker")[:32]
-        model = str((result or {}).get("model") or "unknown")[:128]
-        repository = str((result or {}).get("repository") or "")[:256]
+        if result is not None:
+            state, reason = _terminal_state(result)
+            source_ref = f"v5-result:{result_path.name}"
+        elif canonical.get("terminal_state") in {"completed", "failed", "interrupted", "cancelled", "timed-out"}:
+            state = str(canonical["terminal_state"])
+            state = "interrupted" if state in {"cancelled", "timed-out"} else state
+            reason = "canonical lifecycle evidence reports terminal state"
+            source_ref = str(canonical.get("source_ref") or f"lifecycle:{run_id}")
+        else:
+            state, reason = _live_state(events, age_seconds)
+            source_ref = f"v5-log:{log_path.name}"
+        role = str(identity.get("role") or "worker")[:32]
+        model = str(identity.get("model") or "unknown")[:128]
+        repository = str(identity.get("repository") or "")[:256]
         worker_id = f"worker:{run_id}"
         nodes[worker_id] = {
             "id": worker_id, "kind": "worker", "label": f"{role} {run_id[:12]}",
             "state": state, "observed_at": observed_at, "source_ref": source_ref,
             "reason": reason, "run_id": run_id, "role": role, "model": model,
             "repository": repository or None,
-            "issue": (result or {}).get("issue") if isinstance((result or {}).get("issue"), int) else None,
+            "issue": identity.get("issue") if isinstance(identity.get("issue"), int) else None,
             "session_id": (
-                str((result or {})["session_id"])[:128]
-                if isinstance((result or {}).get("session_id"), str) else None
+                str(identity["session_id"])[:128]
+                if isinstance(identity.get("session_id"), str) else None
             ),
             "phase": state,
-            "elapsed_seconds": _safe_number((result or {}).get("elapsed_seconds")),
-            "tool_calls": _safe_number((result or {}).get("tool_calls")),
-            "test_observations": len((result or {}).get("tests", [])) if isinstance((result or {}).get("tests"), list) else 0,
-            "files_observed": _safe_paths((result or {}).get("changed_paths")),
-            "branch": str((result or {}).get("branch"))[:256] if isinstance((result or {}).get("branch"), str) else None,
-            "commit": str((result or {}).get("head_sha"))[:40] if isinstance((result or {}).get("head_sha"), str) else None,
-            "pull_request": (result or {}).get("pull_request") if isinstance((result or {}).get("pull_request"), int) else None,
-            "token_usage": None,
+            "elapsed_seconds": _safe_number(identity.get("elapsed_seconds")),
+            "tool_calls": _safe_number(identity.get("tool_calls")),
+            "test_observations": len(identity.get("tests", [])) if isinstance(identity.get("tests"), list) else 0,
+            "files_observed": _safe_paths(identity.get("changed_paths")),
+            "branch": str(identity.get("branch"))[:256] if isinstance(identity.get("branch"), str) else None,
+            "commit": str(identity.get("head_sha"))[:40] if isinstance(identity.get("head_sha"), str) else None,
+            "pull_request": identity.get("pull_request") if isinstance(identity.get("pull_request"), int) else None,
+            "token_usage": _safe_number(identity.get("token_usage")),
         }
         all_signals.extend(_diagnostic_signals(run_id, events))
-        if result is not None:
+        if result is not None or canonical.get("terminal_state"):
             all_events.append({
                 "kind": "run-result", "status": state, "run_id": run_id,
                 "observed_at": observed_at, "source_ref": source_ref,
