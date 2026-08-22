@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+container=${CODEX_LOCAL_VLLM_CONTAINER:-vllm_node}
+endpoint=${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}
+docker_bin=${CODEX_LOCAL_DOCKER:-docker}
+curl_bin=${CODEX_LOCAL_CURL:-curl}
+sleep_bin=${CODEX_LOCAL_SLEEP:-sleep}
+ready_attempts=${CODEX_LOCAL_MODEL_READY_ATTEMPTS:-36}
+stop_attempts=${CODEX_LOCAL_MODEL_STOP_ATTEMPTS:-60}
+lock_path=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-harness/model.lock}
+lock_timeout=${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-1800}
+
+usage() {
+  echo "usage: codex-local-model status | use {qwen38|coder-next}" >&2
+  exit 2
+}
+
+profile_model() {
+  case "$1" in
+    qwen38) printf '%s\n' 'Qwen/Qwen3.8-27B-FP8' ;;
+    coder-next) printf '%s\n' 'Qwen/Qwen3-Coder-Next-FP8' ;;
+    *) return 2 ;;
+  esac
+}
+
+active_model() {
+  "$curl_bin" -fsS --connect-timeout 2 --max-time 4 "$endpoint/v1/models" 2>/dev/null |
+    jq -r 'if (.data | length) == 1 then .data[0].id else empty end' 2>/dev/null || true
+}
+
+acquire_lock() {
+  [[ ${CODEX_LOCAL_MODEL_LOCK_HELD:-0} == 1 ]] && return
+  install -d -m 700 "$(dirname -- "$lock_path")"
+  exec {model_lock_fd}>"$lock_path"
+  flock --wait "$lock_timeout" "$model_lock_fd" || {
+    echo "ERROR: timed out waiting for the vLLM model lock: $lock_path" >&2
+    exit 75
+  }
+}
+
+wait_for_model() {
+  local expected=$1 observed
+  for (( attempt=1; attempt<=ready_attempts; attempt++ )); do
+    observed=$(active_model)
+    if [[ $observed == "$expected" ]]; then
+      echo "ready: $observed"
+      return 0
+    fi
+    "$sleep_bin" 10
+  done
+  echo "ERROR: vLLM did not become ready with exact model $expected" >&2
+  return 69
+}
+
+stop_server() {
+  "$docker_bin" exec "$container" bash -lc \
+    "pkill -INT -f '^/usr/bin/python3 /usr/local/bin/vllm serve ' || true"
+  for (( attempt=1; attempt<=stop_attempts; attempt++ )); do
+    [[ -z $(active_model) ]] && return 0
+    "$sleep_bin" 1
+  done
+  echo "ERROR: vLLM did not stop within the bounded wait" >&2
+  return 69
+}
+
+launch() {
+  local profile=$1 model log extra
+  model=$(profile_model "$profile") || usage
+  case "$profile" in
+    qwen38)
+      log=/root/.cache/vllm/qwen38-27b-fp8.log
+      extra='--reasoning-parser qwen3'
+      ;;
+    coder-next)
+      log=/root/.cache/vllm/qwen3-coder-next-fp8.log
+      extra=''
+      ;;
+  esac
+  "$docker_bin" exec -d "$container" bash -lc \
+    "exec vllm serve '$model' --enable-auto-tool-choice --tool-call-parser qwen3_coder $extra --max-model-len 212500 --gpu-memory-utilization 0.90 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000 > '$log' 2>&1"
+  echo "starting: $model"
+  wait_for_model "$model"
+}
+
+case ${1:-} in
+  status)
+    (( $# == 1 )) || usage
+    model=$(active_model)
+    if [[ -n $model ]]; then
+      jq -n --arg model "$model" '{status:"ready",model:$model}'
+    else
+      echo '{"status":"stopped","model":null}'
+    fi
+    ;;
+  use)
+    (( $# == 2 )) || usage
+    target=$2
+    expected=$(profile_model "$target") || usage
+    acquire_lock
+    current=$(active_model)
+    if [[ $current == "$expected" ]]; then
+      echo "already active: $current"
+      exit 0
+    fi
+    stop_server
+    launch "$target"
+    ;;
+  *) usage ;;
+esac

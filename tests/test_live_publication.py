@@ -33,6 +33,7 @@ def _worker_environment(tmp_path, fake_opencode):
         "CODEX_LOCAL_SOURCE": str(ROOT / "src"),
         "CODEX_LOCAL_SANDBOX": "disabled",
         "CODEX_LOCAL_ALLOW_UNSANDBOXED": "1",
+        "CODEX_LOCAL_MODEL_SWITCH": "0",
     }
 
 

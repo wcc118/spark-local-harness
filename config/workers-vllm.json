@@ -1,0 +1,25 @@
+{
+  "routes": {
+    "helper/standard": {
+      "agent": "helper",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    },
+    "coder/standard": {
+      "agent": "coder",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    },
+    "coder/complex": {
+      "agent": "coder",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    },
+    "reviewer/standard": {
+      "agent": "reviewer",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    }
+  },
+  "defaults": {
+    "helper": "standard",
+    "coder": "complex",
+    "reviewer": "standard"
+  }
+}

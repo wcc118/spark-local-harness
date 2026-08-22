@@ -37,6 +37,7 @@ def test_container_worker_cannot_write_outside_checkout(tmp_path):
         "CODEX_LOCAL_SOURCE": str(ROOT / "src"),
         "CODEX_LOCAL_CONTAINER_IMAGE": "codex-local-worker:0.1.0",
         "CODEX_LOCAL_SESSION_BRIDGE": "0",
+        "CODEX_LOCAL_MODEL_SWITCH": "0",
     }
 
     completed = subprocess.run(
@@ -97,6 +98,7 @@ def test_interrupted_coder_mutates_only_disposable_clone(tmp_path):
             "CODEX_LOCAL_SANDBOX": "disabled",
             "CODEX_LOCAL_ALLOW_UNSANDBOXED": "1",
             "CODEX_LOCAL_CODER_POSTFLIGHT": "0",
+            "CODEX_LOCAL_MODEL_SWITCH": "0",
             "CODEX_LOCAL_REPOSITORY": "wcc118/example",
             "CODEX_LOCAL_ISSUE": "79",
             "CODEX_LOCAL_ISOLATION_PARENT": str(isolation),

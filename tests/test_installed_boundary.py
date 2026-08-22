@@ -117,6 +117,7 @@ def test_worker_does_not_pass_ambient_secret_to_inference(tmp_path):
         "CODEX_LOCAL_WORKER_CONFIG": str(routes),
         "CODEX_LOCAL_OPENCODE": str(fake),
         "CODEX_LOCAL_SESSION_BRIDGE": "0",
+        "CODEX_LOCAL_MODEL_SWITCH": "0",
         "HARNESS_SECRET_SENTINEL": "must-not-cross-boundary",
     })
     completed = run([str(PROJECT_WORKER), "helper", str(repo), "inspect"], env=env)

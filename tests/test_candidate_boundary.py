@@ -36,6 +36,10 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert '"*": "deny",\n          "git status*"' not in content
     assert '"external_directory": "deny", "bash": "deny", "read": "deny"' not in content
     assert "CODEX_LOCAL_SESSION_BRIDGE" in content
+    assert "CODEX_LOCAL_MODEL_MANAGER" in content
+    assert "CODEX_LOCAL_MODEL_LOCK" in content
+    assert 'CODEX_LOCAL_MODEL_LOCK_HELD=1 "$model_manager" use "$vllm_profile"' in content
+    assert "unsupported vLLM worker model" in content
     assert "opencode serve --hostname 127.0.0.1" in content
     assert "codex_local_harness.opencode_bridge" in content
     assert "--env-file" in content
