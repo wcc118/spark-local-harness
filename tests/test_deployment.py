@@ -3,8 +3,6 @@
 import re
 from pathlib import Path
 
-import pytest
-
 
 DEPLOYMENT_DIR = Path(__file__).parent.parent / "deployment"
 
@@ -191,7 +189,7 @@ def test_dashboard_backend_requires_dashboard_backend_service():
 def test_dashboard_backend_release_version():
     """Verify dashboard-backend.service uses the current release."""
     content = read_unit("dashboard-backend.service")
-    assert "--release v0.4.4" in content
+    assert "--release v0.5.0" in content
 
 
 def test_dashboard_backend_live_mode():
