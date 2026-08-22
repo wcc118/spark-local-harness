@@ -370,6 +370,15 @@ def test_canonicalize_observed_nested_identity_shape(tmp_path):
     assert validate_result(canonicalize_result(raw, envelope(tmp_path)), envelope(tmp_path))["verdict"] == "APPROVE"
 
 
+def test_canonicalize_observed_compact_pr_identity_shape(tmp_path):
+    raw = {
+        "identity": f"{REPO}#11", "verdict": "APPROVE", "criteria": [],
+        "findings": [], "tests": [], "confidence": "high",
+        "summary": "No blocking findings.", "escalation": None,
+    }
+    assert validate_result(canonicalize_result(raw, envelope(tmp_path)), envelope(tmp_path))["pull_request"] == 11
+
+
 @pytest.mark.parametrize(
     "changes",
     [

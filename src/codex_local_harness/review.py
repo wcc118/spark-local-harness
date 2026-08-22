@@ -266,6 +266,11 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
         raise ReviewError(f"structured result has unsupported fields: {unknown}")
 
     identity = result.get("identity", {})
+    if isinstance(identity, str):
+        match = re.fullmatch(r"(?P<repo>[^#\s]+)#(?P<pr>\d+)", identity.strip())
+        if not match or match.group("repo") != envelope.repository or int(match.group("pr")) != envelope.pull_request:
+            raise ReviewError("result identity mismatch for pull_request")
+        identity = {"repository": match.group("repo"), "pull_request": int(match.group("pr"))}
     if not isinstance(identity, dict) or set(identity) - {
         "repository", "issue", "pull_request", "reviewed_head_sha", "exact_head"
     }:
