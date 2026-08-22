@@ -21,6 +21,7 @@ worker_isolation_root=
 worker_server_pid=
 worker_server_container=
 worker_control=
+worker_control_secret=
 isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-/home/connellwc83/.local/share/opencode-orchestration/isolated-checkouts}
 diagnostic_started=0
 diagnostic_finalized=0
@@ -39,8 +40,11 @@ cleanup() {
       124|137) control_state=timed-out ;;
       130|143) control_state=interrupted ;;
     esac
-    jq --arg state "$control_state" '.state = $state' "$worker_control" >"$worker_control.tmp" \
+    jq --arg state "$control_state" '.state = $state | .credential_file = null' "$worker_control" >"$worker_control.tmp" \
       && chmod 600 "$worker_control.tmp" && mv "$worker_control.tmp" "$worker_control" || true
+  fi
+  if [[ -n $worker_control_secret ]]; then
+    rm -f -- "$worker_control_secret"
   fi
   if [[ $diagnostic_started == 1 && $diagnostic_finalized == 0 ]]; then
     diagnostic_event=cancelled
@@ -391,9 +395,10 @@ if [[ $worker_sandbox == container ]]; then
       control_state=failed
       [[ $bridge_status == 124 || $bridge_status == 137 ]] && control_state=timed-out
       [[ $bridge_status == 130 || $bridge_status == 143 ]] && control_state=interrupted
-      jq --arg state "$control_state" '.state = $state' "$worker_control" >"$worker_control.tmp" \
+      jq --arg state "$control_state" '.state = $state | .credential_file = null' "$worker_control" >"$worker_control.tmp" \
         && chmod 600 "$worker_control.tmp" && mv "$worker_control.tmp" "$worker_control" || true
     fi
+    rm -f -- "$worker_control_secret"
     docker stop --time 5 "$worker_server_container" >/dev/null 2>&1 || true
     wait "$worker_server_pid" 2>/dev/null || true
     worker_server_pid=
