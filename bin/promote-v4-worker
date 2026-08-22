@@ -6,7 +6,18 @@ install_bin=${CODEX_LOCAL_INSTALL_BIN:-/home/connellwc83/.local/bin}
 backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
 stable_worker=${CODEX_LOCAL_STABLE_WORKER:-$install_bin/codex-local-worker}
 candidate_worker=${CODEX_LOCAL_CANDIDATE_WORKER:-$script_dir/codex-local-worker-v4}
+candidate_model_manager=${CODEX_LOCAL_CANDIDATE_MODEL_MANAGER:-$script_dir/codex-local-model}
+candidate_workers_config=${CODEX_LOCAL_CANDIDATE_WORKERS_CONFIG:-$script_dir/../config/workers-vllm.json}
 candidate_source=${CODEX_LOCAL_CANDIDATE_SOURCE:-$script_dir/../src}
+installed_model_manager=${CODEX_LOCAL_MODEL_MANAGER:-$install_bin/codex-local-model}
+installed_workers_config=${CODEX_LOCAL_WORKER_CONFIG:-}
+if [[ -z $installed_workers_config ]]; then
+  if [[ $install_bin == /home/connellwc83/.local/bin ]]; then
+    installed_workers_config=/home/connellwc83/.config/codex-local/workers.json
+  else
+    installed_workers_config=$install_bin/workers.json
+  fi
+fi
 runtime_root=${CODEX_LOCAL_RUNTIME_ROOT:-/home/connellwc83/.local/share/codex-local-harness/runtime}
 release_manifest=${CODEX_LOCAL_RELEASE_MANIFEST:-$script_dir/../config/installed-release.json}
 candidate_dashboard_unit=${CODEX_LOCAL_DASHBOARD_UNIT:-$script_dir/../deployment/dashboard-backend.service}
@@ -17,7 +28,7 @@ if [[ -z $install_units ]]; then
   [[ $install_bin == /home/connellwc83/.local/bin ]] && install_units=1 || install_units=0
 fi
 
-for required in "$stable_worker" "$candidate_worker" "$release_manifest"; do
+for required in "$stable_worker" "$candidate_worker" "$candidate_model_manager" "$candidate_workers_config" "$release_manifest"; do
   [[ -f $required ]] || { echo "ERROR: required worker is missing: $required" >&2; exit 2; }
 done
 [[ -d $candidate_source/codex_local_harness ]] || {
@@ -29,6 +40,8 @@ find "$candidate_source/codex_local_harness" -type f -name '*.py' -print -quit |
   exit 2
 }
 bash -n "$candidate_worker"
+bash -n "$candidate_model_manager"
+jq -e '.routes and .defaults' "$candidate_workers_config" >/dev/null
 observed_stable=$(sha256sum "$stable_worker" | cut -d' ' -f1)
 observed_candidate=$(sha256sum "$candidate_worker" | cut -d' ' -f1)
 jq -e --arg digest "$observed_stable" '.qualified_worker_sha256 | index($digest) != null' \
@@ -47,6 +60,18 @@ backup_dir=$backup_root/$backup_id
 install -d -m 700 "$install_bin" "$backup_root" "$backup_dir" "$runtime_root"
 install -m 600 "$stable_worker" "$backup_dir/codex-local-worker"
 printf '%s  codex-local-worker\n' "$observed_stable" >"$backup_dir/SHA256SUMS"
+if [[ -f $installed_model_manager ]]; then
+  install -m 600 "$installed_model_manager" "$backup_dir/codex-local-model"
+  printf '%s  codex-local-model\n' "$(sha256sum "$installed_model_manager" | cut -d' ' -f1)" >>"$backup_dir/SHA256SUMS"
+else
+  : >"$backup_dir/codex-local-model.absent"
+fi
+if [[ -f $installed_workers_config ]]; then
+  install -m 600 "$installed_workers_config" "$backup_dir/workers.json"
+  printf '%s  workers.json\n' "$(sha256sum "$installed_workers_config" | cut -d' ' -f1)" >>"$backup_dir/SHA256SUMS"
+else
+  : >"$backup_dir/workers.json.absent"
+fi
 if [[ -L $runtime_root/current ]]; then
   readlink "$runtime_root/current" >"$backup_dir/runtime-target"
 fi
@@ -78,6 +103,8 @@ fi
 ln -s "$runtime_dir" "$runtime_root/current.new"
 mv -Tf "$runtime_root/current.new" "$runtime_root/current"
 install -m 755 "$candidate_worker" "$stable_worker"
+install -m 755 "$candidate_model_manager" "$installed_model_manager"
+install -D -m 600 "$candidate_workers_config" "$installed_workers_config"
 if [[ $install_units == 1 ]]; then
   install -m 644 "$candidate_dashboard_unit" "$user_unit_dir/dashboard-backend.service"
   "$systemctl_bin" --user daemon-reload

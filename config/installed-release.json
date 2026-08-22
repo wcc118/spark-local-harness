@@ -8,8 +8,9 @@
     "9386218d4f15a16b1ef5a69a4020260888f7fdaaca147337dac88b82c4f45cf1",
     "c85c93cc838be4c32803abf4b1e8d70c540d39e1e243a7a1f9a42e0477297269",
     "d712d5dd0654394aa54edb6e07a212127e1a643726945762fe128264f150d908",
-    "e38ac6c8a42aaf278f6d788616a1ae8470588c2b066af2ebd3486881b968f663"
+    "e38ac6c8a42aaf278f6d788616a1ae8470588c2b066af2ebd3486881b968f663",
+    "1fa94387c247d565fc8d7bba5ecac4e12d81213d4ac64e689b31c487ec4a4796"
   ],
   "source": "Codex-approved release artifacts only; never derived dynamically from the checkout",
-  "qualified_at": "2026-08-22T17:01:00Z"
+  "qualified_at": "2026-08-22T18:28:01Z"
 }

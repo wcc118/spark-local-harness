@@ -22,6 +22,7 @@ worker_server_pid=
 worker_server_container=
 worker_control=
 worker_control_secret=
+worker_model_lock_fd=
 isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-/home/connellwc83/.local/share/opencode-orchestration/isolated-checkouts}
 diagnostic_started=0
 diagnostic_finalized=0
@@ -34,8 +35,9 @@ cleanup() {
   if [[ -n $worker_server_pid ]]; then
     wait "$worker_server_pid" 2>/dev/null || true
   fi
-  if [[ -n $worker_control && -f $worker_control && $cleanup_status != 0 ]]; then
-    control_state=failed
+  if [[ -n $worker_control && -f $worker_control ]] && jq -e '.state == "active"' "$worker_control" >/dev/null 2>&1; then
+    control_state=interrupted
+    (( cleanup_status != 0 )) && control_state=failed
     case "$cleanup_status" in
       124|137) control_state=timed-out ;;
       130|143) control_state=interrupted ;;
@@ -162,6 +164,24 @@ reviewer_token_budget=${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-250000}
 [[ "$reviewer_token_budget" =~ ^[1-9][0-9]*$ ]] || {
   echo "ERROR: CODEX_LOCAL_REVIEWER_TOKEN_BUDGET must be a positive integer" >&2; exit 2;
 }
+
+if [[ $worker_model == vllm/* && ${CODEX_LOCAL_MODEL_SWITCH:-1} == 1 ]]; then
+  vllm_model=${worker_model#vllm/}
+  case "$vllm_model" in
+    Qwen/Qwen3.8-27B-FP8) vllm_profile=qwen38 ;;
+    Qwen/Qwen3-Coder-Next-FP8) vllm_profile=coder-next ;;
+    *) echo "ERROR: unsupported vLLM worker model: $vllm_model" >&2; exit 69 ;;
+  esac
+  model_manager=${CODEX_LOCAL_MODEL_MANAGER:-/home/connellwc83/.local/bin/codex-local-model}
+  model_lock=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-harness/model.lock}
+  [[ -x $model_manager ]] || { echo "ERROR: model manager is unavailable: $model_manager" >&2; exit 69; }
+  install -d -m 700 "$(dirname -- "$model_lock")"
+  exec {worker_model_lock_fd}>"$model_lock"
+  flock --wait "${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-$worker_timeout}" "$worker_model_lock_fd" || {
+    echo "ERROR: timed out waiting for the vLLM model lock: $model_lock" >&2; exit 75;
+  }
+  CODEX_LOCAL_MODEL_LOCK_HELD=1 "$model_manager" use "$vllm_profile" || exit $?
+fi
 
 worker_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 worker_log_dir=/home/connellwc83/.local/share/opencode-orchestration/runs

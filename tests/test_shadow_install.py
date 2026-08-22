@@ -82,6 +82,10 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
     backup = Path(next(line.split("=", 1)[1] for line in first.stdout.splitlines() if line.startswith("backup=")))
     assert (backup / "codex-local-worker").read_bytes() == (ROOT / "bin/codex-local-worker").read_bytes()
     assert stable.read_bytes() == (ROOT / "bin/codex-local-worker-v4").read_bytes()
+    assert (install_bin / "codex-local-model").read_bytes() == (ROOT / "bin/codex-local-model").read_bytes()
+    assert json.loads((install_bin / "workers.json").read_text(encoding="utf-8"))["routes"]["coder/complex"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    assert (backup / "codex-local-model.absent").is_file()
+    assert (backup / "workers.json.absent").is_file()
     runtime = Path(next(line.split("=", 1)[1] for line in first.stdout.splitlines() if line.startswith("runtime=")))
     assert (runtime / "src/codex_local_harness").is_dir()
     assert list(runtime.rglob("*.py"))
@@ -104,6 +108,8 @@ def test_promotion_backs_up_baseline_and_is_idempotent(tmp_path):
     )
     assert "status=rolled-back" in rolled_back.stdout
     assert stable.read_bytes() == (ROOT / "bin/codex-local-worker").read_bytes()
+    assert not (install_bin / "codex-local-model").exists()
+    assert not (install_bin / "workers.json").exists()
 
 
 def test_promotion_rejects_empty_python_package_before_backup(tmp_path):

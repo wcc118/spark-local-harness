@@ -4,6 +4,22 @@ set -euo pipefail
 (( $# == 1 )) || { echo "usage: rollback-v4-worker BACKUP_DIR" >&2; exit 2; }
 backup_root=${CODEX_LOCAL_BACKUP_ROOT:-/home/connellwc83/.local/share/codex-local-harness/backups}
 stable_worker=${CODEX_LOCAL_STABLE_WORKER:-/home/connellwc83/.local/bin/codex-local-worker}
+installed_model_manager=${CODEX_LOCAL_MODEL_MANAGER:-}
+if [[ -z $installed_model_manager ]]; then
+  if [[ $stable_worker == /home/connellwc83/.local/bin/codex-local-worker ]]; then
+    installed_model_manager=/home/connellwc83/.local/bin/codex-local-model
+  else
+    installed_model_manager=$(dirname -- "$stable_worker")/codex-local-model
+  fi
+fi
+installed_workers_config=${CODEX_LOCAL_WORKER_CONFIG:-}
+if [[ -z $installed_workers_config ]]; then
+  if [[ $stable_worker == /home/connellwc83/.local/bin/codex-local-worker ]]; then
+    installed_workers_config=/home/connellwc83/.config/codex-local/workers.json
+  else
+    installed_workers_config=$(dirname -- "$stable_worker")/workers.json
+  fi
+fi
 runtime_root=${CODEX_LOCAL_RUNTIME_ROOT:-/home/connellwc83/.local/share/codex-local-harness/runtime}
 user_unit_dir=${CODEX_LOCAL_USER_UNIT_DIR:-/home/connellwc83/.config/systemd/user}
 systemctl_bin=${CODEX_LOCAL_SYSTEMCTL:-systemctl}
@@ -20,6 +36,16 @@ resolved_root=$(realpath -- "$backup_root")
 }
 (cd "$backup_dir" && sha256sum -c SHA256SUMS >/dev/null)
 install -m 755 "$backup_dir/codex-local-worker" "$stable_worker"
+if [[ -f $backup_dir/codex-local-model ]]; then
+  install -m 755 "$backup_dir/codex-local-model" "$installed_model_manager"
+elif [[ -f $backup_dir/codex-local-model.absent ]]; then
+  rm -f -- "$installed_model_manager"
+fi
+if [[ -f $backup_dir/workers.json ]]; then
+  install -D -m 600 "$backup_dir/workers.json" "$installed_workers_config"
+elif [[ -f $backup_dir/workers.json.absent ]]; then
+  rm -f -- "$installed_workers_config"
+fi
 if [[ -f $backup_dir/runtime-target ]]; then
   previous_runtime=$(<"$backup_dir/runtime-target")
   [[ -d $previous_runtime/src/codex_local_harness ]] || {
