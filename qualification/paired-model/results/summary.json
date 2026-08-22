@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "paired-model-se-v1",
+  "pairs": 10,
+  "identity_matched": true,
+  "models": {
+    "vllm/Qwen/Qwen3-Coder-Next-FP8": {
+      "correct": 10,
+      "timeouts": 0,
+      "elapsed_seconds": 603.553,
+      "tool_calls": 126,
+      "tool_errors": 2,
+      "observed_event_tokens": 1250223
+    },
+    "vllm/Qwen/Qwen3.8-27B-FP8": {
+      "correct": 0,
+      "timeouts": 10,
+      "elapsed_seconds": 1982.845,
+      "tool_calls": 47,
+      "tool_errors": 0,
+      "observed_event_tokens": 140776
+    }
+  },
+  "interpretation": "Qwen token totals are partial timeout traces and are not an efficiency win. Correctness is evaluated first.",
+  "recommendation": "Use Coder Next for helper, coder, and reviewer defaults. Retain Qwen 3.8 only as an explicit experimental route pending runtime/prompt diagnosis."
+}

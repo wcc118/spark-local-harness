@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "paired-model-se-v1",
+  "source": "input",
+  "permission_profile": "benchmark-coder-v1",
+  "cases": [
+    {"id":"investigation","category":"investigation","role":"coder","task":"tasks/investigation.md","timeout":180,"check":["python3","oracle.py","investigation","{workspace}"]},
+    {"id":"focused-fix","category":"focused_fix","role":"coder","task":"tasks/focused-fix.md","timeout":180,"check":["python3","oracle.py","focused-fix","{workspace}"]},
+    {"id":"test-authoring","category":"tests","role":"coder","task":"tasks/test-authoring.md","timeout":240,"check":["python3","oracle.py","test-authoring","{workspace}"]},
+    {"id":"ui","category":"ui","role":"coder","task":"tasks/ui.md","timeout":180,"check":["python3","oracle.py","ui","{workspace}"]},
+    {"id":"refactor","category":"refactoring","role":"coder","task":"tasks/refactor.md","timeout":180,"check":["python3","oracle.py","refactor","{workspace}"]},
+    {"id":"diagnosis","category":"diagnosis","role":"coder","task":"tasks/diagnosis.md","timeout":240,"check":["python3","oracle.py","diagnosis","{workspace}"]},
+    {"id":"hygiene","category":"hygiene","role":"coder","task":"tasks/hygiene.md","timeout":180,"check":["python3","oracle.py","hygiene","{workspace}"]},
+    {"id":"review","category":"review","role":"coder","task":"tasks/review.md","timeout":180,"check":["python3","oracle.py","review","{workspace}"]},
+    {"id":"concurrency","category":"focused_fix","role":"coder","task":"tasks/concurrency.md","timeout":240,"check":["python3","oracle.py","concurrency","{workspace}"]},
+    {"id":"cleanup","category":"focused_fix","role":"coder","task":"tasks/cleanup.md","timeout":180,"check":["python3","oracle.py","cleanup","{workspace}"]}
+  ]
+}
