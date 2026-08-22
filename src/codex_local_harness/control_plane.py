@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -63,6 +64,7 @@ class ControlBroker:
         self.runs = runs
         self.token_file = token_file
         self.audit_file = audit_file
+        self._decision_lock = threading.Lock()
 
     def authorized(self, authorization: str | None) -> bool:
         try:
@@ -190,13 +192,14 @@ class ControlBroker:
             raise ControlError(400, "invalid-permission-id")
         if decision not in {"once", "always", "reject"}:
             raise ControlError(400, "invalid-permission-decision")
-        control, password = self._active(run_id)
-        pending = self._pending(control, password, "permission")
-        if not any(item.get("id") == request_id for item in pending):
-            raise ControlError(409, "permission-not-pending")
-        path = f"/session/{control['session_id']}/permissions/{request_id}"
-        _opencode_request(str(control["base_url"]), password, "POST", path, {"response": decision})
-        self._audit(run_id, control, request_id, "permission", decision, actor)
+        with self._decision_lock:
+            control, password = self._active(run_id)
+            pending = self._pending(control, password, "permission")
+            if not any(item.get("id") == request_id for item in pending):
+                raise ControlError(409, "permission-not-pending")
+            path = f"/session/{control['session_id']}/permissions/{request_id}"
+            _opencode_request(str(control["base_url"]), password, "POST", path, {"response": decision})
+            self._audit(run_id, control, request_id, "permission", decision, actor)
 
     def answer_question(
         self, run_id: str, request_id: str, answers: list[list[str]] | None,
@@ -204,28 +207,29 @@ class ControlBroker:
     ) -> None:
         if not REQUEST_ID.fullmatch(request_id) or not request_id.startswith("que"):
             raise ControlError(400, "invalid-question-id")
-        control, password = self._active(run_id)
-        pending = self._pending(control, password, "question")
-        request = next((item for item in pending if item.get("id") == request_id), None)
-        if request is None:
-            raise ControlError(409, "question-not-pending")
-        if reject:
-            path = f"/question/{request_id}/reject"
-            payload = None
-            decision = "reject"
-        else:
-            if not isinstance(answers, list) or not all(
-                isinstance(answer, list) and answer and all(isinstance(label, str) and 0 < len(label) <= 256 for label in answer)
-                for answer in answers
-            ):
-                raise ControlError(400, "invalid-question-answers")
-            if len(answers) != len(request.get("questions") or []):
-                raise ControlError(400, "question-answer-count-mismatch")
-            path = f"/question/{request_id}/reply"
-            payload = {"answers": answers}
-            decision = "answer"
-        _opencode_request(str(control["base_url"]), password, "POST", path, payload)
-        self._audit(run_id, control, request_id, "question", decision, actor)
+        with self._decision_lock:
+            control, password = self._active(run_id)
+            pending = self._pending(control, password, "question")
+            request = next((item for item in pending if item.get("id") == request_id), None)
+            if request is None:
+                raise ControlError(409, "question-not-pending")
+            if reject:
+                path = f"/question/{request_id}/reject"
+                payload = None
+                decision = "reject"
+            else:
+                if not isinstance(answers, list) or not all(
+                    isinstance(answer, list) and answer and all(isinstance(label, str) and 0 < len(label) <= 256 for label in answer)
+                    for answer in answers
+                ):
+                    raise ControlError(400, "invalid-question-answers")
+                if len(answers) != len(request.get("questions") or []):
+                    raise ControlError(400, "question-answer-count-mismatch")
+                path = f"/question/{request_id}/reply"
+                payload = {"answers": answers}
+                decision = "answer"
+            _opencode_request(str(control["base_url"]), password, "POST", path, payload)
+            self._audit(run_id, control, request_id, "question", decision, actor)
 
     def _audit(
         self, run_id: str, control: dict[str, Any], request_id: str,

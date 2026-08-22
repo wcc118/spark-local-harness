@@ -8,7 +8,7 @@
     "production_smoke_required_after_merge": true
   },
   "sha256": {
-    "control_plane": "33099ae924e1b2806bdddb430202dbddcbc30873970bc34a812d07c4b8d93e10",
+    "control_plane": "c979548afb574530bd5e73b5a7dd0cd1844ac4bd36e9dde4703cbd5cb52e8d5e",
     "dashboard": "7d949ce4ea3754b65d1fb6320508189b37ace3f35bd87e70a2480edacf298803",
     "bridge": "5a618bd4b90223933683e63a7d9739ee01c3f5f6c23ea8d48e35b80d8d5c2141",
     "dashboard_unit": "29db1be90be9179cc06a9f23e6920d256a7ec0ae38ba7792db023329289b4b17",
