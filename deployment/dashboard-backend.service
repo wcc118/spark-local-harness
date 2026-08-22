@@ -15,6 +15,7 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
     --publication-failures %h/.local/share/codex-local-harness/health/publication-failures.jsonl \
     --operation-usage %h/.local/share/codex-local-harness/health/operation-usage.jsonl \
     --plans %h/.local/share/codex-local-harness/health/plans.jsonl \
+    --v5-runs %h/.local/share/codex-local-harness/v5/runs \
     --host 127.0.0.1 \
     --port 8765 \
     --release v0.4.4 \
