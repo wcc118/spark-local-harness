@@ -343,6 +343,19 @@ def test_canonicalize_preserves_valid_schema(tmp_path):
     assert canonicalize_result(result, envelope(tmp_path)) == result
 
 
+def test_canonicalize_observed_nested_identity_shape(tmp_path):
+    raw = {
+        "identity": {
+            "repository": REPO, "issue": 7, "pull_request": 11,
+            "reviewed_head_sha": SHA,
+        },
+        "verdict": "APPROVE", "criteria": [], "findings": [], "tests": [],
+        "confidence": "high", "summary": "No blocking findings.",
+        "escalation_reason": None,
+    }
+    assert validate_result(canonicalize_result(raw, envelope(tmp_path)), envelope(tmp_path))["verdict"] == "APPROVE"
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -376,6 +389,8 @@ def test_validate_result_distinguishes_observed_and_reported_tests(tmp_path):
         validate_result(valid_result(tests=[{"command": "pytest", "exit_code": 0}]), envelope(tmp_path))
     with pytest.raises(ReviewError, match="exit_code"):
         validate_result(valid_result(tests=[{"command": "pytest", "provenance": "reviewer-observed"}]), envelope(tmp_path))
+    with pytest.raises(ReviewError, match="zero through 255"):
+        validate_result(valid_result(tests=[{"command": "pytest", "exit_code": 439, "provenance": "harness-observed"}]), envelope(tmp_path))
 
 
 def test_incomplete_result_is_nonpublishing_and_identity_bound(tmp_path):

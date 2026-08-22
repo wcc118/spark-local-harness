@@ -48,6 +48,9 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert ".state = $state | .credential_file = null" in content
     assert 'rm -f -- "$worker_control_secret"' in content
     assert "Maximum steps reached for this agent" in content
+    assert "reviewer_has_result" in content
+    assert 'startswith("REVIEW_RESULT_JSON=")' in content
+    assert "reviewer_budget_reason && $reviewer_has_result == 0" in content
     assert "REVIEW_INCOMPLETE_JSON=" in (ROOT / "src/codex_local_harness/review.py").read_text(encoding="utf-8")
     assert "delivery-dirty-checkout" in content
     assert "PYTHONDONTWRITEBYTECODE=1" in content

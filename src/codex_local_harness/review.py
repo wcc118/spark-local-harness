@@ -252,7 +252,7 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
     fields from the immutable harness envelope.
     """
     allowed = {
-        "schema_version", "verdict", "repository", "repo", "issue", "pull_request", "pr",
+        "schema_version", "verdict", "identity", "repository", "repo", "issue", "pull_request", "pr",
         "reviewed_head_sha", "head", "head_sha", "criteria", "findings", "tests",
         "confidence", "summary", "escalation_reason", "escalation",
     }
@@ -260,8 +260,16 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
     if unknown:
         raise ReviewError(f"structured result has unsupported fields: {unknown}")
 
+    identity = result.get("identity", {})
+    if not isinstance(identity, dict) or set(identity) - {
+        "repository", "issue", "pull_request", "reviewed_head_sha"
+    }:
+        raise ReviewError("identity alias must contain only canonical identity fields")
+
     def supplied(*names: str) -> list[Any]:
-        return [result[name] for name in names if name in result]
+        values = [result[name] for name in names if name in result]
+        values.extend(identity[name] for name in names if name in identity)
+        return values
 
     expected_aliases = {
         "repository": (envelope.repository, supplied("repository", "repo")),
@@ -417,6 +425,11 @@ def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any
             raise ReviewError("every test requires harness-observed, reviewer-observed, or task-reported provenance")
         if test["provenance"] == "reviewer-observed" and not isinstance(test.get("exit_code"), int):
             raise ReviewError("reviewer-observed tests require an integer exit_code")
+        if "exit_code" in test and (
+            not isinstance(test["exit_code"], int) or isinstance(test["exit_code"], bool)
+            or not 0 <= test["exit_code"] <= 255
+        ):
+            raise ReviewError("test exit_code must be an integer from zero through 255")
     blockers = [f for f in result["findings"] if isinstance(f, dict) and f.get("severity") == "blocker"]
     if result["confidence"] not in {"high", "medium", "low"}:
         raise ReviewError("confidence must be high, medium, or low")

@@ -462,7 +462,14 @@ workflow_status=$inference_status
 if (( workflow_status == 0 && output_status != 0 )); then
   workflow_status=65
 fi
-if [[ $worker_role == reviewer && -n $reviewer_budget_reason ]]; then
+reviewer_has_result=0
+if [[ $worker_role == reviewer ]] && jq -s -e '
+  [.[] | select(.type == "text") | (.part.text // "") | split("\n")[] |
+   select(startswith("REVIEW_RESULT_JSON="))] | length == 1
+' "$worker_log" >/dev/null; then
+  reviewer_has_result=1
+fi
+if [[ $worker_role == reviewer && -n $reviewer_budget_reason && $reviewer_has_result == 0 ]]; then
   "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason "$reviewer_budget_reason" \
     --result-out "$worker_result" || true
   workflow_status=75
