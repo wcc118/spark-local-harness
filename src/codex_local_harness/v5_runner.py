@@ -32,6 +32,7 @@ class RunResult:
     branch: str
     head_sha: str
     exit_status: int
+    interrupted: bool
     elapsed_seconds: float
     log_file: str
     changed_paths: tuple[str, ...]
@@ -141,6 +142,7 @@ def run_worker(
     log_dir: Path,
     expected_head: str | None = None,
     output: TextIO = sys.stderr,
+    popen: Any = subprocess.Popen,
 ) -> RunResult:
     repository = repository.resolve()
     if role == "reviewer":
@@ -158,7 +160,7 @@ def run_worker(
     log_file = log_dir / f"{run_id}.jsonl"
     started = time.monotonic()
     print(f"run {run_id} | {role} | {model} | {repository} | {branch}", file=output, flush=True)
-    process = subprocess.Popen(
+    process = popen(
         [opencode, "run", "--format", "json", "--dir", str(repository), "--agent", agent, "--model", model, task],
         cwd=repository,
         env=os.environ.copy(),
@@ -169,21 +171,33 @@ def run_worker(
     )
     events: list[dict[str, Any]] = []
     assert process.stdout is not None
-    with log_file.open("w", encoding="utf-8") as retained:
-        for line in process.stdout:
-            retained.write(line)
-            retained.flush()
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                print(line.rstrip(), file=output, flush=True)
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-                description = _describe_event(event)
-                if description:
-                    print(description, file=output, flush=True)
-    exit_status = process.wait()
+    interrupted = False
+    try:
+        with log_file.open("w", encoding="utf-8") as retained:
+            for line in process.stdout:
+                retained.write(line)
+                retained.flush()
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    print(line.rstrip(), file=output, flush=True)
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+                    description = _describe_event(event)
+                    if description:
+                        print(description, file=output, flush=True)
+        exit_status = process.wait()
+    except KeyboardInterrupt:
+        interrupted = True
+        print("interrupt received; stopping worker and retaining state", file=output, flush=True)
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        exit_status = 130
     elapsed = time.monotonic() - started
     status_lines = _run_git(repository, "status", "--porcelain=v1").splitlines()
     dirty_paths = tuple(line[3:].split(" -> ")[-1] for line in status_lines if len(line) > 3)
@@ -197,6 +211,7 @@ def run_worker(
         branch=branch,
         head_sha=head_sha,
         exit_status=exit_status,
+        interrupted=interrupted,
         elapsed_seconds=round(elapsed, 3),
         log_file=str(log_file),
         changed_paths=_changed_paths(repository, base_sha),
