@@ -159,3 +159,61 @@ def test_dashboard_snapshot_and_fingerprint_include_live_runs(tmp_path: Path) ->
 
     assert before != after
     assert live_fingerprint(v5_runs)
+
+
+def test_microscope_projects_safe_result_handoff_and_neutral_signals(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    first = _event("tool_use", tool="read", status="completed")
+    second = _event("tool_use", tool="read", status="error")
+    second["timestamp"] = NOW_MS + 121_000
+    _write_log(runs, "evidence", [first, second])
+    (runs / "evidence.result.json").write_text(json.dumps({
+        "run_id": "evidence",
+        "role": "reviewer",
+        "model": "safe-model",
+        "repository": "/work/example",
+        "session_id": "session-a",
+        "issue": 106,
+        "exit_status": 1,
+        "elapsed_seconds": 42.5,
+        "tool_calls": 2,
+        "tests": [{"status": "failed", "command": "PRIVATE COMMAND"}],
+        "changed_paths": ["src/safe.py"],
+        "branch": "issue-106",
+        "head_sha": "a" * 40,
+    }), encoding="utf-8")
+
+    snapshot = project_live_execution(runs, now=NOW)
+    worker = next(node for node in snapshot["nodes"] if node["kind"] == "worker")
+
+    assert snapshot["schema_version"] == 2
+    assert worker["elapsed_seconds"] == 42.5
+    assert worker["files_observed"] == ["src/safe.py"]
+    assert worker["test_observations"] == 1
+    assert {item["kind"] for item in snapshot["signals"]} == {
+        "repeated-tool", "silent-interval", "tool-error",
+    }
+    assert snapshot["handoffs"][0]["from"] == "reviewer"
+    assert snapshot["criteria_states"][0]["state"] == "unknown"
+    assert {event["kind"] for event in snapshot["events"]} == {"tool-use", "run-result"}
+    assert [event["observed_at"] or "" for event in snapshot["events"]] == sorted(
+        event["observed_at"] or "" for event in snapshot["events"]
+    )
+    serialized = json.dumps(snapshot)
+    assert "PRIVATE COMMAND" not in serialized
+    assert "no failure inferred" in serialized
+
+
+def test_live_projection_respects_observed_session_identity(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    for run_id, session_id in (("one", "session-a"), ("two", "session-b")):
+        _write_log(runs, run_id, [_event("step_start")])
+        _result(runs, run_id, exit_status=0)
+        result_path = runs / f"{run_id}.result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["session_id"] = session_id
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    snapshot = project_live_execution(runs, now=NOW, session_id="session-a")
+
+    assert {node["run_id"] for node in snapshot["nodes"] if node["kind"] == "worker"} == {"one"}

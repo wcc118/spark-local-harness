@@ -52,3 +52,27 @@ It does not imply hidden communication. Selecting a node or signal exposes its
 state, observation age, derivation reason, and retained source reference. The
 same interaction works by keyboard, and reduced-motion preferences disable
 signal animation without removing state text.
+
+## Execution microscope
+
+Selecting a brain node, signal, chronological event, attention item, diagnostic
+run, or workflow operation updates the same read-only evidence inspector. The
+surface shows only normalized fields that exist: run/session/issue/repository,
+role and model, phase and elapsed time, tool/test counts, observed files,
+branch/commit/PR references, token evidence, liveness reason, observation age,
+and source reference. Unsupported fields say `Unavailable`; they are never
+estimated.
+
+The chronological rail contains at most 160 normalized events. Terminal result
+availability is an event, but does not itself verify semantic acceptance.
+Acceptance therefore remains `unknown` unless an independent criterion source
+reports `evidence-observed`, `contradicted`, or `verified`. Handoffs mean only
+that a retained worker result became available to Codex; the UI does not infer
+an unobserved coder-to-reviewer conversation.
+
+Neutral diagnostic notices call out repeated tool categories, tool-reported
+errors, and intervals of at least two minutes between retained events. Their
+text explicitly avoids calling these signals failures. Command bodies, test
+commands, prompts, output, and private reasoning are excluded. File names are
+bounded to retained changed-path evidence. Raw artifact download is disabled;
+source references are identifiers rather than browser-accessible file paths.

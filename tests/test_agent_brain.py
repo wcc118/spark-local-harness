@@ -120,3 +120,55 @@ def test_agent_brain_is_responsive_reduced_motion_and_reuses_sse_state(tmp_path)
     assert "showBrainDetail(selected)" in DASHBOARD_JS
     assert "current.replaceWith(replacement)" in DASHBOARD_JS
     assert "location.reload" not in DASHBOARD_JS
+
+
+def test_execution_microscope_and_chronological_rail_are_explicit(tmp_path) -> None:
+    projection = _projection()
+    projection["nodes"][0].update({
+        "run_id": "run-1", "role": "coder", "model": "Qwen",
+        "repository": "/work/example", "issue": 106, "session_id": "session-a",
+        "phase": "waiting-inference", "elapsed_seconds": 12.5, "tool_calls": 3,
+        "test_observations": 1, "files_observed": ["src/safe.py"],
+        "branch": "issue-106", "commit": "a" * 40, "token_usage": None,
+    })
+    projection["events"] = [{
+        "kind": "step-start", "run_id": "run-1", "status": "waiting-inference",
+        "observed_at": "2026-08-22T12:00:00+00:00", "source_ref": "v5-log:run-1:1",
+        "reason": "normalized event",
+    }]
+    projection["handoffs"] = [{"from": "coder", "to": "codex", "reason": "result retained"}]
+    projection["signals"] = [{"kind": "repeated-tool", "reason": "observed twice; no failure inferred"}]
+    projection["criteria_states"] = [{
+        "criterion": "semantic acceptance", "state": "unknown", "reason": "no criterion evidence supplied",
+    }]
+
+    page = _page(tmp_path, projection)
+
+    assert "Chronological evidence rail" in page
+    assert page.index("2026-08-22T12:00:00+00:00") < page.index("Evidence handoffs")
+    assert "coder → codex" in page
+    assert "no failure inferred" in page
+    assert "semantic acceptance" in page
+    assert "File activity alone never verifies semantic completion." in page
+    for field in (
+        "brain-detail-run", "brain-detail-role", "brain-detail-objective",
+        "brain-detail-files", "brain-detail-durable",
+    ):
+        assert f'id="{field}"' in page
+        assert f"'{field}'" in DASHBOARD_JS
+
+
+def test_microscope_selects_attention_runs_and_uses_bounded_criterion_states(tmp_path) -> None:
+    snapshot = fixture_source(tmp_path).snapshot()
+    page = render_dashboard(snapshot)
+
+    assert snapshot["live_execution"]["criteria_states"] == [{
+        "criterion": "run run-hidden outcome",
+        "state": "contradicted",
+        "reason": "worker claim conflicts with independent observation",
+        "run_id": "run-hidden",
+    }]
+    assert 'data-kind="attention"' in page
+    assert 'data-kind="run"' in page
+    assert "Inspect" in page
+    assert "scrollIntoView({block: 'nearest'})" in DASHBOARD_JS
