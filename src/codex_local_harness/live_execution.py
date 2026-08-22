@@ -104,6 +104,8 @@ def _live_state(events: list[dict[str, Any]], age_seconds: float) -> tuple[str, 
             return "running-tests", "recognized test command is active"
         if latest.get("status") in {"pending", "running"}:
             return "waiting-tool", f"tool {latest.get('tool', 'unknown')} is active"
+        if latest.get("status") in {"error", "failed"}:
+            return "tool-error", f"tool {latest.get('tool', 'unknown')} reported an error"
         return "waiting-inference", "tool completed; awaiting the next model action"
     if latest["kind"] == "step-start":
         return "waiting-inference", "model step started and no later external action is observed"
@@ -222,6 +224,12 @@ def project_live_execution(
         role = str(identity.get("role") or "worker")[:32]
         model = str(identity.get("model") or "unknown")[:128]
         repository = str(identity.get("repository") or "")[:256]
+        observed_tool_calls = sum(event["kind"] == "tool-use" for event in events)
+        observed_tool_errors = sum(
+            event["kind"] == "tool-use" and event.get("status") in {"error", "failed"}
+            for event in events
+        )
+        recorded_tool_calls = _safe_number(identity.get("tool_calls")) or 0
         worker_id = f"worker:{run_id}"
         nodes[worker_id] = {
             "id": worker_id, "kind": "worker", "label": f"{role} {run_id[:12]}",
@@ -235,7 +243,8 @@ def project_live_execution(
             ),
             "phase": state,
             "elapsed_seconds": _safe_number(identity.get("elapsed_seconds")),
-            "tool_calls": _safe_number(identity.get("tool_calls")),
+            "tool_calls": max(recorded_tool_calls, observed_tool_calls),
+            "tool_errors": observed_tool_errors,
             "test_observations": len(identity.get("tests", [])) if isinstance(identity.get("tests"), list) else 0,
             "files_observed": _safe_paths(identity.get("changed_paths")),
             "branch": str(identity.get("branch"))[:256] if isinstance(identity.get("branch"), str) else None,
