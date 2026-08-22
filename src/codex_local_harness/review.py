@@ -275,8 +275,10 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
         normalized = []
         for value in values:
             if field in {"issue", "pull_request"} and isinstance(value, str):
-                match = re.fullmatch(r"(?:[^#\s]+#)?(\d+)", value.strip())
-                value = int(match.group(1)) if match else value
+                match = re.fullmatch(r"(?:(?P<repo>[^#\s]+)#)?(?P<number>\d+)", value.strip())
+                if match and match.group("repo") not in {None, envelope.repository}:
+                    raise ReviewError(f"result identity mismatch for {field}")
+                value = int(match.group("number")) if match else value
             normalized.append(value)
         if any(value != expected for value in normalized):
             raise ReviewError(f"result identity mismatch for {field}")
@@ -295,10 +297,7 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
         findings = [{"severity": "note", "message": item} for item in findings]
     tests = result.get("tests", [])
     if isinstance(tests, dict):
-        tests = [
-            {"command": str(command), "status": str(status), "provenance": "task-reported"}
-            for command, status in tests.items()
-        ]
+        raise ReviewError("tests mapping cannot prove execution provenance")
 
     confidence = result.get("confidence")
     if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):

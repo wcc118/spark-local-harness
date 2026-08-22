@@ -328,7 +328,7 @@ def test_canonicalize_observed_coder_next_alias_shape(tmp_path):
         "head": SHA,
         "criteria": {"requirements": "pass", "tests": "pass"},
         "findings": ["No blocking findings."],
-        "tests": {"pytest -q": "reported passing"},
+        "tests": [{"command": "pytest -q", "provenance": "task-reported"}],
         "confidence": 0.95,
         "summary": "The bounded change satisfies the issue.",
     }
@@ -347,10 +347,12 @@ def test_canonicalize_preserves_valid_schema(tmp_path):
     "changes",
     [
         {"issue": 8},
+        {"issue": "other/repo#7"},
         {"pr": 12},
         {"head": "c" * 40},
         {"unexpected": "value"},
         {"confidence": 1.2},
+        {"tests": {"pytest -q": "pass"}},
     ],
 )
 def test_canonicalize_rejects_conflicting_or_ambiguous_results(tmp_path, changes):
