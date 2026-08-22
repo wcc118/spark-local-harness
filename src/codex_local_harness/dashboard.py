@@ -17,7 +17,7 @@ from .benchmark import BenchmarkAttempt, BenchmarkManifest, PairedSummary, Bench
 from .control_plane import ControlBroker, ControlError
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
-from .health import read_jsonl
+from .health import TokenUsage, read_jsonl
 from .live_execution import live_fingerprint, project_live_execution
 from .operation_usage import OperationUsageSnapshot, derive_usage
 from .plan_event import derive_plans, read_plan_records
@@ -447,6 +447,8 @@ class DashboardSource:
                     if not line:
                         continue
                     data = json.loads(line)
+                    if isinstance(data.get("tokens"), dict):
+                        data["tokens"] = TokenUsage(**data["tokens"])
                     attempts.append(BenchmarkAttempt(**data))
             statuses.append({"name": "benchmark-attempts", "state": "ok", "file": "benchmark-attempts.jsonl", "records": len(attempts)})
             return tuple(attempts)
@@ -1868,6 +1870,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plans", type=Path)
     parser.add_argument("--v5-runs", type=Path)
     parser.add_argument("--annotations", type=Path)
+    parser.add_argument("--benchmark-manifest", type=Path)
+    parser.add_argument("--benchmark-attempts", type=Path)
+    parser.add_argument("--benchmark-summaries", type=Path)
     parser.add_argument("--control-token-file", type=Path)
     parser.add_argument("--control-audit-file", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
@@ -1892,6 +1897,9 @@ def main(argv: list[str] | None = None) -> int:
         plans=args.plans,
         v5_runs=args.v5_runs,
         annotations=args.annotations,
+        benchmark_manifest=args.benchmark_manifest,
+        benchmark_attempts=args.benchmark_attempts,
+        benchmark_summaries=args.benchmark_summaries,
     )
     if bool(args.control_token_file) != bool(args.control_audit_file):
         parser.error("control token and audit files must be configured together")

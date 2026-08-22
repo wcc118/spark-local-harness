@@ -2,17 +2,29 @@
   "routes": {
     "helper/standard": {
       "agent": "helper",
-      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "coder/standard": {
       "agent": "coder",
-      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "coder/complex": {
       "agent": "coder",
       "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "reviewer/standard": {
+      "agent": "reviewer",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    },
+    "coder/experimental-qwen38": {
+      "agent": "coder",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    },
+    "helper/experimental-qwen38": {
+      "agent": "helper",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    },
+    "reviewer/experimental-qwen38": {
       "agent": "reviewer",
       "model": "vllm/Qwen/Qwen3.8-27B-FP8"
     }

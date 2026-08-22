@@ -17,6 +17,9 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
     --plans %h/.local/share/codex-local-harness/health/plans.jsonl \
     --v5-runs %h/.local/share/opencode-orchestration/runs \
     --annotations %h/.local/share/codex-local-harness/health/annotations.jsonl \
+    --benchmark-manifest %h/.local/share/codex-local-harness/benchmark/benchmark-manifest.json \
+    --benchmark-attempts %h/.local/share/codex-local-harness/benchmark/benchmark-attempts.jsonl \
+    --benchmark-summaries %h/.local/share/codex-local-harness/benchmark/benchmark-summaries.jsonl \
     --control-token-file %h/.config/codex-local/dashboard-control.token \
     --control-audit-file %h/.local/share/codex-local-harness/control/decisions.jsonl \
     --host 127.0.0.1 \

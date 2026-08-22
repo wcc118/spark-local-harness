@@ -121,16 +121,18 @@ class BenchmarkAttempt:
     category: str
     elapsed_seconds: float
     state: str  # completed, failed, interrupted, cancelled, timed-out
-    tokens: TokenUsage
+    tokens: TokenUsage | None
     tool_calls: int
     tool_errors: int
-    corrections: int
+    corrections: int | None
     permissions_requested: int
     questions_asked: int
     interventions: int
     finding_refs: tuple[str, ...]
     run_id: str
     observed_at: str
+    deterministic_correct: bool | None = None
+    raw_events: str | None = None
 
     def __post_init__(self) -> None:
         if self.category not in FIXTURE_CATEGORIES:
@@ -141,7 +143,7 @@ class BenchmarkAttempt:
         state_to_check = status_map.get(self.state, self.state)
         if state_to_check not in valid_states:
             raise ValueError(f"invalid state: {self.state}")
-        if self.corrections < 0:
+        if self.corrections is not None and self.corrections < 0:
             raise ValueError("corrections must be non-negative")
         if self.permissions_requested < 0:
             raise ValueError("permissions_requested must be non-negative")

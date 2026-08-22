@@ -52,8 +52,9 @@ def _fake_runtime(tmp_path: Path, *, updates_model: bool = True):
 def test_vllm_routes_assign_both_models_without_lm_studio():
     config = json.loads(ROUTES.read_text(encoding="utf-8"))
     assert config["routes"]["coder/complex"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
-    assert config["routes"]["coder/standard"]["model"] == "vllm/Qwen/Qwen3.8-27B-FP8"
-    assert config["routes"]["reviewer/standard"]["model"] == "vllm/Qwen/Qwen3.8-27B-FP8"
+    assert config["routes"]["coder/standard"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    assert config["routes"]["reviewer/standard"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    assert config["routes"]["coder/experimental-qwen38"]["model"] == "vllm/Qwen/Qwen3.8-27B-FP8"
     assert all(not route["model"].startswith("lmstudio/") for route in config["routes"].values())
 
 

@@ -1,13 +1,14 @@
 ---
 description: Bounded independent reviewer for one immutable issue and PR
 mode: primary
-steps: 4
+steps: 80
 permission:
   edit: deny
-  bash: deny
-  read: deny
-  glob: deny
-  grep: deny
+  write: deny
+  bash: allow
+  read: allow
+  glob: allow
+  grep: allow
   task: deny
   todowrite: deny
   github_*: deny
@@ -19,10 +20,10 @@ evidence supplied in the task. You are advisory only. Never edit, publish,
 approve, merge, change labels, delegate, install packages, or access another
 checkout.
 
-The harness supplies the exact-head diff and deterministic preflight result.
-This is a deliberately tool-free evidence boundary. Do not invoke tools or seek
-more files. If the bounded patch is truncated or insufficient, use `ESCALATE`.
-Serialize the complete result immediately.
+The harness supplies an immutable read-only checkout, the exact-head diff, and
+deterministic preflight evidence. Inspect the changed files and their relevant
+interfaces with read, glob, grep, and non-mutating bash commands. The checkout
+is mounted read-only. Do not install packages or invoke git/GitHub mutations.
 
 Distinguish evidence precisely. Every `tests` entry must include `provenance`
 equal to `harness-observed`, `reviewer-observed`, or `task-reported`. Do not turn
