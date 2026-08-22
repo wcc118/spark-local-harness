@@ -11,6 +11,7 @@ from codex_local_harness.review import (
     ReviewError,
     audit_tool_scope,
     build_envelope,
+    canonicalize_result,
     normalize_remote,
     parse_result,
     prepare_prompt,
@@ -187,6 +188,13 @@ def test_parse_result_requires_exactly_one_marker(tmp_path):
     assert parse_result(log)["verdict"] == "APPROVE"
 
 
+def test_parse_result_accepts_pretty_json_and_ignores_empty_trailing_marker(tmp_path):
+    log = tmp_path / "run.jsonl"
+    rendered = RESULT_PREFIX + json.dumps(valid_result(), indent=2) + "\n" + RESULT_PREFIX
+    write_log(log, [rendered])
+    assert parse_result(log)["verdict"] == "APPROVE"
+
+
 @pytest.mark.parametrize("texts", [[], [RESULT_PREFIX + "{}", RESULT_PREFIX + "{}"]])
 def test_parse_result_rejects_missing_or_duplicate_marker(tmp_path, texts):
     log = tmp_path / "run.jsonl"
@@ -199,6 +207,13 @@ def test_parse_result_rejects_bad_event_json(tmp_path):
     log = tmp_path / "run.jsonl"
     log.write_text("not-json\n", encoding="utf-8")
     with pytest.raises(ReviewError, match="invalid event JSON"):
+        parse_result(log)
+
+
+def test_parse_result_rejects_marker_without_json(tmp_path):
+    log = tmp_path / "run.jsonl"
+    write_log(log, [RESULT_PREFIX])
+    with pytest.raises(ReviewError, match="observed 0"):
         parse_result(log)
 
 
@@ -319,6 +334,69 @@ def test_validate_result_accepts_all_verdicts(tmp_path):
     assert validate_result(valid_result(verdict="ESCALATE", escalation_reason="conflict"), env)["verdict"] == "ESCALATE"
 
 
+def test_canonicalize_observed_coder_next_alias_shape(tmp_path):
+    raw = {
+        "verdict": "PASS",
+        "issue": f"{REPO}#7",
+        "pr": 11,
+        "head": SHA,
+        "criteria": {"requirements": "pass", "tests": "pass"},
+        "findings": ["No blocking findings."],
+        "tests": [{"command": "pytest -q", "provenance": "task-reported"}],
+        "confidence": 0.95,
+        "summary": "The bounded change satisfies the issue.",
+    }
+    canonical = canonicalize_result(raw, envelope(tmp_path))
+    assert validate_result(canonical, envelope(tmp_path))["verdict"] == "APPROVE"
+    assert canonical["confidence"] == "high"
+    assert canonical["tests"][0]["provenance"] == "task-reported"
+
+
+def test_canonicalize_preserves_valid_schema(tmp_path):
+    result = valid_result()
+    assert canonicalize_result(result, envelope(tmp_path)) == result
+
+
+def test_canonicalize_observed_nested_identity_shape(tmp_path):
+    raw = {
+        "identity": {
+            "repository": REPO, "issue": "#7", "pull_request": "#11",
+            "exact_head": SHA,
+        },
+        "verdict": "APPROVE", "criteria": [], "findings": [], "tests": [],
+        "confidence": "high", "summary": "No blocking findings.",
+        "escalation_reason": None,
+    }
+    assert validate_result(canonicalize_result(raw, envelope(tmp_path)), envelope(tmp_path))["verdict"] == "APPROVE"
+
+
+def test_canonicalize_observed_compact_pr_identity_shape(tmp_path):
+    raw = {
+        "identity": f"{REPO}#11", "verdict": "APPROVE", "criteria": [],
+        "findings": [], "tests": [], "confidence": "high",
+        "summary": "No blocking findings.", "escalation": None,
+    }
+    assert validate_result(canonicalize_result(raw, envelope(tmp_path)), envelope(tmp_path))["pull_request"] == 11
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"issue": 8},
+        {"issue": "other/repo#7"},
+        {"pr": 12},
+        {"head": "c" * 40},
+        {"unexpected": "value"},
+        {"confidence": 1.2},
+        {"tests": {"pytest -q": "pass"}},
+    ],
+)
+def test_canonicalize_rejects_conflicting_or_ambiguous_results(tmp_path, changes):
+    raw = {"verdict": "PASS", "summary": "Looks correct.", "confidence": "high", **changes}
+    with pytest.raises(ReviewError):
+        canonicalize_result(raw, envelope(tmp_path))
+
+
 def test_validate_result_normalizes_omitted_optional_escalation_reason(tmp_path):
     value = valid_result()
     value.pop("escalation_reason")
@@ -334,6 +412,8 @@ def test_validate_result_distinguishes_observed_and_reported_tests(tmp_path):
         validate_result(valid_result(tests=[{"command": "pytest", "exit_code": 0}]), envelope(tmp_path))
     with pytest.raises(ReviewError, match="exit_code"):
         validate_result(valid_result(tests=[{"command": "pytest", "provenance": "reviewer-observed"}]), envelope(tmp_path))
+    with pytest.raises(ReviewError, match="zero through 255"):
+        validate_result(valid_result(tests=[{"command": "pytest", "exit_code": 439, "provenance": "harness-observed"}]), envelope(tmp_path))
 
 
 def test_incomplete_result_is_nonpublishing_and_identity_bound(tmp_path):

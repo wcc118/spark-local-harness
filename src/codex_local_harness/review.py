@@ -219,7 +219,7 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
 
 
 def parse_result(log_path: Path) -> dict[str, Any]:
-    candidates: list[str] = []
+    texts: list[str] = []
     for line_number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
@@ -229,19 +229,114 @@ def parse_result(log_path: Path) -> dict[str, Any]:
             raise ReviewError(f"invalid event JSON at line {line_number}") from exc
         if event.get("type") != "text":
             continue
-        text = str(event.get("part", {}).get("text", ""))
-        for output_line in text.splitlines():
-            if output_line.startswith(RESULT_PREFIX):
-                candidates.append(output_line[len(RESULT_PREFIX):])
+        texts.append(str(event.get("part", {}).get("text", "")))
+    output = "\n".join(texts)
+    candidates: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    for fragment in output.split(RESULT_PREFIX)[1:]:
+        fragment = fragment.lstrip()
+        if not fragment:
+            continue
+        try:
+            value, _ = decoder.raw_decode(fragment)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            candidates.append(value)
     if len(candidates) != 1:
         raise ReviewError(f"expected exactly one structured result, observed {len(candidates)}")
-    try:
-        result = json.loads(candidates[0])
-    except json.JSONDecodeError as exc:
-        raise ReviewError("structured result is not valid JSON") from exc
-    if not isinstance(result, dict):
-        raise ReviewError("structured result must be an object")
+    result = candidates[0]
     return result
+
+
+def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
+    """Convert a small, documented reviewer compatibility vocabulary to schema v1.
+
+    This boundary changes representation only.  It rejects unknown fields and
+    verifies every model-supplied identity before filling canonical identity
+    fields from the immutable harness envelope.
+    """
+    allowed = {
+        "schema_version", "verdict", "identity", "repository", "repo", "issue", "pull_request", "pr",
+        "reviewed_head_sha", "head", "head_sha", "criteria", "findings", "tests",
+        "confidence", "summary", "escalation_reason", "escalation",
+    }
+    unknown = sorted(set(result) - allowed)
+    if unknown:
+        raise ReviewError(f"structured result has unsupported fields: {unknown}")
+
+    identity = result.get("identity", {})
+    if isinstance(identity, str):
+        match = re.fullmatch(r"(?P<repo>[^#\s]+)#(?P<pr>\d+)", identity.strip())
+        if not match or match.group("repo") != envelope.repository or int(match.group("pr")) != envelope.pull_request:
+            raise ReviewError("result identity mismatch for pull_request")
+        identity = {"repository": match.group("repo"), "pull_request": int(match.group("pr"))}
+    if not isinstance(identity, dict) or set(identity) - {
+        "repository", "issue", "pull_request", "reviewed_head_sha", "exact_head"
+    }:
+        raise ReviewError("identity alias must contain only canonical identity fields")
+
+    def supplied(*names: str) -> list[Any]:
+        values = [result[name] for name in names if name in result]
+        values.extend(identity[name] for name in names if name in identity)
+        return values
+
+    expected_aliases = {
+        "repository": (envelope.repository, supplied("repository", "repo")),
+        "issue": (envelope.issue, supplied("issue")),
+        "pull_request": (envelope.pull_request, supplied("pull_request", "pr")),
+        "reviewed_head_sha": (envelope.head_sha, supplied("reviewed_head_sha", "head", "head_sha", "exact_head")),
+    }
+    for field, (expected, values) in expected_aliases.items():
+        if not values:
+            continue
+        normalized = []
+        for value in values:
+            if field in {"issue", "pull_request"} and isinstance(value, str):
+                match = re.fullmatch(r"(?:(?P<repo>[^#\s]+)?#)?(?P<number>\d+)", value.strip())
+                if match and match.group("repo") not in {None, envelope.repository}:
+                    raise ReviewError(f"result identity mismatch for {field}")
+                value = int(match.group("number")) if match else value
+            normalized.append(value)
+        if any(value != expected for value in normalized):
+            raise ReviewError(f"result identity mismatch for {field}")
+
+    verdict_aliases = {"PASS": "APPROVE", "FAIL": "REQUEST_CHANGES"}
+    verdict = verdict_aliases.get(result.get("verdict"), result.get("verdict"))
+
+    criteria = result.get("criteria", [])
+    if isinstance(criteria, dict):
+        criteria = [
+            {"criterion": str(name), "status": str(status), "evidence": "reviewer assertion"}
+            for name, status in criteria.items()
+        ]
+    findings = result.get("findings", [])
+    if all(isinstance(item, str) for item in findings) if isinstance(findings, list) else False:
+        findings = [{"severity": "note", "message": item} for item in findings]
+    tests = result.get("tests", [])
+    if isinstance(tests, dict):
+        raise ReviewError("tests mapping cannot prove execution provenance")
+
+    confidence = result.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        if not 0 <= confidence <= 1:
+            raise ReviewError("numeric confidence must be between zero and one")
+        confidence = "high" if confidence >= 0.8 else "medium" if confidence >= 0.5 else "low"
+
+    return {
+        "schema_version": result.get("schema_version", 1),
+        "verdict": verdict,
+        "repository": envelope.repository,
+        "issue": envelope.issue,
+        "pull_request": envelope.pull_request,
+        "reviewed_head_sha": envelope.head_sha,
+        "criteria": criteria,
+        "findings": findings,
+        "tests": tests,
+        "confidence": confidence,
+        "summary": result.get("summary"),
+        "escalation_reason": result.get("escalation_reason", result.get("escalation")),
+    }
 
 
 def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
@@ -340,6 +435,11 @@ def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any
             raise ReviewError("every test requires harness-observed, reviewer-observed, or task-reported provenance")
         if test["provenance"] == "reviewer-observed" and not isinstance(test.get("exit_code"), int):
             raise ReviewError("reviewer-observed tests require an integer exit_code")
+        if "exit_code" in test and (
+            not isinstance(test["exit_code"], int) or isinstance(test["exit_code"], bool)
+            or not 0 <= test["exit_code"] <= 255
+        ):
+            raise ReviewError("test exit_code must be an integer from zero through 255")
     blockers = [f for f in result["findings"] if isinstance(f, dict) and f.get("severity") == "blocker"]
     if result["confidence"] not in {"high", "medium", "low"}:
         raise ReviewError("confidence must be high, medium, or low")
@@ -502,7 +602,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             envelope = load_envelope(args.envelope)
             audit_tool_scope(args.log, envelope)
             verify_checkout_unchanged(envelope)
-            result = validate_result(parse_result(args.log), envelope)
+            result = validate_result(canonicalize_result(parse_result(args.log), envelope), envelope)
             publication = publish_result(result, envelope, args.run_id)
             write_json(args.result_out, {"result": result, "publication": publication})
             print(json.dumps(publication, sort_keys=True))
