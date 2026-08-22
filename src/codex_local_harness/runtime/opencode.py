@@ -74,7 +74,9 @@ class OpenCodeStats:
 
 
 def parse_log(path: Path) -> OpenCodeStats:
-    input_tokens = output_tokens = reasoning_tokens = turns = tool_calls = tool_errors = 0
+    input_tokens = output_tokens = reasoning_tokens = turns = 0
+    tool_call_ids: set[str] = set()
+    tool_error_ids: set[str] = set()
     cache_read = cache_write = 0
     cache_provenance = "unsupported"  # Default when no cache object is found
     timestamps: list[int] = []
@@ -114,18 +116,24 @@ def parse_log(path: Path) -> OpenCodeStats:
                         # Malformed cache data (not a dict or missing fields)
                         raise ValueError(f"invalid cache object at line {line_number}")
                 elif event_type == "tool_use":
-                    tool_calls += 1
                     state = part.get("state") or {}
                     if not isinstance(state, dict):
                         raise ValueError("tool state is not an object")
+                    call_id = part.get("callID")
+                    identity = call_id if isinstance(call_id, str) and call_id else f"line:{line_number}"
+                    tool_call_ids.add(identity)
                     if state.get("status") == "error":
-                        tool_errors += 1
+                        tool_error_ids.add(identity)
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise ValueError(f"invalid OpenCode event at line {line_number}: {exc}") from exc
     wall_seconds = (max(timestamps) - min(timestamps)) / 1000 if len(timestamps) > 1 else 0.0
     if cache_provenance != "observed":
         cache_read = cache_write = None
-    return OpenCodeStats(input_tokens, output_tokens, reasoning_tokens, turns, tool_calls, tool_errors, wall_seconds, cache_read, cache_write, cache_provenance)
+    return OpenCodeStats(
+        input_tokens, output_tokens, reasoning_tokens, turns,
+        len(tool_call_ids), len(tool_error_ids), wall_seconds,
+        cache_read, cache_write, cache_provenance,
+    )
 
 
 def _non_negative_int(value: Any, name: str) -> int:

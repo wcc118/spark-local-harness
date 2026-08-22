@@ -48,6 +48,33 @@ def test_parser_extracts_only_normalized_activity(tmp_path):
     assert "not retained" not in repr(stats)
 
 
+def test_parser_counts_bridged_tool_state_updates_once_per_call_id(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        {"type": "tool_use", "timestamp": 1000, "part": {
+            "callID": "call-1", "tool": "read", "state": {"status": "pending"},
+        }},
+        {"type": "tool_use", "timestamp": 1100, "part": {
+            "callID": "call-1", "tool": "read", "state": {"status": "running"},
+        }},
+        {"type": "tool_use", "timestamp": 1200, "part": {
+            "callID": "call-1", "tool": "read", "state": {"status": "completed"},
+        }},
+        {"type": "tool_use", "timestamp": 1300, "part": {
+            "callID": "call-2", "tool": "bash", "state": {"status": "error"},
+        }},
+        {"type": "tool_use", "timestamp": 1400, "part": {
+            "callID": "call-2", "tool": "bash", "state": {"status": "error"},
+        }},
+    ]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+    stats = parse_log(path)
+
+    assert stats.tool_calls == 2
+    assert stats.tool_errors == 1
+
+
 def test_cli_appends_health_record_without_event_content(tmp_path, capsys):
     log = tmp_path / "events.jsonl"
     records = tmp_path / "health.jsonl"
