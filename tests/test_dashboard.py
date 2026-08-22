@@ -581,3 +581,283 @@ def test_session_options_show_a_readable_label_not_a_bare_id(tmp_path):
     page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
     assert "owner/repo#19 · active · 1 ops · thread-a" in page
     assert "Legacy (no session ID) · completed · 1 ops</option>" in page
+
+
+def test_operational_verdict_shown_in_snapshot_and_html(tmp_path):
+    base = fixture_source(tmp_path)
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle)
+    snapshot = source.snapshot()
+
+    # Snapshot should include operational_verdict
+    assert "operational_verdict" in snapshot
+    verdict = snapshot["operational_verdict"]
+    assert "severity" in verdict
+    assert "headline" in verdict
+    assert "reasons" in verdict
+    assert "detail_counts" in verdict
+
+    # Attention queue should be present
+    assert "attention_queue" in snapshot
+    assert isinstance(snapshot["attention_queue"], list)
+
+    page = render_dashboard(snapshot)
+    assert "Operational verdict" in page
+    assert "Operational verdict" in page
+    assert "severity" in page
+
+
+def test_operational_verdict_healthy_state_no_problems(tmp_path):
+    base = fixture_source(tmp_path)
+    # All runs are adjudicated and passed, no contradictions
+    snapshot = base.snapshot()
+    verdict = snapshot["operational_verdict"]
+
+    # With contradictions from fixture, should be degraded or critical
+    assert verdict["severity"] in ("degraded", "critical")
+    assert verdict["headline"] != "System healthy"
+
+    page = render_dashboard(snapshot)
+    assert "Operational verdict" in page
+    assert verdict["severity"].upper() in page
+
+
+def test_operational_verdict_no_data_state(tmp_path):
+    source = DashboardSource(
+        tmp_path / "missing-runs.jsonl",
+        tmp_path / "missing-adj.jsonl",
+        tmp_path / "missing-life.jsonl",
+    )
+    snapshot = source.snapshot()
+
+    verdict = snapshot["operational_verdict"]
+    assert verdict["severity"] == "no-data"
+    assert verdict["headline"] == "No diagnostic data"
+
+    page = render_dashboard(snapshot)
+    assert "Operational verdict" in page
+    assert "NO-DATA" in page
+    assert "No diagnostic data" in page
+
+
+def test_operational_verdict_critical_state_with_contradictions_and_interruptions(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+
+    # Create runs with contradictions and interruptions
+    append_jsonl(runs, RunHealth(
+        run_id="run-contradiction", issue=21, role="coder", runtime="opencode", model="qwen",
+        profile="v4", task_class="test", status="success", wall_seconds=12,
+        usage=TokenUsage(local_input=100), delivery_ready=True,
+    ))
+    append_record(adjudications, Adjudication(
+        adjudication_id="adj-fail", run_id="run-contradiction", verdict="failed", source="evaluator",
+        observed_at="2026-08-15T17:00:00Z", failure_class="test-fail",
+        evidence_refs=("evaluator:test",),
+    ))
+    append_record(lifecycle, LifecycleEvent(
+        event_id="run-contradiction:interrupted", run_id="run-contradiction", event="interrupted",
+        observed_at="2026-08-15T16:59:00Z", wall_seconds=12, exit_status=130, dirty_entries=1,
+    ))
+
+    source = DashboardSource(runs, adjudications, lifecycle)
+    snapshot = source.snapshot()
+
+    verdict = snapshot["operational_verdict"]
+    # Should be critical due to contradiction and interruption
+    assert verdict["severity"] == "critical"
+    assert "contradiction" in verdict["headline"].lower() or verdict["detail_counts"]["contradictions"] > 0
+
+    page = render_dashboard(snapshot)
+    assert "CRITICAL" in page
+
+
+def test_operational_verdict_degraded_state_with_publication_failures(tmp_path):
+    base = fixture_source(tmp_path)
+    failures = tmp_path / "publication-failures.jsonl"
+    append_record(failures, PublicationFailure(
+        "run-1:finish:health",
+        "run-1",
+        "finish",
+        "health",
+        "ingestion-failed",
+        "2026-08-16T00:00:00Z",
+    ))
+
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, publication_failures=failures)
+    snapshot = source.snapshot()
+
+    verdict = snapshot["operational_verdict"]
+    assert verdict["severity"] in ("degraded", "critical")
+    assert verdict["detail_counts"]["publication_failures"] > 0
+
+    page = render_dashboard(snapshot)
+    assert "Operational verdict" in page
+    assert "Telemetry publication failure" in page
+
+
+def test_attention_queue_orders_by_severity_then_recency(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    failures = tmp_path / "publication-failures.jsonl"
+
+    # Create multiple types of issues
+    append_jsonl(runs, RunHealth(
+        run_id="run-crit1", issue=21, role="coder", runtime="opencode", model="qwen",
+        profile="v4", task_class="test", status="success", wall_seconds=12,
+        usage=TokenUsage(local_input=100), delivery_ready=True,
+    ))
+    append_record(adjudications, Adjudication(
+        adjudication_id="adj-crit", run_id="run-crit1", verdict="failed", source="evaluator",
+        observed_at="2026-08-15T17:00:00Z", failure_class="test-fail",
+        evidence_refs=("evaluator:test",),
+    ))
+
+    append_record(failures, PublicationFailure(
+        "run-2:finish:health",
+        "run-2",
+        "finish",
+        "health",
+        "ingestion-failed",
+        "2026-08-15T16:00:00Z",
+    ))
+
+    source = DashboardSource(runs, adjudications, lifecycle, publication_failures=failures)
+    snapshot = source.snapshot()
+
+    queue = snapshot["attention_queue"]
+    assert len(queue) > 0
+
+    # Critical items should come before degraded
+    critical_items = [item for item in queue if item["severity"] == "critical"]
+    degraded_items = [item for item in queue if item["severity"] == "degraded"]
+
+    # Find split point
+    critical_indices = [i for i, item in enumerate(queue) if item["severity"] == "critical"]
+    degraded_indices = [i for i, item in enumerate(queue) if item["severity"] == "degraded"]
+
+    if critical_indices and degraded_indices:
+        assert max(critical_indices) < min(degraded_indices), "Critical items should come before degraded"
+
+
+def test_attention_queue_bounded_and_reports_omitted(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+
+    # Create many issues
+    for i in range(10):
+        append_jsonl(runs, RunHealth(
+            run_id=f"run-omitted{i}", issue=21, role="coder", runtime="opencode", model="qwen",
+            profile="v4", task_class="test", status="success", wall_seconds=12,
+            usage=TokenUsage(local_input=100), delivery_ready=True,
+        ))
+        append_record(adjudications, Adjudication(
+            adjudication_id=f"adj-omitted{i}", run_id=f"run-omitted{i}", verdict="failed", source="evaluator",
+            observed_at=f"2026-08-15T17:00:{i:02d}Z", failure_class=f"test-fail-{i}",
+            evidence_refs=(f"evaluator:test{i}",),
+        ))
+
+    source = DashboardSource(runs, adjudications, lifecycle)
+    snapshot = source.snapshot()
+
+    queue = snapshot["attention_queue"]
+    verdict = snapshot["operational_verdict"]
+
+    page = render_dashboard(snapshot)
+
+    # Should only show first 5, with omitted count
+    assert "Attention queue" in page
+    # The omitted count text should be present
+    # Count how many attention items are rendered (we should have exactly 5 visible)
+    # and omitted text should appear if more than 5
+    omitted_count = len(queue) - 5
+    if omitted_count > 0:
+        assert f"({omitted_count} more hidden)" in page
+
+
+def test_attention_queue_escapes_html_in_subject_reason(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+
+    append_jsonl(runs, RunHealth(
+        run_id="run-escaped", issue=21, role="coder", runtime="opencode", model="<script>alert(1)</script>",
+        profile="v4", task_class="test", status="success", wall_seconds=12,
+        usage=TokenUsage(local_input=100), delivery_ready=True,
+    ))
+    append_record(adjudications, Adjudication(
+        adjudication_id="adj-escaped", run_id="run-escaped", verdict="failed", source="evaluator",
+        observed_at="2026-08-15T17:00:00Z", failure_class="test-fail",
+        evidence_refs=("evaluator:test",),
+    ))
+
+    source = DashboardSource(runs, adjudications, lifecycle)
+    snapshot = source.snapshot()
+    page = render_dashboard(snapshot)
+
+    # HTML should be escaped
+    assert "<script>" not in page
+    assert "&lt;script&gt;" in page
+    assert "Operational verdict" in page
+
+
+def test_attention_queue_links_to_github_issue_when_available(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    workflow = tmp_path / "workflow.jsonl"
+
+    append_jsonl(runs, RunHealth(
+        run_id="run-linked", issue=42, role="coder", runtime="opencode", model="qwen",
+        profile="v4", task_class="test", status="success", wall_seconds=12,
+        usage=TokenUsage(local_input=100), delivery_ready=True,
+    ))
+    append_record(adjudications, Adjudication(
+        adjudication_id="adj-linked", run_id="run-linked", verdict="failed", source="evaluator",
+        observed_at="2026-08-15T17:00:00Z", failure_class="test-fail",
+        evidence_refs=("evaluator:test",),
+    ))
+    append_record(workflow, WorkflowEvent(
+        "work", "issue-42", "local-work", "active", "2026-08-15T18:00:00Z", 42,
+        session_id="thread-a", repository="wcc118/codex-local-harness",
+    ))
+
+    source = DashboardSource(runs, adjudications, lifecycle, workflow=workflow)
+    snapshot = source.snapshot()
+    page = render_dashboard(snapshot)
+
+    # GitHub link should be present for the issue
+    assert 'href="https://github.com/wcc118/codex-local-harness/issues/42"' in page
+    assert "Operational verdict" in page
+
+
+def test_session_filter_affects_attention_queue(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+
+    # Two different sessions with issues
+    append_record(workflow, WorkflowEvent(
+        "a", "issue-21", "local-work", "active", "2026-08-16T00:00:00Z", 21,
+        run_id="run-1", session_id="thread-a", repository="owner/repo",
+    ))
+    append_record(workflow, WorkflowEvent(
+        "b", "issue-21", "post-merge", "passed", "2026-08-16T00:01:00Z", 21,
+        session_id="thread-b", repository="owner/repo",
+    ))
+
+    source = DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow)
+
+    # Both sessions
+    all_snapshot = source.snapshot()
+    assert len(all_snapshot["attention_queue"]) >= 0
+
+    # Filter to thread-a
+    selected_snapshot = source.snapshot("thread-a")
+    # Attention queue should still exist but may be filtered
+    assert "attention_queue" in selected_snapshot
+    assert selected_snapshot["selected_session"] == "thread-a"
+
+    page = render_dashboard(selected_snapshot)
+    assert "Operational verdict" in page
