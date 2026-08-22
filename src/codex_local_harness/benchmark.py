@@ -92,6 +92,9 @@ class BenchmarkFixture:
         """Compute deterministic SHA-256 hash for content."""
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
     @classmethod
     def create(cls, fixture_id: str, category: str, prompt: str, context: str, **metadata: Any) -> BenchmarkFixture:
         """Create a fixture with computed identity hash."""
