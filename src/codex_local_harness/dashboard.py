@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -43,79 +44,73 @@ class AttentionItem:
     occurred_at: str  # ISO timestamp for recency sorting
 
 
-def _compute_operational_verdict(views: tuple[RunView, ...], operations: list[dict[str, Any]], publication_failures: tuple[PublicationFailure, ...], sources: list[dict[str, Any]]) -> OperationalVerdict:
-    """Derive deterministic operational status from existing immutable records."""
-    # Count issues by category
+def _compute_operational_verdict(
+    views: tuple[RunView, ...], operations: list[dict[str, Any]],
+    publication_failures: tuple[PublicationFailure, ...], sources: list[dict[str, Any]],
+    now: datetime, run_observed_at: dict[str, str],
+) -> OperationalVerdict:
+    """Derive status from immutable evidence without inferring success."""
     unadjudicated = [view for view in views if view.effective_outcome == "unadjudicated"]
     contradictions = [view for view in views if view.contradiction]
     interrupted = [view for view in views if view.lifecycle_state in {"interrupted", "cancelled", "timed-out"}]
     publication_failed = len(publication_failures)
-
-    # Count missing/malformed sources
     source_problems = sum(1 for s in sources if s["state"] != "ok")
-
-    # Determine severity
-    # No data first - if there are no views at all, we can't compute issues
-    if not views:
+    failed_ops = [op for op in operations if op["current_state"] == "failed"]
+    blocked_ops = [op for op in operations if op["current_state"] == "blocked"]
+    stale_sources = [
+        source for source in sources
+        if source.get("state") == "ok" and source.get("mtime_epoch") is not None
+        and now.timestamp() - source["mtime_epoch"] > 1800
+    ]
+    has_records = bool(
+        views or operations or publication_failures
+        or any(source.get("records", 0) for source in sources)
+    )
+    critical_count = len(contradictions) + len(interrupted) + len(failed_ops) + len(blocked_ops)
+    degraded_count = publication_failed + source_problems + len(stale_sources) + len(unadjudicated)
+    if not has_records:
         severity = "no-data"
         headline = "No diagnostic data"
-    elif contradictions or interrupted or publication_failed > 2 or source_problems > 2:
+    elif critical_count:
         severity = "critical"
-        headline = "Critical: multiple issues detected"
-    elif contradictions or interrupted or publication_failed > 0 or source_problems > 0:
+        headline = (
+            "1 critical condition requires attention" if critical_count == 1
+            else f"{critical_count} critical conditions require attention"
+        )
+    elif degraded_count:
         severity = "degraded"
-        headline = "Degraded: attention needed"
+        headline = (
+            "1 diagnostic condition needs review" if degraded_count == 1
+            else f"{degraded_count} diagnostic conditions need review"
+        )
     else:
         severity = "healthy"
         headline = "System healthy"
 
-    # Build reasons list
     reasons = []
     if contradictions:
         reasons.append(f"{len(contradictions)} contradiction(s) between claim and observation")
+    if failed_ops:
+        reasons.append(f"{len(failed_ops)} failed workflow operation(s)")
+    if blocked_ops:
+        reasons.append(f"{len(blocked_ops)} blocked workflow operation(s)")
     if interrupted:
-        reasons.append(f"{len(interrupted)} interrupted/cancelled/timed-out operation(s)")
+        reasons.append(f"{len(interrupted)} interrupted/cancelled/timed-out run(s)")
     if publication_failed:
         reasons.append(f"{publication_failed} telemetry publication failure(s)")
     if source_problems:
         reasons.append(f"{source_problems} missing or malformed source file(s)")
+    if stale_sources:
+        reasons.append(f"{len(stale_sources)} source file(s) older than 30 minutes")
     if unadjudicated:
         reasons.append(f"{len(unadjudicated)} unadjudicated run(s)")
 
-    # Build source references
     source_refs = tuple(s["name"] for s in sources if s["state"] != "ok")
-
-    # Determine oldest unadjudicated timestamp
-    oldest_unadjudicated = None
-    if unadjudicated:
-        run_ids = {view.run_id for view in unadjudicated}
-        adjudication_by_run = {}
-        # Find the latest adjudication per run to determine oldest unadjudicated
-        for view in unadjudicated:
-            # We need to look at the adjudications to find the latest one for this run
-            pass
-        # Use lifecycle events to find oldest unadjudicated
-        lifecycle_timestamps = []
-        for view in unadjudicated:
-            # Find lifecycle events for this run
-            for event_id in view.evidence_refs:
-                # Parse timestamps from evidence refs
-                if ":" in event_id and len(event_id.split(":")) >= 2:
-                    try:
-                        ts_part = event_id.split(":")[-1]
-                        if ts_part.replace(".", "").replace("-", "").isdigit() or "T" in ts_part:
-                            lifecycle_timestamps.append(event_id)
-                    except (ValueError, IndexError):
-                        pass
-
-        # Fallback: use run_id timestamps if available
-        if not lifecycle_timestamps and unadjudicated:
-            oldest_unadjudicated = unadjudicated[0].run_id  # fallback
-
-        if not oldest_unadjudicated and unadjudicated:
-            # Sort by run_id which contains timestamp
-            sorted_unadjudicated = sorted(unadjudicated, key=lambda v: v.run_id)
-            oldest_unadjudicated = sorted_unadjudicated[0].run_id if sorted_unadjudicated else None
+    unadjudicated_times = [
+        run_observed_at[view.run_id] for view in unadjudicated
+        if view.run_id in run_observed_at
+    ]
+    oldest_unadjudicated = min(unadjudicated_times) if unadjudicated_times else None
 
     return OperationalVerdict(
         severity=severity,
@@ -128,53 +123,88 @@ def _compute_operational_verdict(views: tuple[RunView, ...], operations: list[di
             "interrupted": len(interrupted),
             "publication_failures": publication_failed,
             "source_problems": source_problems,
+            "failed_operations": len(failed_ops),
+            "blocked_operations": len(blocked_ops),
         },
         oldest_unadjudicated_at=oldest_unadjudicated,
     )
 
 
-def _build_attention_queue(views: tuple[RunView, ...], operations: list[dict[str, Any]], publication_failures: tuple[PublicationFailure, ...]) -> tuple[AttentionItem, ...]:
-    """Build severity-ranked attention queue bounded to the most urgent items."""
+def _build_attention_queue(
+    views: tuple[RunView, ...], operations: list[dict[str, Any]],
+    publication_failures: tuple[PublicationFailure, ...], sources: list[dict[str, Any]],
+    now: datetime, run_observed_at: dict[str, str],
+) -> tuple[tuple[AttentionItem, ...], int]:
+    """Return the five most urgent distinct incidents and the full count."""
     items: list[AttentionItem] = []
+    run_identity: dict[str, tuple[str | None, int | None]] = {}
+    for operation in operations:
+        repository = operation.get("repository")
+        if not isinstance(repository, str) or not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
+            repository = None
+        for run_id in operation.get("run_ids", []):
+            run_identity[run_id] = (repository, operation.get("issue"))
 
-    # Process contradictions (critical)
     for view in views:
+        reasons = []
+        severity = "warning"
         if view.contradiction:
-            items.append(AttentionItem(
-                severity="critical",
-                subject=f"Run {view.run_id[:12]}",
-                reason=f"Claim '{view.claimed_status}' vs observed '{view.effective_outcome}'",
-                issue=view.issue,
-                repository=None,  # Would need workflow data
-                occurred_at=view.run_id,  # Use run_id as timestamp proxy
-            ))
-
-    # Process interrupted/cancelled/timed-out (critical)
-    for view in views:
+            severity = "critical"
+            reasons.append(f"claim '{view.claimed_status}' vs observed '{view.effective_outcome}'")
         if view.lifecycle_state in {"interrupted", "cancelled", "timed-out"}:
+            severity = "critical"
+            reasons.append(f"lifecycle state: {view.lifecycle_state}")
+        elif view.effective_outcome == "unadjudicated":
+            reasons.append("independent adjudication not observed")
+        if reasons:
+            repository, operation_issue = run_identity.get(view.run_id, (None, None))
             items.append(AttentionItem(
-                severity="critical",
-                subject=f"Run {view.run_id[:12]}",
-                reason=f"Lifecycle state: {view.lifecycle_state}",
-                issue=view.issue,
-                repository=None,
-                occurred_at=view.run_id,
+                severity, f"Run {view.run_id[:12]}", "; ".join(reasons),
+                view.issue or operation_issue, repository, run_observed_at.get(view.run_id, ""),
             ))
 
-    # Process publication failures (degraded)
-    for failure in publication_failures:
+    for operation in operations:
+        state = operation.get("current_state")
+        if state not in {"failed", "blocked"}:
+            continue
+        repository = operation.get("repository")
+        if not isinstance(repository, str) or not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
+            repository = None
         items.append(AttentionItem(
-            severity="degraded",
-            subject=f"Publication failure: {failure.run_id[:12]}",
-            reason=f"{failure.phase} → {failure.target} ({failure.error_class})",
-            issue=None,
-            repository=None,
-            occurred_at=failure.observed_at,
+            "critical", f"Operation {str(operation.get('operation_id', 'unknown'))[:12]}",
+            f"workflow state: {state}", operation.get("issue"), repository,
+            operation.get("updated_at") or "",
         ))
 
-    # Sort by severity then recency
+    for failure in publication_failures:
+        items.append(AttentionItem(
+            "degraded", f"Publication failure: {failure.run_id[:12]}",
+            f"{failure.phase} → {failure.target} ({failure.error_class})",
+            None, None, failure.observed_at,
+        ))
+
+    for source in sources:
+        if source["state"] != "ok":
+            items.append(AttentionItem(
+                "degraded", f"Source {source['name']}", f"source state: {source['state']}",
+                None, None, "",
+            ))
+        elif source.get("mtime_epoch") is not None and now.timestamp() - source["mtime_epoch"] > 1800:
+            occurred_at = datetime.fromtimestamp(source["mtime_epoch"], timezone.utc).isoformat()
+            items.append(AttentionItem(
+                "degraded", f"Source {source['name']}", "telemetry older than 30 minutes",
+                None, None, occurred_at,
+            ))
+
     severity_order = {"critical": 0, "degraded": 1, "warning": 2}
-    return tuple(sorted(items, key=lambda item: (severity_order.get(item.severity, 3), item.occurred_at)))
+    ordered = []
+    for severity in ("critical", "degraded", "warning"):
+        ordered.extend(sorted(
+            (item for item in items if item.severity == severity),
+            key=lambda item: (item.occurred_at, item.subject), reverse=True,
+        ))
+    ordered.extend(item for item in items if item.severity not in severity_order)
+    return tuple(ordered[:5]), len(ordered)
 
 
 @dataclass(frozen=True)
@@ -221,20 +251,35 @@ class DashboardSource:
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
         sessions = _derive_sessions(current_operations, self._current_time(), plans)
         selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
+        selected_run_ids: set[str] | None = None
         if selected is not None:
             current_operations = [item for item in current_operations if (item["session_id"] or "legacy") == selected]
-            run_ids = {run_id for item in current_operations for run_id in item["run_ids"]}
-            views = tuple(view for view in views if view.run_id in run_ids)
-            runs = tuple(item for item in runs if item.run_id in run_ids)
+            selected_run_ids = {run_id for item in current_operations for run_id in item["run_ids"]}
+            views = tuple(view for view in views if view.run_id in selected_run_ids)
+            runs = tuple(item for item in runs if item.run_id in selected_run_ids)
             plans = tuple(item for item in plans if (item["session_id"] or "legacy") == selected)
         operation_usage = derive_usage(usage_snapshots)
         if selected is not None:
             operation_usage = tuple(item for item in operation_usage if item["session_id"] == selected)
         accounting = _accounting(runs, views, operation_usage, current_operations)
 
-        # Compute operational verdict and attention queue
-        verdict = _compute_operational_verdict(views, current_operations, publication_failures, statuses)
-        attention_queue = _build_attention_queue(views, current_operations, publication_failures)
+        current_time = self._current_time()
+        scoped_failures = tuple(
+            failure for failure in publication_failures
+            if selected_run_ids is None or failure.run_id in selected_run_ids
+        )
+        run_observed_at: dict[str, str] = {}
+        for record in (*adjudications, *lifecycle):
+            if selected_run_ids is None or record.run_id in selected_run_ids:
+                run_observed_at[record.run_id] = max(
+                    run_observed_at.get(record.run_id, ""), record.observed_at,
+                )
+        verdict = _compute_operational_verdict(
+            views, current_operations, scoped_failures, statuses, current_time, run_observed_at,
+        )
+        attention_queue, attention_total = _build_attention_queue(
+            views, current_operations, scoped_failures, statuses, current_time, run_observed_at,
+        )
 
         return {
             "schema_version": 1,
@@ -275,6 +320,7 @@ class DashboardSource:
                 }
                 for item in attention_queue
             ],
+            "attention_total": attention_total,
         }
 
     @staticmethod
@@ -372,7 +418,9 @@ def _triage_bucket(view: dict[str, Any]) -> str:
     return "clean"
 
 
-def _render_operational_verdict(verdict: dict[str, Any], attention_queue: list[dict[str, Any]]) -> str:
+def _render_operational_verdict(
+    verdict: dict[str, Any], attention_queue: list[dict[str, Any]], attention_total: int,
+) -> str:
     """Render the operational verdict and attention queue."""
     severity = verdict.get("severity", "unknown")
     headline = verdict.get("headline", "System status unknown")
@@ -402,10 +450,8 @@ def _render_operational_verdict(verdict: dict[str, Any], attention_queue: list[d
             detail_items.append(f'<span class="detail-count">{label}: {count}</span>')
     details_html = "".join(detail_items) if detail_items else '<span class="detail-count">All systems nominal</span>'
 
-    # Attention queue (bounded to first 5 items, show count of omitted)
-    max_visible = 5
-    visible_items = attention_queue[:max_visible]
-    omitted_count = len(attention_queue) - max_visible
+    visible_items = attention_queue
+    omitted_count = max(0, attention_total - len(visible_items))
 
     queue_items = []
     for item in visible_items:
@@ -558,7 +604,9 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         "oldest_unadjudicated_at": None,
     })
     attention_queue = snapshot.get("attention_queue", [])
-    verdict_html = _render_operational_verdict(verdict, attention_queue)
+    verdict_html = _render_operational_verdict(
+        verdict, attention_queue, snapshot.get("attention_total", len(attention_queue)),
+    )
 
     cards = [
         ("Runs", summary["runs"]),

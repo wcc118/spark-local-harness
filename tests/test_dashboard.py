@@ -861,3 +861,91 @@ def test_session_filter_affects_attention_queue(tmp_path):
 
     page = render_dashboard(selected_snapshot)
     assert "Operational verdict" in page
+
+
+def test_workflow_failure_is_critical_without_run_views(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    workflow = tmp_path / "workflow.jsonl"
+    append_record(workflow, WorkflowEvent(
+        "failed", "issue-42", "local-work", "failed", "2026-08-16T00:00:00Z", 42,
+        repository="owner/repo",
+    ))
+
+    snapshot = DashboardSource(runs, adjudications, lifecycle, workflow).snapshot()
+
+    assert snapshot["operational_verdict"]["severity"] == "critical"
+    assert snapshot["operational_verdict"]["detail_counts"]["failed_operations"] == 1
+    assert snapshot["attention_queue"][0]["issue"] == 42
+
+
+def test_stale_telemetry_degrades_verdict_and_enters_queue(tmp_path):
+    source = fixture_source(tmp_path)
+    now = datetime(2026, 8, 15, 22, 0, tzinfo=timezone.utc)
+    for path in (source.runs, source.adjudications, source.lifecycle):
+        os.utime(path, (now.timestamp() - 3600, now.timestamp() - 3600))
+
+    snapshot = DashboardSource(
+        source.runs, source.adjudications, source.lifecycle, now=now,
+    ).snapshot()
+
+    assert snapshot["operational_verdict"]["severity"] == "critical"
+    assert "3 source file(s) older than 30 minutes" in snapshot["operational_verdict"]["reasons"]
+    assert any("telemetry older than 30 minutes" == item["reason"] for item in snapshot["attention_queue"])
+
+
+def test_attention_queue_uses_observation_time_deduplicates_and_reports_total(tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    adjudications = tmp_path / "adjudications.jsonl"
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    for index in range(7):
+        run_id = f"opaque-{index}"
+        append_jsonl(runs, RunHealth(
+            run_id=run_id, issue=index + 1, role="coder", runtime="opencode", model="qwen",
+            profile="v4", task_class="test", status="success", wall_seconds=1,
+            usage=TokenUsage(local_input=1), delivery_ready=True,
+        ))
+        append_record(adjudications, Adjudication(
+            f"adj-{index}", run_id, "interrupted", "evaluator",
+            f"2026-08-15T17:00:{index:02d}Z", failure_class="interrupted",
+        ))
+        append_record(lifecycle, LifecycleEvent(
+            f"life-{index}", run_id, "interrupted", f"2026-08-15T17:00:{index:02d}Z",
+            exit_status=130,
+        ))
+
+    snapshot = DashboardSource(runs, adjudications, lifecycle).snapshot()
+
+    assert len(snapshot["attention_queue"]) == 5
+    assert snapshot["attention_total"] == 7
+    assert snapshot["attention_queue"][0]["subject"] == "Run opaque-6"
+    assert "claim 'success'" in snapshot["attention_queue"][0]["reason"]
+    assert "lifecycle state: interrupted" in snapshot["attention_queue"][0]["reason"]
+    assert "(2 more hidden)" in render_dashboard(snapshot)
+
+
+def test_selected_session_excludes_other_publication_failures(tmp_path):
+    base = fixture_source(tmp_path)
+    workflow = tmp_path / "workflow.jsonl"
+    failures = tmp_path / "publication-failures.jsonl"
+    append_record(workflow, WorkflowEvent(
+        "a", "issue-1", "local-work", "active", "2026-08-16T00:00:00Z", 1,
+        run_id="run-hidden", session_id="thread-a", repository="owner/repo",
+    ))
+    append_record(workflow, WorkflowEvent(
+        "b", "issue-2", "local-work", "active", "2026-08-16T00:00:01Z", 2,
+        run_id="run-other", session_id="thread-b", repository="owner/repo",
+    ))
+    append_record(failures, PublicationFailure(
+        "failure-other", "run-other", "finish", "health", "ingestion-failed",
+        "2026-08-16T00:00:02Z",
+    ))
+
+    snapshot = DashboardSource(
+        base.runs, base.adjudications, base.lifecycle, workflow,
+        publication_failures=failures,
+    ).snapshot("thread-a")
+
+    assert snapshot["operational_verdict"]["detail_counts"]["publication_failures"] == 0
+    assert not any(item["subject"].startswith("Publication failure") for item in snapshot["attention_queue"])

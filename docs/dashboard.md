@@ -15,9 +15,9 @@ recommendations or launch actions.
 
 | Severity | Condition |
 |----------|-----------|
-| `CRITICAL` | Contradictions between claim and observation, interrupted/cancelled/timed-out operations, or multiple telemetry publication failures |
-| `DEGRADED` | Single telemetry publication failures, missing/malformed source files, or any issues requiring attention |
-| `NO-DATA` | No diagnostic records have been written |
+| `CRITICAL` | Contradictions, interrupted/cancelled/timed-out runs, or failed/blocked workflow operations |
+| `DEGRADED` | Unadjudicated runs, publication failures, missing/malformed sources, or telemetry older than 30 minutes |
+| `NO-DATA` | No diagnostic or workflow records have been written; source problems remain visible without fabricating an operational conclusion |
 | `HEALTHY` | All systems nominal |
 
 ### Attention queue
@@ -25,10 +25,10 @@ recommendations or launch actions.
 Below the verdict, an **attention queue** displays the most urgent items
 requiring operator review:
 
-- Items are ordered first by severity (critical before degraded), then by
-  recency (most recent first)
+- Items are ordered by severity and then actual observed time, newest first;
+  arbitrary run IDs are never interpreted as timestamps
 - The initial view shows the 5 most urgent items; additional items are hidden
-  with an indicator count
+  with a count calculated before the queue is bounded
 - Each item includes the subject, reason, and a GitHub issue link when
   repository identity is available
 - GitHub issue links open in a new tab with `noopener noreferrer` for security
@@ -41,6 +41,15 @@ requiring operator review:
   successfully due to external factors
 - **Telemetry publication failures**: Failed attempts to publish runtime metrics
 - **Missing/malformed source files**: Diagnostic ledgers that could not be read
+- **Stale sources**: Readable telemetry whose last filesystem update is more
+  than 30 minutes old; a live SSE connection does not imply fresh evidence
+- **Unadjudicated runs**: Execution exists but independent judgment has not
+  been observed; this is uncertainty, not inferred failure
+
+A run with both a claim contradiction and a terminal interruption appears as
+one incident with both reasons. Session filtering includes only publication
+failures bound to that session's runs. Global source health remains visible
+because it affects the trustworthiness of every session projection.
 
 The queue is diagnostic only; it does not automatically resolve issues or
 trigger workers. Use the GitHub issue links to navigate to the relevant work
