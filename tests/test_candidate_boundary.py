@@ -40,6 +40,8 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "codex_local_harness.opencode_bridge" in content
     assert "--env-file" in content
     assert "docker stop --time 5" in content
+    assert ".state = $state | .credential_file = null" in content
+    assert 'rm -f -- "$worker_control_secret"' in content
     assert "Maximum steps reached for this agent" in content
     assert "REVIEW_INCOMPLETE_JSON=" in (ROOT / "src/codex_local_harness/review.py").read_text(encoding="utf-8")
     assert "delivery-dirty-checkout" in content
