@@ -51,7 +51,7 @@ def _event_payload(raw: dict[str, Any], message_roles: dict[str, str]) -> dict[s
     if event_type == "message.part.updated":
         part = properties.get("part") if isinstance(properties.get("part"), dict) else {}
         part_type = str(part.get("type") or "").replace("-", "_")
-        if part_type in {"text", "tool", "step_start", "step_finish"}:
+        if part_type in {"text", "reasoning", "tool", "step_start", "step_finish"}:
             if part_type == "text" and message_roles.get(str(part.get("messageID"))) != "assistant":
                 return None
             return {
@@ -126,11 +126,28 @@ def run_bridge(
     session_id = session.get("id") if isinstance(session, dict) else None
     if not isinstance(session_id, str) or not session_id:
         raise BridgeError("OpenCode did not return a session id")
+    try:
+        resolved_config = _request(base_url, password, "GET", "/config")
+    except BridgeError:
+        resolved_config = None
+    global_policy = resolved_config.get("permission") if isinstance(resolved_config, dict) else None
+    agents = resolved_config.get("agent") if isinstance(resolved_config, dict) else None
+    role_config = agents.get(agent) if isinstance(agents, dict) and isinstance(agents.get(agent), dict) else {}
+    role_policy = role_config.get("permission") if isinstance(role_config, dict) else None
+    effective_policy = {
+        "source": "opencode-server-resolved" if isinstance(resolved_config, dict) else "unavailable",
+        "evaluation_order": ["global", f"role:{agent}"],
+        "global": global_policy if isinstance(global_policy, dict) else {},
+        "role": role_policy if isinstance(role_policy, dict) else {},
+    }
+    if len(json.dumps(effective_policy)) > 65536:
+        effective_policy = {"source": "oversized", "evaluation_order": [], "global": {}, "role": {}}
     secret.write_text(password + "\n", encoding="utf-8")
     os.chmod(secret, 0o600)
     _atomic_json(control, {
         "schema_version": 1, "run_id": run_id, "session_id": session_id,
         "base_url": base_url, "credential_file": str(secret), "state": "active",
+        "effective_policy": effective_policy,
     })
 
     try:

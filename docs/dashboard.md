@@ -171,6 +171,89 @@ State is conveyed by visual indicators (color) **and** explicit labels:
 - The attention queue is fully accessible via keyboard navigation and screen
   readers using proper ARIA semantics
 
+## Live OpenCode control console
+
+The dashboard includes a **Live OpenCode console** for operator-facing control
+of running workflows. This panel connects directly to the active OpenCode
+session and exposes permission requests, questions, and raw execution events.
+
+### Access
+
+1. Click **Open Control Console** at the bottom of the dashboard
+2. Enter the **Run ID** (available from the run history table or workflow
+   operations above)
+3. Enter your **Operator name** for audit trails
+4. Enter the **Bearer token** for authentication (see token retrieval below)
+
+The panel connects immediately and polls the control snapshot every second.
+The connection indicator shows `Active`, `Completed`, `Failed`, or `Disconnected`.
+
+### Token retrieval
+
+The control console requires a Bearer token configured when launching the
+OpenCode worker:
+
+```bash
+# When starting the v5 runner, specify the control token file
+PYTHONPATH=src python3 -m codex_local_harness.v5_runner \
+  --control-token-file ~/.local/share/opencode-orchestration/control-token \
+  ...
+```
+
+The token file contains a single plain-text token value. Do not include the
+`Bearer ` prefix when entering it in the console - only the token itself.
+
+For security, the token is stored **only in sessionStorage** and is never
+written to localStorage, the URL, HTML, or any logs. Close your browser to
+clear it from memory.
+
+### Permissions
+
+When the OpenCode session encounters an action requiring permission, the panel
+displays the permission request with:
+
+- **Permission type**: bash, file_write, network_access, etc.
+- **Pattern**: the action pattern being requested
+- **Durable pattern**: if the operator has proposed a reusable rule
+
+Choose:
+
+- **Once**: Allow this single occurrence only
+- **Always**: Allow this pattern repeatedly; creates a durable rule
+- **Reject**: Deny the request
+
+Clicking **Always** prompts for confirmation before creating the durable rule.
+
+### Questions
+
+When the OpenCode session requires user input, the panel displays:
+
+- **Question text**: the decision being requested
+- **Options**: one or more choices
+
+For each question, select one or more options (if multiple allowed), then click
+**Submit Answer**. Validation ensures at least one selection per question.
+
+Alternatively, click **Reject** to decline the request entirely.
+
+### Transcript
+
+The transcript shows raw events from the OpenCode session, including dialogue,
+tool calls, and errors. Use the checkboxes to filter by event type:
+
+- **Dialogue**: model responses and tool orchestrations
+- **Tool**: tool execution details
+- **Error**: exceptions and failures
+
+The transcript scrolls automatically by default. Click **Autoscroll** to toggle
+this behavior, or **Clear** to empty the display.
+
+### One-click launch
+
+Click any brain/worker element with an associated Run ID to automatically
+populate and open the control console with that run, saving you from manual
+entry.
+
 ## Safety boundary
 
 - Server binding is restricted to loopback addresses.
@@ -178,9 +261,23 @@ State is conveyed by visual indicators (color) **and** explicit labels:
 - Responses are `no-store` and use a restrictive content-security policy.
 - Derived text is HTML escaped.
 - Reading a snapshot does not alter any source ledger.
-- There is no authentication because there is no non-loopback binding. A
-  future remote deployment would require a separate threat model and is not
-  part of `v0.1.0`.
+- The control console requires a separate Bearer token for authentication.
+- Token input is masked (`type="password"`) and stored only in sessionStorage.
+- The sensitive content warning appears before connection to remind operators
+  that raw prompts, outputs, commands, paths, and secrets may appear in the
+  transcript.
+
+## Audit
+
+All permission and question decisions are written to the audit file
+(`--control-audit-file`) with:
+
+- Timestamp, run ID, session ID, request ID
+- Decision type (permission/question), decision value (once/always/reject)
+- Operator name
+
+This provides an immutable record of operator actions for compliance and
+troubleshooting.
 
 Telemetry publication is best-effort and cannot change a worker's outcome.
 Sanitized failures are retained in `publication-failures.jsonl` and displayed

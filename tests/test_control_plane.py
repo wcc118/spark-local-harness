@@ -101,6 +101,11 @@ def broker(tmp_path: Path, base_url: str) -> ControlBroker:
         "base_url": base_url,
         "credential_file": str(runs / "run-1.control.secret"),
         "state": "active",
+        "effective_policy": {
+            "source": "opencode-server-resolved", "evaluation_order": ["global", "role:coder"],
+            "global": {"bash": {"*": "ask"}},
+            "role": {"bash": {"pytest *": "allow"}},
+        },
     }), encoding="utf-8")
     (runs / "run-1.jsonl").write_text(
         json.dumps({"type": "text", "part": {"text": "<script>private</script>"}}) + "\n",
@@ -116,6 +121,9 @@ def test_authenticated_snapshot_is_session_bound_and_sensitive(tmp_path, fake_op
     snapshot = target.snapshot("run-1")
     assert snapshot["session_id"] == "ses_target"
     assert [item["id"] for item in snapshot["pending_permissions"]] == ["per_one"]
+    assert snapshot["pending_permissions"][0]["policy_evaluation"] == [{
+        "resource": "pytest *", "winner": {"layer": "role", "pattern": "pytest *", "effect": "allow"},
+    }]
     assert [item["id"] for item in snapshot["pending_questions"]] == ["que_one"]
     assert snapshot["events"][0]["part"]["text"] == "<script>private</script>"
     with pytest.raises(ControlError, match="invalid-run-id"):

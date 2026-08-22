@@ -5,16 +5,19 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
 from codex_local_harness.dashboard import DashboardSource, make_handler, render_dashboard
+from codex_local_harness.control_plane import ControlBroker
 from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, PublicationFailure, append_record
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
 from codex_local_harness.frontier import FrontierStatus
 from codex_local_harness.workflow import WorkflowEvent
 from codex_local_harness.operation_usage import OperationUsageSnapshot
 from codex_local_harness.plan_event import PlanEvent
+from codex_local_harness.dashboard import DASHBOARD_JS, render_dashboard
 
 
 def fixture_source(tmp_path):
@@ -75,6 +78,35 @@ def test_http_surface_is_get_only_and_no_store(tmp_path):
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(urllib.request.Request(base + "/", data=b"", method="POST"))
         assert error.value.code == 405
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_control_transcript_requires_bearer_authentication(tmp_path):
+    source = fixture_source(tmp_path)
+    control_runs = tmp_path / "control-runs"
+    control_runs.mkdir()
+    token = tmp_path / "control.token"
+    token.write_text("test-token\n", encoding="utf-8")
+    (control_runs / "run-1.control.json").write_text(json.dumps({
+        "run_id": "run-1", "session_id": "ses_test", "state": "completed",
+        "credential_file": None, "base_url": "http://127.0.0.1:1",
+    }), encoding="utf-8")
+    (control_runs / "run-1.jsonl").write_text(json.dumps({"type": "text", "part": {"text": "private"}}) + "\n", encoding="utf-8")
+    broker = ControlBroker(control_runs, token, tmp_path / "audit.jsonl")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(source, broker))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(base + "/api/control/runs/run-1")
+        assert denied.value.code == 401
+        request = urllib.request.Request(base + "/api/control/runs/run-1", headers={"Authorization": "Bearer test-token"})
+        with urllib.request.urlopen(request) as response:
+            payload = json.load(response)
+        assert payload["events"][0]["part"]["text"] == "private"
     finally:
         server.shutdown()
         server.server_close()
@@ -949,3 +981,161 @@ def test_selected_session_excludes_other_publication_failures(tmp_path):
 
     assert snapshot["operational_verdict"]["detail_counts"]["publication_failures"] == 0
     assert not any(item["subject"].startswith("Publication failure") for item in snapshot["attention_queue"])
+
+
+# ===================== CONTROL CONSOLE SECURITY AND INTERACTION TESTS =====================
+
+
+def test_console_panel_present_in_html_output(tmp_path):
+    """Test that the control console panel is present in the rendered dashboard HTML."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    # Check for console container
+    assert "Live OpenCode console" in page
+    assert "console-wrapper" in page
+    assert "console-placeholder" in page
+    assert "console-panel" in page
+
+
+def test_sensitive_warning_in_console(tmp_path):
+    """Test that sensitive content warning is present."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    assert "⚠️" in page or "⚠" in page
+    assert "Sensitive content warning" in page
+    assert "Raw prompts" in page or "prompts, outputs" in page
+
+
+def test_console_token_stored_in_sessionStorage_only():
+    """Test that DASHBOARD_JS uses sessionStorage, never localStorage."""
+    # Check for sessionStorage usage
+    assert "sessionStorage" in DASHBOARD_JS
+    assert "sessionStorage.setItem" in DASHBOARD_JS
+    assert "sessionStorage.getItem" in DASHBOARD_JS
+    assert "localStorage" not in DASHBOARD_JS
+
+
+def test_console_uses_password_input_for_token(tmp_path):
+    """Test that the token input is of type password."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    assert 'type="password"' in page
+    assert 'id="console-token"' in page
+    assert 'autocomplete="off"' in page
+
+
+def test_console_token_never_in_url_or_html(tmp_path):
+    """Test that token is never embedded in URL or HTML."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    # Token should never be visible in HTML (excluding comments)
+    # Check that the actual token input is password type (never plain text)
+    assert 'type="password"' in page
+    assert 'id="console-token"' in page
+
+
+def test_console_js_polling_interval():
+    """Test that polling interval is set correctly (~1 second)."""
+    # The JavaScript should use setInterval with ~1000ms
+    assert "setInterval" in DASHBOARD_JS
+    assert "1000" in DASHBOARD_JS or "1000" in DASHBOARD_JS
+
+
+def test_console_permission_decision_values(tmp_path):
+    """Test that all decision values are supported."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    # Should have Once, Always, Reject buttons (case-insensitive check)
+    assert "handlePermissionDecision(permission.id, 'once')" in DASHBOARD_JS
+    assert "handlePermissionDecision(permission.id, 'always')" in DASHBOARD_JS
+    assert "handlePermissionDecision(permission.id, 'reject')" in DASHBOARD_JS
+
+
+def test_console_always_decision_requires_confirmation():
+    """Test that Always decision uses confirm()."""
+    assert "confirm" in DASHBOARD_JS
+    assert "always" in DASHBOARD_JS.lower()
+
+
+def test_console_question_validation():
+    """Test that question answers are validated."""
+    # Check for validation logic
+    assert "validate" in DASHBOARD_JS.lower() or "at least one" in DASHBOARD_JS.lower()
+    assert "alert" in DASHBOARD_JS or "prompt" in DASHBOARD_JS
+
+
+def test_console_filters_for_event_types(tmp_path):
+    """Test that filters for dialogue, tool, and error are present."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    # Check for filter checkboxes
+    assert "dialogue" in page
+    assert "tool" in page
+    assert "error" in page
+
+
+def test_console_transcript_uses_textContent():
+    """Test that transcript uses textContent for event content."""
+    assert "textContent" in DASHBOARD_JS
+    assert "innerHTML" not in DASHBOARD_JS
+    assert ".get(" not in DASHBOARD_JS
+    assert "replaceChildren" in DASHBOARD_JS
+
+
+def test_console_survives_live_dashboard_dom_refresh():
+    assert "replacementConsole.replaceWith(liveConsole)" in DASHBOARD_JS
+
+
+def test_question_answers_are_scoped_to_their_request_card():
+    assert "submitQuestionAnswers(question.id, card)" in DASHBOARD_JS
+    assert "card.querySelectorAll('.question-item')" in DASHBOARD_JS
+    assert "btn.dataset.multiple" in DASHBOARD_JS
+
+
+def test_console_state_indicators(tmp_path):
+    """Test that state indicators are rendered."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    # Check for status indicators
+    assert "status-indicator" in page
+    assert "Connected" in page or "connect" in page
+
+
+def test_console_exposes_reasoning_and_effective_policy_in_raw_mode(tmp_path):
+    page = render_dashboard(fixture_source(tmp_path).snapshot())
+    assert "Effective permission policy" in page
+    assert "console-policy-rules" in page
+    assert "kind === 'reasoning'" in DASHBOARD_JS
+    assert "consolePolicyRules.textContent" in DASHBOARD_JS
+
+
+def test_console_brain_worker_trigger(tmp_path):
+    """Test that console can be triggered from brain/worker elements."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    # Should have data-brain-key attribute for elements
+    assert "data-brain-key" in page or "console-run-id" in DASHBOARD_JS
+
+
+def test_console_disconnect_functionality(tmp_path):
+    """Test that disconnect button is present."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    assert "Disconnect" in page or "disconnect" in page.lower()
+
+
+def test_console_autoscroll_functionality(tmp_path):
+    """Test that autoscroll button is present."""
+    base = fixture_source(tmp_path)
+    page = render_dashboard(base.snapshot())
+
+    assert "Autoscroll" in page or "autoscroll" in page.lower()

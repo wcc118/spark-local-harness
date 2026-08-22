@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hmac
 import json
 import os
@@ -142,6 +143,10 @@ class ControlBroker:
             active, password = self._active(run_id)
             permissions = self._pending(active, password, "permission")
             questions = self._pending(active, password, "question")
+        effective_policy = control.get("effective_policy") or {
+            "source": "unavailable", "evaluation_order": [], "global": {}, "role": {},
+        }
+        permissions = [self._with_policy_evaluation(item, effective_policy) for item in permissions]
         return {
             "schema_version": 1,
             "run_id": run_id,
@@ -151,8 +156,34 @@ class ControlBroker:
             "events_truncated": len(raw_events) > MAX_EVENTS or size > MAX_TRANSCRIPT_BYTES,
             "pending_permissions": permissions,
             "pending_questions": questions,
+            "effective_policy": effective_policy,
             "sensitive": True,
         }
+
+    @staticmethod
+    def _with_policy_evaluation(request: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+        action = request.get("permission")
+        resources = request.get("patterns") if isinstance(request.get("patterns"), list) else []
+        evaluations = []
+        for resource in resources:
+            winner = None
+            if not isinstance(resource, str) or not isinstance(action, str):
+                continue
+            for layer_name in ("global", "role"):
+                layer = policy.get(layer_name)
+                if not isinstance(layer, dict):
+                    continue
+                rules = layer.get(action, layer.get("*"))
+                if isinstance(rules, str):
+                    winner = {"layer": layer_name, "pattern": action if action in layer else "*", "effect": rules}
+                elif isinstance(rules, dict):
+                    for pattern, effect in rules.items():
+                        if isinstance(pattern, str) and isinstance(effect, str) and fnmatch.fnmatchcase(resource, pattern):
+                            winner = {"layer": layer_name, "pattern": pattern, "effect": effect}
+            evaluations.append({"resource": resource, "winner": winner})
+        enriched = dict(request)
+        enriched["policy_evaluation"] = evaluations
+        return enriched
 
     def decide_permission(self, run_id: str, request_id: str, decision: str, actor: str) -> None:
         if not REQUEST_ID.fullmatch(request_id) or not request_id.startswith("per"):
