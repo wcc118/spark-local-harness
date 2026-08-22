@@ -37,6 +37,7 @@ def test_dashboard_backend_binds_to_loopback():
     content = read_unit("dashboard-backend.service")
     assert "--host 127.0.0.1" in content
     assert "--port 8765" in content
+    assert "--release v0.6.0" in content
 
 
 def test_dashboard_backend_port_is_8765():

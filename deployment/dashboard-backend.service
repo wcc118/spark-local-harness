@@ -24,7 +24,7 @@ ExecStart=/usr/bin/python3 -m codex_local_harness.dashboard \
     --control-audit-file %h/.local/share/codex-local-harness/control/decisions.jsonl \
     --host 127.0.0.1 \
     --port 8765 \
-    --release v0.5.6 \
+    --release v0.6.0 \
     --mode live
 # Security hardening
 NoNewPrivileges=yes
