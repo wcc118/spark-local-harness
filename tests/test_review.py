@@ -188,6 +188,13 @@ def test_parse_result_requires_exactly_one_marker(tmp_path):
     assert parse_result(log)["verdict"] == "APPROVE"
 
 
+def test_parse_result_accepts_pretty_json_and_ignores_empty_trailing_marker(tmp_path):
+    log = tmp_path / "run.jsonl"
+    rendered = RESULT_PREFIX + json.dumps(valid_result(), indent=2) + "\n" + RESULT_PREFIX
+    write_log(log, [rendered])
+    assert parse_result(log)["verdict"] == "APPROVE"
+
+
 @pytest.mark.parametrize("texts", [[], [RESULT_PREFIX + "{}", RESULT_PREFIX + "{}"]])
 def test_parse_result_rejects_missing_or_duplicate_marker(tmp_path, texts):
     log = tmp_path / "run.jsonl"
@@ -200,6 +207,13 @@ def test_parse_result_rejects_bad_event_json(tmp_path):
     log = tmp_path / "run.jsonl"
     log.write_text("not-json\n", encoding="utf-8")
     with pytest.raises(ReviewError, match="invalid event JSON"):
+        parse_result(log)
+
+
+def test_parse_result_rejects_marker_without_json(tmp_path):
+    log = tmp_path / "run.jsonl"
+    write_log(log, [RESULT_PREFIX])
+    with pytest.raises(ReviewError, match="observed 0"):
         parse_result(log)
 
 
@@ -347,7 +361,7 @@ def test_canonicalize_observed_nested_identity_shape(tmp_path):
     raw = {
         "identity": {
             "repository": REPO, "issue": 7, "pull_request": 11,
-            "reviewed_head_sha": SHA,
+            "exact_head": SHA,
         },
         "verdict": "APPROVE", "criteria": [], "findings": [], "tests": [],
         "confidence": "high", "summary": "No blocking findings.",

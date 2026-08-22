@@ -219,7 +219,7 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
 
 
 def parse_result(log_path: Path) -> dict[str, Any]:
-    candidates: list[str] = []
+    texts: list[str] = []
     for line_number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
@@ -229,18 +229,23 @@ def parse_result(log_path: Path) -> dict[str, Any]:
             raise ReviewError(f"invalid event JSON at line {line_number}") from exc
         if event.get("type") != "text":
             continue
-        text = str(event.get("part", {}).get("text", ""))
-        for output_line in text.splitlines():
-            if output_line.startswith(RESULT_PREFIX):
-                candidates.append(output_line[len(RESULT_PREFIX):])
+        texts.append(str(event.get("part", {}).get("text", "")))
+    output = "\n".join(texts)
+    candidates: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    for fragment in output.split(RESULT_PREFIX)[1:]:
+        fragment = fragment.lstrip()
+        if not fragment:
+            continue
+        try:
+            value, _ = decoder.raw_decode(fragment)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            candidates.append(value)
     if len(candidates) != 1:
         raise ReviewError(f"expected exactly one structured result, observed {len(candidates)}")
-    try:
-        result = json.loads(candidates[0])
-    except json.JSONDecodeError as exc:
-        raise ReviewError("structured result is not valid JSON") from exc
-    if not isinstance(result, dict):
-        raise ReviewError("structured result must be an object")
+    result = candidates[0]
     return result
 
 
@@ -262,7 +267,7 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
 
     identity = result.get("identity", {})
     if not isinstance(identity, dict) or set(identity) - {
-        "repository", "issue", "pull_request", "reviewed_head_sha"
+        "repository", "issue", "pull_request", "reviewed_head_sha", "exact_head"
     }:
         raise ReviewError("identity alias must contain only canonical identity fields")
 
@@ -275,7 +280,7 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
         "repository": (envelope.repository, supplied("repository", "repo")),
         "issue": (envelope.issue, supplied("issue")),
         "pull_request": (envelope.pull_request, supplied("pull_request", "pr")),
-        "reviewed_head_sha": (envelope.head_sha, supplied("reviewed_head_sha", "head", "head_sha")),
+        "reviewed_head_sha": (envelope.head_sha, supplied("reviewed_head_sha", "head", "head_sha", "exact_head")),
     }
     for field, (expected, values) in expected_aliases.items():
         if not values:
