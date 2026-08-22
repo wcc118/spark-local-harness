@@ -20,7 +20,10 @@ _TEST_COMMAND = re.compile(r"(^|\s|/)(pytest|tox|nox|cargo test|go test|npm test
 def _iso_from_millis(value: Any) -> str | None:
     if not isinstance(value, (int, float)):
         return None
-    return datetime.fromtimestamp(value / 1000, timezone.utc).isoformat()
+    try:
+        return datetime.fromtimestamp(value / 1000, timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _safe_result(path: Path) -> tuple[dict[str, Any] | None, bool]:
@@ -61,6 +64,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, bool]:
             "kind": event_type.replace("_", "-"),
             "observed_at": observed_at,
             "source_ref": f"v5-log:{path.name}:{max(1, len(lines) - MAX_EVENTS_PER_RUN + index + 1)}",
+            "reason": "normalized retained v5 execution event",
         }
         if event_type == "tool_use":
             state = part.get("state") if isinstance(part.get("state"), dict) else {}
@@ -148,7 +152,12 @@ def project_live_execution(runs_dir: Path | None, *, now: datetime | None = None
             "id": worker_id, "kind": "worker", "label": f"{role} {run_id[:12]}",
             "state": state, "observed_at": observed_at, "source_ref": source_ref,
             "reason": reason, "run_id": run_id, "role": role, "model": model,
-            "repository": repository or None, "issue": (result or {}).get("issue"),
+            "repository": repository or None,
+            "issue": (result or {}).get("issue") if isinstance((result or {}).get("issue"), int) else None,
+            "session_id": (
+                str((result or {})["session_id"])[:128]
+                if isinstance((result or {}).get("session_id"), str) else None
+            ),
         }
         if model != "unknown":
             model_id = f"model:{model}"

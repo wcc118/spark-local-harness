@@ -56,6 +56,18 @@ def test_missing_and_unconfigured_sources_are_safe(tmp_path: Path) -> None:
     assert project_live_execution(tmp_path / "missing", now=NOW)["source_state"] == "missing"
 
 
+def test_invalid_event_timestamp_degrades_to_explicit_unknown_time(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    event = _event("step_start")
+    event["timestamp"] = 10**100
+    _write_log(runs, "invalid-time", [event])
+
+    snapshot = project_live_execution(runs, now=NOW)
+
+    assert snapshot["events"][0]["observed_at"] is None
+    assert snapshot["events"][0]["reason"] == "normalized retained v5 execution event"
+
+
 def test_projects_live_worker_tool_test_and_privacy(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _write_log(runs, "active", [
@@ -67,6 +79,8 @@ def test_projects_live_worker_tool_test_and_privacy(tmp_path: Path) -> None:
 
     worker = next(node for node in snapshot["nodes"] if node["kind"] == "worker")
     assert worker["state"] == "running-tests"
+    assert worker["issue"] is None
+    assert worker["session_id"] is None
     assert any(node["kind"] == "test" for node in snapshot["nodes"])
     assert any(edge["kind"] == "uses" for edge in snapshot["edges"])
     serialized = json.dumps(snapshot)
