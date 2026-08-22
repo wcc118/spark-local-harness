@@ -89,6 +89,25 @@ def test_projects_live_worker_tool_test_and_privacy(tmp_path: Path) -> None:
     assert "PRIVATE PROMPT" not in serialized
 
 
+def test_active_projection_counts_observed_tools_and_surfaces_latest_error(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _write_log(runs, "blocked", [
+        _event("step_start"),
+        _event("tool_use", tool="read", status="completed"),
+        _event("tool_use", tool="bash", status="error"),
+    ])
+
+    snapshot = project_live_execution(runs, now=NOW, run_evidence={
+        "blocked": {"role": "coder", "tool_calls": 0},
+    })
+    worker = next(node for node in snapshot["nodes"] if node["kind"] == "worker")
+
+    assert worker["state"] == "tool-error"
+    assert worker["tool_calls"] == 2
+    assert worker["tool_errors"] == 1
+    assert any(signal["kind"] == "tool-error" for signal in snapshot["signals"])
+
+
 def test_projects_waiting_states_and_terminal_results(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _write_log(runs, "thinking", [_event("step_start")])

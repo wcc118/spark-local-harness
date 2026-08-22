@@ -48,11 +48,11 @@ def test_container_worker_cannot_write_outside_checkout(tmp_path):
     assert protected.read_text(encoding="utf-8") == "original\n"
 
 
-def test_generated_worker_policy_denies_external_paths_and_shell_by_default():
+def test_generated_worker_policy_denies_external_paths_without_blocking_sandboxed_shell():
     content = WORKER.read_text(encoding="utf-8")
     assert '.permission.external_directory = "deny"' in content
     assert '"external_directory": "deny"' in content
-    assert '"*": "deny"' in content
+    assert '"*": "deny",\n          "git status*"' not in content
     assert 'repository_mount="type=bind,src=$worker_repo_path,dst=$worker_repo_path,readonly"' in content
     assert 'git clone --quiet --no-hardlinks --no-checkout "$worker_source_repo_path" "$worker_repo_path"' in content
     assert 'checkout_kind=isolated-clone' in content

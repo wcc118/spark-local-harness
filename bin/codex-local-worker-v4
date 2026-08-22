@@ -160,19 +160,10 @@ install -d -m 700 "$worker_runtime_home/.config/opencode/agents" \
 jq '.mcp.github.enabled = false
     | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
-        "github_*": "deny", "gitea_*": "deny", "external_directory": "deny",
-        "bash": {
-          "*": "deny",
-          "git status*": "allow", "git diff*": "allow", "git log*": "allow",
-          "git show*": "allow", "git branch*": "allow", "git switch*": "allow",
-          "git checkout*": "allow", "git add*": "allow", "git commit*": "allow",
-          "python3 -m pytest*": "allow", "pytest*": "allow", "rg *": "allow",
-          "ls*": "allow", "pwd": "allow", "sed *": "allow"
-        }
+        "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
       })
     | .agent.reviewer.permission = ((.agent.reviewer.permission // {}) + {
-        "external_directory": "deny", "bash": "deny", "read": "deny",
-        "glob": "deny", "grep": "deny"
+        "external_directory": "deny"
       })
     | .agent.reviewer.steps = 4' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
