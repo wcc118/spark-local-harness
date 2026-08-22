@@ -1,0 +1,25 @@
+{
+  "routes": {
+    "helper/standard": {
+      "agent": "helper",
+      "model": "lmstudio/qwen/qwen3.8-27b"
+    },
+    "coder/standard": {
+      "agent": "coder",
+      "model": "lmstudio/qwen/qwen3.8-27b"
+    },
+    "coder/complex": {
+      "agent": "coder",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    },
+    "reviewer/standard": {
+      "agent": "reviewer",
+      "model": "vllm/Qwen/Qwen3.8-27B-FP8"
+    }
+  },
+  "defaults": {
+    "helper": "standard",
+    "coder": "complex",
+    "reviewer": "standard"
+  }
+}

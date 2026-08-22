@@ -9,6 +9,7 @@ from pathlib import Path
 
 PROJECT = Path("/home/connellwc83/projects/codex/local-harness")
 RELEASE_MANIFEST = Path(__file__).resolve().parents[1] / "config" / "installed-release.json"
+QUALIFIED_ROUTES = Path(__file__).resolve().parents[1] / "config" / "qualified-qwen38-routes.json"
 PROJECT_WORKER = PROJECT / "bin/codex-local-worker"
 INSTALLED_WORKER = Path("/home/connellwc83/.local/bin/codex-local-worker")
 PROJECT_CRITIC = PROJECT / "bin/codex-local-critic"
@@ -135,10 +136,11 @@ def test_coder_prompt_assigns_publication_to_deterministic_harness():
 def test_dry_run_reports_exact_route_without_inference(tmp_path):
     env = os.environ.copy()
     env["CODEX_LOCAL_DRY_RUN"] = "1"
+    env["CODEX_LOCAL_WORKER_CONFIG"] = str(QUALIFIED_ROUTES)
     completed = run([str(PROJECT_WORKER), "reviewer", str(tmp_path), "review this"], env=env)
     assert completed.returncode == 0
     assert "role=reviewer" in completed.stdout
-    assert "model=vllm/Qwen/Qwen3-Coder-Next-FP8" in completed.stdout
+    assert "model=vllm/Qwen/Qwen3.8-27B-FP8" in completed.stdout
     assert "Starting local worker" not in completed.stderr
 
 
