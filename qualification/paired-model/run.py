@@ -133,12 +133,14 @@ def atomic_write(path: Path, payload: dict[str, Any]) -> None:
 
 def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
     ids = identity(manifest_path, manifest, case)
-    model_slug = hashlib.sha256(args.model.encode()).hexdigest()[:12]
+    variant = args.variant
+    model_slug = hashlib.sha256(f"{args.model}:{variant}".encode()).hexdigest()[:12]
     attempt_dir = args.output / "attempts" / model_slug / case["id"]
     result_path = attempt_dir / "attempt.json"
     if args.resume and result_path.exists():
         old = json.loads(result_path.read_text(encoding="utf-8"))
-        if old.get("identity_hash") == ids["identity_hash"] and old.get("model") == args.model and old.get("terminal"):
+        if (old.get("identity_hash") == ids["identity_hash"] and old.get("model") == args.model
+                and old.get("policy_variant", "baseline") == variant and old.get("terminal")):
             return old
         raise RuntimeError(f"refusing mismatched resume for {case['id']}")
     if attempt_dir.exists():
@@ -147,6 +149,9 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     shutil.copytree((manifest_path.parent / manifest["source"]).resolve(), workspace)
     before = digest_tree((manifest_path.parent / manifest["source"]).resolve())
     task = (manifest_path.parent / case["task"]).read_text(encoding="utf-8")
+    if args.instruction_prefix:
+        prefix = args.instruction_prefix.read_text(encoding="utf-8").strip()
+        task = prefix + "\n\n" + task
     run_id = f"bench-{case['id']}-{model_slug}-{uuid.uuid4().hex[:8]}"
     events_path = attempt_dir / "events.jsonl"
     command = [
@@ -187,7 +192,7 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     result = {
         "schema_version": 1, "attempt_id": run_id, "run_id": run_id, "case_id": case["id"],
         "fixture_id": case["id"], "category": case["category"], "role": case["role"],
-        "model": args.model, "route": args.route, **ids, "started_at": started,
+        "model": args.model, "route": args.route, "policy_variant": variant, **ids, "started_at": started,
         "observed_at": datetime.now(timezone.utc).isoformat(), "elapsed_seconds": elapsed,
         "state": state, "terminal": True, "worker_exit_code": return_code,
         "deterministic_correct": correct, "check": {"command": check_command, "exit_code": check.returncode,
@@ -280,6 +285,75 @@ def command_compare(args: argparse.Namespace) -> int:
     return 0 if complete else 2
 
 
+def command_select(args: argparse.Namespace) -> int:
+    attempts = [json.loads(path.read_text(encoding="utf-8")) for path in args.output.glob("attempts/*/*/attempt.json")]
+    cohorts = {}
+    for name in (args.baseline, args.candidate):
+        values = [
+            item for item in attempts
+            if item.get("policy_variant", "baseline") == name and item.get("model") == args.model
+        ]
+        totals = {
+            "variant": name, "runs": len(values),
+            "correct": sum(
+                item.get("deterministic_correct") is True and item.get("state", "completed") == "completed"
+                for item in values
+            ),
+            "elapsed_seconds": sum(float(item.get("elapsed_seconds") or 0) for item in values),
+            "tool_calls": sum(int(item.get("tool_calls") or 0) for item in values),
+            "tool_errors": sum(int(item.get("tool_errors") or 0) for item in values),
+            "tokens": sum(int(item.get("tokens_total") or 0) for item in values),
+            "corrections": sum(int(item.get("corrections") or 0) for item in values),
+        }
+        cohorts[name] = totals
+    baseline, candidate = cohorts[args.baseline], cohorts[args.candidate]
+    metrics = ("elapsed_seconds", "tool_calls", "tool_errors", "tokens", "corrections")
+    correctness_retained = baseline["runs"] == candidate["runs"] == 10 and baseline["correct"] == candidate["correct"] == 10
+    non_worse = all(candidate[name] <= baseline[name] for name in metrics)
+    improved = [name for name in metrics if candidate[name] < baseline[name]]
+    promoted = correctness_retained and non_worse and bool(improved)
+    result = {
+        "schema_version": 1, "baseline": baseline, "candidate": candidate,
+        "correctness_retained": correctness_retained, "non_worse": non_worse,
+        "improved_metrics": improved, "promoted": promoted,
+        "decision": args.candidate if promoted else args.baseline,
+        "rule": "promote only 10/10 candidates that are non-worse on every measured cost and improve at least one",
+    }
+    atomic_write(args.output / "policy-selection.json", result)
+    by_variant_case = {
+        (item.get("policy_variant", "baseline"), item.get("case_id")): item
+        for item in attempts if item.get("model") == args.model and isinstance(item.get("case_id"), str)
+    }
+    summary_path = args.output / "benchmark-summaries.jsonl"
+    retained = [item for item in read_json_lines(summary_path) if not str(item.get("summary_id", "")).startswith("policy-")]
+    variant_summaries = []
+    for case_id in sorted({key[1] for key in by_variant_case if key[0] == args.baseline}):
+        left = by_variant_case.get((args.baseline, case_id))
+        right = by_variant_case.get((args.candidate, case_id))
+        if not left or not right:
+            continue
+        left_ok = left.get("deterministic_correct") is True and left.get("state") == "completed"
+        right_ok = right.get("deterministic_correct") is True and right.get("state") == "completed"
+        variant_summaries.append({
+            "summary_id": f"policy-{case_id}", "fixture_id": case_id,
+            "category": left.get("category", "focused_fix"),
+            "left_attempt_id": left["attempt_id"], "right_attempt_id": right["attempt_id"],
+            "left_model": f"{args.model} [{args.baseline}]", "right_model": f"{args.model} [{args.candidate}]",
+            "left_route": left["route"], "right_route": right["route"],
+            "left_tokens": left.get("tokens_total"), "right_tokens": right.get("tokens_total"),
+            "left_elapsed": left.get("elapsed_seconds"), "right_elapsed": right.get("elapsed_seconds"),
+            "left_correct": left_ok, "right_correct": right_ok,
+            "correct_first": left_ok and not right_ok, "tie": left_ok and right_ok,
+            "inconclusive": not left_ok and not right_ok, "token_reduction": None, "time_reduction": None,
+            "notes": f"policy candidate {'promoted' if promoted else 'rejected'} by correctness-first gate",
+        })
+    with summary_path.open("w", encoding="utf-8") as handle:
+        for item in [*retained, *variant_summaries]:
+            handle.write(json.dumps(item, separators=(",", ":")) + "\n")
+    print(json.dumps(result, sort_keys=True))
+    return 0 if correctness_retained else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=ROOT / "manifest.json")
@@ -289,9 +363,13 @@ def main() -> int:
     run.add_argument("--model", required=True); run.add_argument("--route", required=True)
     run.add_argument("--agent", default="coder"); run.add_argument("--opencode", default="opencode")
     run.add_argument("--case"); run.add_argument("--resume", action="store_true")
+    run.add_argument("--variant", default="baseline"); run.add_argument("--instruction-prefix", type=Path)
     compare = sub.add_parser("compare"); compare.add_argument("--left", required=True); compare.add_argument("--right", required=True)
+    select = sub.add_parser("select"); select.add_argument("--baseline", required=True); select.add_argument("--candidate", required=True); select.add_argument("--model", required=True)
     args = parser.parse_args()
-    return command_run(args) if args.command == "run" else command_compare(args)
+    if args.command == "run": return command_run(args)
+    if args.command == "compare": return command_compare(args)
+    return command_select(args)
 
 
 if __name__ == "__main__":

@@ -114,6 +114,18 @@ fi
 [[ -n $worker_task ]] || { echo "ERROR: task must not be empty" >&2; exit 2; }
 case "$worker_role" in helper|coder|reviewer) ;; *) usage ;; esac
 case "$worker_role" in
+  helper) max_task_chars=${CODEX_LOCAL_MAX_TASK_CHARS:-12000} ;;
+  coder) max_task_chars=${CODEX_LOCAL_MAX_TASK_CHARS:-24000} ;;
+  reviewer) max_task_chars=${CODEX_LOCAL_MAX_TASK_CHARS:-24000} ;;
+esac
+[[ "$max_task_chars" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: CODEX_LOCAL_MAX_TASK_CHARS must be a positive integer" >&2; exit 2;
+}
+(( ${#worker_task} <= max_task_chars )) || {
+  echo "ERROR: task packet exceeds the $max_task_chars character bound; pass issue references and bounded evidence instead of transcripts" >&2
+  exit 2
+}
+case "$worker_role" in
   coder) worker_workflow_stage=local-work ;;
   reviewer) worker_workflow_stage=review ;;
   helper) worker_workflow_stage=evidence ;;

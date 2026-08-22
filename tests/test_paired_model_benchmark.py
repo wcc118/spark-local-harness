@@ -77,3 +77,28 @@ def test_all_baselines_fail_their_hidden_oracle():
             text=True, capture_output=True,
         )
         assert result.returncode != 0, case["id"]
+
+
+def test_policy_selection_is_correctness_first_and_non_regressing(tmp_path: Path, capsys):
+    for variant, elapsed, tools, tokens in (("baseline", 10, 5, 1000), ("compact", 8, 4, 900)):
+        for index in range(10):
+            path = tmp_path / "attempts" / variant / str(index)
+            path.mkdir(parents=True)
+            (path / "attempt.json").write_text(json.dumps({
+                "policy_variant": variant, "deterministic_correct": True,
+                "state": "completed", "model": "coder-next",
+                "elapsed_seconds": elapsed, "tool_calls": tools, "tool_errors": 0,
+                "tokens_total": tokens, "corrections": 0,
+            }))
+    args = type("Args", (), {"output": tmp_path, "baseline": "baseline", "candidate": "compact", "model": "coder-next"})()
+    assert MODULE.command_select(args) == 0
+    decision = json.loads((tmp_path / "policy-selection.json").read_text())
+    assert decision["promoted"] is True
+    assert decision["decision"] == "compact"
+
+    broken = tmp_path / "attempts" / "compact" / "0" / "attempt.json"
+    payload = json.loads(broken.read_text())
+    payload["deterministic_correct"] = False
+    broken.write_text(json.dumps(payload))
+    assert MODULE.command_select(args) == 2
+    assert json.loads((tmp_path / "policy-selection.json").read_text())["promoted"] is False

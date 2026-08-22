@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_local_harness.dashboard import DashboardSource, make_handler, render_dashboard
+from codex_local_harness.dashboard import DashboardSource, _render_benchmark, make_handler, render_dashboard
 from codex_local_harness.control_plane import ControlBroker
 from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, PublicationFailure, append_record
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
@@ -18,6 +18,19 @@ from codex_local_harness.workflow import WorkflowEvent
 from codex_local_harness.operation_usage import OperationUsageSnapshot
 from codex_local_harness.plan_event import PlanEvent
 from codex_local_harness.dashboard import DASHBOARD_JS, render_dashboard
+
+
+def test_benchmark_flags_high_cost_divergence():
+    page = _render_benchmark({"benchmark_manifest": {"manifest_id": "frozen", "description": "test"},
+        "benchmark_attempts": [], "benchmark_summaries": [{
+            "fixture_id": "diagnosis", "category": "diagnosis", "left_model": "baseline",
+            "right_model": "candidate", "left_tokens": 575000, "right_tokens": 1343307,
+            "left_elapsed": 100.0, "right_elapsed": 240.0, "left_correct": True,
+            "right_correct": False, "correct_first": True, "tie": False, "inconclusive": False,
+            "notes": "candidate rejected", "left_attempt_id": "left", "right_attempt_id": "right",
+        }]})
+    assert "High-cost divergence" in page
+    assert "1,343,307 vs 575,000" in page
 
 
 def fixture_source(tmp_path):

@@ -22,5 +22,16 @@
     }
   },
   "interpretation": "Qwen token totals are partial timeout traces and are not an efficiency win. Correctness is evaluated first.",
-  "recommendation": "Use Coder Next for helper, coder, and reviewer defaults. Retain Qwen 3.8 only as an explicit experimental route pending runtime/prompt diagnosis."
+  "policy_variant": {
+    "candidate": "compact-v1",
+    "completed_correct": 8,
+    "hidden_oracle_passes": 10,
+    "timed_out": 2,
+    "elapsed_seconds": 684.484,
+    "tool_calls": 173,
+    "tool_errors": 52,
+    "observed_event_tokens": 2484342,
+    "promoted": false
+  },
+  "recommendation": "Keep the proven Coder Next baseline policy for helper and coder. Use the new tool-free exact-head reviewer policy. Reject compact-v1 because it failed the 10/10 completed correctness gate and increased every measured cost. Retain Qwen 3.8 only as an explicit experimental route pending runtime/prompt diagnosis."
 }
