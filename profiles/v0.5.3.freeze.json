@@ -1,0 +1,19 @@
+{
+  "release": "v0.5.3",
+  "predecessor": "v0.5.2",
+  "issues": [123],
+  "scope": "opencode-session-bridge",
+  "validation": {
+    "tests_passed": 407,
+    "real_bridge_smoke_passed": true,
+    "legacy_transport_retained": true,
+    "production_smoke_required_after_merge": true
+  },
+  "sha256": {
+    "worker": "c85c93cc838be4c32803abf4b1e8d70c540d39e1e243a7a1f9a42e0477297269",
+    "bridge": "54c5bc9269933072e46d844ae6ef35db968a452d0d8ef31688b8d398a7f89e1e",
+    "live_execution": "f93038d58d1c214f1fd9df0bf8df2359453fd56b9efe060dea6734a3d331e1f7",
+    "dashboard_unit": "e79ed6c76fc0645a3bde597f9723151332bce0d1fcf598773e5815f2fc597f01",
+    "installed_release": "26f29bfd995ed94b7e11952f49e739035939f1f64207a33f56d423c7394e0e83"
+  }
+}
