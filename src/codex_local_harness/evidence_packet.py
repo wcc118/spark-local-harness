@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Sequence
 SCHEMA_VERSION = 1
 MAX_CHANGED_FILES = 100
 MAX_DIFF_STAT_CHARS = 4_000
-MAX_PATCH_CHARS = 32_000
+MAX_PATCH_CHARS = 52_000
 MAX_PACKET_BYTES = 64_000
 MAX_PATH_CHARS = 512
 MAX_REPORTED_TASK_CHARS = 24_000
@@ -117,7 +117,9 @@ def build_reviewer_evidence_packet(
         if len(item) > MAX_PATH_CHARS or path.is_absolute() or ".." in path.parts:
             raise ValueError("Git returned an unsafe changed-file path")
     diff_stat_raw = run(["git", "diff", "--stat", "--compact-summary", revision], checkout).strip()
-    patch_raw = run(["git", "diff", "--no-ext-diff", "--unified=40", revision], checkout)
+    # Three lines preserve local interfaces without flooding the reviewer with
+    # unchanged context. The full patch digest still binds omitted evidence.
+    patch_raw = run(["git", "diff", "--no-ext-diff", "--unified=3", revision], checkout)
     run(["git", "diff", "--check", revision], checkout)
     if not diff_stat_raw or not patch_raw:
         raise ValueError("Git returned empty review evidence")

@@ -25,8 +25,10 @@ class FakeRun:
         self.files = files
         self.stat = stat
         self.patch = patch
+        self.calls = []
 
     def __call__(self, argv, cwd=None):
+        self.calls.append(tuple(argv))
         if argv[:2] == ["git", "merge-base"]:
             return BASE + "\n"
         if argv[:3] == ["git", "diff", "--name-only"]:
@@ -58,6 +60,12 @@ def test_packet_is_deterministic_head_bound_and_answer_neutral():
         assert prohibited not in serialized
     assert json.loads(serialized)["test_executables"][0][0] == "pytest"
     assert json.loads(serialized)["verification_exit_code"] == 0
+
+
+def test_packet_requests_compact_diff_context():
+    runner = FakeRun()
+    packet(runner)
+    assert any(call[:4] == ("git", "diff", "--no-ext-diff", "--unified=3") for call in runner.calls)
 
 
 def test_packet_bounds_files_stat_and_patch_with_full_patch_digest():
