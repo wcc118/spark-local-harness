@@ -386,7 +386,16 @@ class DashboardSource:
             key=lambda node: str(node.get("observed_at") or ""), reverse=True,
         )
         active_states = {"running-tests", "waiting-tool", "waiting-inference", "tool-error"}
-        current_run = next((node for node in workers if node.get("state") in active_states), workers[0] if workers else None)
+        def recently_active(node: dict[str, Any]) -> bool:
+            if node.get("state") not in active_states:
+                return False
+            try:
+                observed = datetime.fromisoformat(str(node.get("observed_at")).replace("Z", "+00:00"))
+            except ValueError:
+                return False
+            return 0 <= (current_time - observed).total_seconds() <= 300
+
+        current_run = next((node for node in workers if recently_active(node)), workers[0] if workers else None)
         known_sessions = {item["session_id"] for item in sessions}
         for worker in workers:
             worker_session = worker.get("session_id")
