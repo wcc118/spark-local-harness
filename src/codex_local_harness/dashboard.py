@@ -898,6 +898,117 @@ def _brain_button(item: dict[str, Any], index: int, projection_time: Any, *, edg
     )
 
 
+_GRAPH_COLUMNS = {
+    "memory": 40, "intake": 40, "executive": 225, "action": 410,
+    "routing": 595, "verification": 780, "tools": 780, "resource": 965,
+}
+
+
+def _render_execution_graph(
+    nodes: list[dict[str, Any]], edges: list[dict[str, Any]], projection_time: Any,
+) -> str:
+    """Render observable topology with stable positions and evidence-selectable elements."""
+    if not nodes:
+        return (
+            '<section class="execution-graph-shell" aria-labelledby="execution-graph-title">'
+            '<div class="graph-heading"><h3 id="execution-graph-title">Live execution graph</h3>'
+            '<span>Observable topology</span></div><p class="graph-empty">No execution nodes observed.</p></section>'
+        )
+    ordered = sorted(nodes, key=lambda item: (_brain_region(item), str(item.get("id") or "")))
+    column_counts: dict[str, int] = {}
+    positions: dict[str, tuple[float, float]] = {}
+    for node in ordered:
+        region = _brain_region(node)
+        row = column_counts.get(region, 0)
+        column_counts[region] = row + 1
+        node_id = str(node.get("id") or "")
+        if node_id:
+            positions[node_id] = (_GRAPH_COLUMNS[region], 54 + row * 86)
+    height = max(250, 120 + max(column_counts.values(), default=1) * 86)
+    edge_svg = []
+    for index, edge in enumerate(sorted(edges, key=lambda item: (
+        str(item.get("kind") or ""), str(item.get("source") or ""), str(item.get("target") or ""),
+    ))):
+        source_id, target_id = str(edge.get("source") or ""), str(edge.get("target") or "")
+        if source_id not in positions or target_id not in positions:
+            continue
+        source_x, source_y = positions[source_id]
+        target_x, target_y = positions[target_id]
+        x1, y1, x2, y2 = source_x + 150, source_y + 29, target_x, target_y + 29
+        if x2 <= x1:
+            x1, y1, x2, y2 = source_x + 75, source_y + 58, target_x + 75, target_y
+        control = max(35, abs(x2 - x1) / 2)
+        path = f"M {x1:.0f} {y1:.0f} C {x1 + control:.0f} {y1:.0f}, {x2 - control:.0f} {y2:.0f}, {x2:.0f} {y2:.0f}"
+        kind = str(edge.get("kind") or "signal")
+        state = _brain_state(edge.get("state"))
+        label = f"{source_id} → {target_id}"
+        selection_key = str(edge.get("id") or f"{source_id}:{target_id}:{kind}")
+        attrs = _microscope_attrs(
+            key=selection_key, label=label, kind=kind, state=state,
+            observed=edge.get("observed_at"), reason=edge.get("reason"),
+            source=edge.get("source_ref"), age=_brain_age(edge.get("observed_at"), projection_time),
+        )
+        temporal = " graph-edge-temporal" if kind == "compute" or "temporal" in str(edge.get("source_ref") or "") else ""
+        mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2 - 6
+        edge_svg.append(
+            f'<g id="graph-edge-{index}" class="graph-edge state-{state}{temporal}" role="button" tabindex="0" '
+            f'aria-label="{html.escape(label + ", " + kind + ", " + state, quote=True)}" {attrs}>'
+            f'<title>{html.escape(label)} · {html.escape(kind)} · {html.escape(state)}</title>'
+            f'<path class="graph-edge-line" d="{path}" marker-end="url(#graph-arrow)"/>'
+            f'<path class="graph-edge-hit" d="{path}"/><text x="{mid_x:.0f}" y="{mid_y:.0f}">{html.escape(kind)}</text></g>'
+        )
+    node_svg = []
+    for index, node in enumerate(ordered):
+        node_id = str(node.get("id") or "")
+        if node_id not in positions:
+            continue
+        x, y = positions[node_id]
+        state = _brain_state(node.get("state"))
+        kind = str(node.get("kind") or "unknown")
+        label = str(node.get("label") or node_id or "Unknown node")
+        files = node.get("files_observed") if isinstance(node.get("files_observed"), list) else []
+        attrs = _microscope_attrs(
+            key=node_id, label=label, kind=kind, state=state, observed=node.get("observed_at"),
+            reason=node.get("reason"), source=node.get("source_ref"),
+            age=_brain_age(node.get("observed_at"), projection_time),
+            extra={
+                "run": node.get("run_id"), "role": node.get("role"), "model": node.get("model"),
+                "repository": node.get("repository"), "issue": node.get("issue"),
+                "session": node.get("session_id"), "phase": node.get("phase"),
+                "elapsed": node.get("elapsed_seconds"), "tools": node.get("tool_calls"),
+                "tool-errors": node.get("tool_errors"), "tests": node.get("test_observations"),
+                "files": ", ".join(str(path) for path in files), "tokens": node.get("token_usage"),
+            },
+        )
+        short_label = label if len(label) <= 22 else label[:21] + "…"
+        node_svg.append(
+            f'<g id="graph-node-{index}" class="graph-node state-{state}" role="button" tabindex="0" '
+            f'aria-label="{html.escape(label + ", " + kind + ", " + state, quote=True)}" {attrs} '
+            f'transform="translate({x:.0f} {y:.0f})"><title>{html.escape(label)} · {html.escape(kind)} · {html.escape(state)}</title>'
+            '<rect width="150" height="58" rx="10"/><circle cx="15" cy="15" r="5"/>'
+            f'<text class="graph-node-kind" x="26" y="18">{html.escape(kind)}</text>'
+            f'<text class="graph-node-label" x="12" y="39">{html.escape(short_label)}</text>'
+            f'<text class="graph-node-state" x="12" y="52">{html.escape(state)}</text></g>'
+        )
+    legend = (
+        '<div class="graph-legend" aria-label="Graph legend"><span class="legend-active">active</span>'
+        '<span class="legend-waiting">waiting</span><span class="legend-error">error</span>'
+        '<span class="legend-history">completed / historical</span><span class="legend-temporal">temporal association</span></div>'
+    )
+    return (
+        '<section class="execution-graph-shell" aria-labelledby="execution-graph-title">'
+        '<div class="graph-heading"><h3 id="execution-graph-title">Live execution graph</h3>'
+        '<span>Choose any node or path for evidence</span></div><div class="execution-graph-scroll" tabindex="0" '
+        'aria-label="Scrollable live execution topology">'
+        f'<svg class="execution-graph" viewBox="0 0 1160 {height}" role="group" aria-labelledby="execution-graph-svg-title execution-graph-svg-desc">'
+        '<title id="execution-graph-svg-title">Live execution graph</title>'
+        '<desc id="execution-graph-svg-desc">Directed observable relationships among repositories, agents, models, tools, tests, and DGX compute.</desc>'
+        '<defs><marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">'
+        '<path d="M0,0 L8,4 L0,8 z"/></marker></defs>'
+        f'{"".join(edge_svg)}{"".join(node_svg)}</svg></div>{legend}</section>'
+    )
+
+
 def _render_agent_brain(projection: dict[str, Any]) -> str:
     nodes = list(projection.get("nodes") or ())[:128]
     edges = list(projection.get("edges") or ())[:192]
@@ -918,6 +1029,10 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         _brain_button(edge, index, projection_time, edge=True)
         for index, edge in enumerate(edges) if isinstance(edge, dict)
     ) or '<p class="brain-empty">No directed activity has been observed yet.</p>'
+    graph = _render_execution_graph(
+        [node for node in nodes if isinstance(node, dict)],
+        [edge for edge in edges if isinstance(edge, dict)], projection_time,
+    )
     source_state = str(projection.get("source_state") or "unavailable")
     diagnostics = list(projection.get("diagnostics") or ())
     diagnostic_html = "".join(f'<li>{html.escape(str(item))}</li>' for item in diagnostics)
@@ -974,9 +1089,7 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         '<h2 id="agent-brain-title">Agent brain</h2><p>Observable coordination, not private reasoning or chain-of-thought.</p></div>'
         f'<span class="brain-source state-{_brain_state(source_state)}">evidence · {html.escape(source_state)}</span></div>'
         f'{empty_note}{partial_note}{diagnostics_block}'
-        f'<div class="brain-map">{"".join(regions)}</div>'
-        '<div class="brain-lower"><section class="brain-signals" aria-labelledby="brain-signals-title">'
-        f'<h3 id="brain-signals-title">Observed signal paths</h3><div class="brain-edge-list">{signals}</div></section>'
+        f'<div class="brain-lower">{graph}'
         '<aside class="brain-inspector" aria-live="polite" aria-labelledby="brain-detail-title">'
         '<span class="eyebrow">SELECTED EVIDENCE</span><h3 id="brain-detail-title">Choose a node or signal</h3>'
         '<dl><div><dt>Kind</dt><dd id="brain-detail-kind">—</dd></div><div><dt>State</dt><dd id="brain-detail-state">—</dd></div>'
@@ -987,6 +1100,9 @@ def _render_agent_brain(projection: dict[str, Any]) -> str:
         '<div><dt>Elapsed</dt><dd id="brain-detail-elapsed">—</dd></div><div><dt>Activity</dt><dd id="brain-detail-activity">—</dd></div>'
         '<div><dt>Files</dt><dd id="brain-detail-files">—</dd></div><div><dt>Durable refs</dt><dd id="brain-detail-durable">—</dd></div>'
         '<div><dt>Tokens</dt><dd id="brain-detail-tokens">—</dd></div></dl></aside></div>'
+        '<details class="brain-evidence-details"><summary>Evidence details · regions and textual signal paths</summary>'
+        f'<div class="brain-map">{"".join(regions)}</div><section class="brain-signals" aria-labelledby="brain-signals-title">'
+        f'<h3 id="brain-signals-title">Observed signal paths</h3><div class="brain-edge-list">{signals}</div></section></details>'
         '<div class="microscope-grid"><section class="event-rail" aria-labelledby="event-rail-title"><h3 id="event-rail-title">Chronological evidence rail</h3>'
         f'<ol>{event_rail}</ol></section><section class="microscope-notices"><h3>Evidence handoffs</h3><ul>{handoff_items}</ul>'
         f'<h3>Neutral diagnostics</h3><ul>{signal_items}</ul><h3>Acceptance evidence</h3><ul class="criteria-list">{criteria_items}</ul>'
@@ -1688,6 +1804,7 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .brain-node,.brain-edge{{font:inherit;color:var(--ink);text-align:left;cursor:pointer;background:#18223a;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}} .brain-node:hover,.brain-node:focus-visible,.brain-edge:hover,.brain-edge:focus-visible,.brain-select-active{{outline:2px solid #8faeff;outline-offset:1px}} .brain-node strong,.brain-node small,.brain-edge span,.brain-edge small{{display:block;overflow-wrap:anywhere}} .brain-node-kind{{display:block;color:var(--muted);font-size:9px;text-transform:uppercase}} .brain-node-state{{display:inline-block;margin:5px 5px 0 0}} .brain-node small,.brain-edge small{{color:var(--muted);font-size:9px;margin-top:3px}}
 .state-active,.state-running,.state-running-tests{{border-color:var(--good)}} .state-waiting-inference,.state-waiting-tool,.state-pending{{border-color:var(--warn)}} .state-failed,.state-interrupted,.state-error{{border-color:var(--bad)}} .state-stale{{border-style:dashed;color:var(--warn)}} .state-unknown,.state-unavailable{{border-style:dotted;color:var(--muted)}} .state-completed{{border-color:#526483;color:#aebad5}}
 .brain-lower{{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);gap:10px;margin-top:10px}} .brain-signals,.brain-inspector{{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(11,16,32,.58);min-width:0}} .brain-edge-list{{display:flex;gap:6px;overflow:auto;padding:8px 2px 2px}} .brain-edge{{position:relative;flex:0 0 min(245px,75vw)}} .brain-edge.state-active,.brain-edge.state-running,.brain-edge.state-running-tests,.brain-edge.state-waiting-inference,.brain-edge.state-waiting-tool{{background:linear-gradient(90deg,#18223a,#243654,#18223a);background-size:200% 100%}}
+.execution-graph-shell{{min-width:0;border:1px solid var(--line);border-radius:12px;background:rgba(11,16,32,.58);padding:11px}} .graph-heading{{display:flex;justify-content:space-between;gap:10px;align-items:baseline}} .graph-heading h3{{margin:0}} .graph-heading span,.graph-empty{{color:var(--muted);font-size:10px}} .execution-graph-scroll{{overflow:auto;margin-top:8px;border:1px solid #202b45;border-radius:9px;background:radial-gradient(circle at 50% 30%,#17233b,#0b1020 70%);scrollbar-color:#41527b transparent}} .execution-graph-scroll:focus-visible{{outline:2px solid #8faeff;outline-offset:2px}} .execution-graph{{display:block;width:max(100%,900px);min-height:260px}} .graph-edge,.graph-node{{cursor:pointer;outline:none}} .graph-edge-line{{fill:none;stroke:#526483;stroke-width:2}} .graph-edge-hit{{fill:none;stroke:transparent;stroke-width:18}} .graph-edge text{{fill:#8f9bb8;font-size:9px;text-anchor:middle;paint-order:stroke;stroke:#0b1020;stroke-width:3px}} #graph-arrow path{{fill:#7183aa}} .graph-node rect{{fill:#18223a;stroke:#526483;stroke-width:1.5}} .graph-node circle{{fill:#7183aa}} .graph-node text{{pointer-events:none}} .graph-node-kind{{fill:#9aa6c3;font-size:8px;text-transform:uppercase}} .graph-node-label{{fill:#eef2ff;font-size:11px;font-weight:700}} .graph-node-state{{fill:#9aa6c3;font-size:8px}} .graph-node:focus-visible rect,.graph-node:hover rect,.graph-node.brain-select-active rect,.graph-edge:focus-visible .graph-edge-line,.graph-edge:hover .graph-edge-line,.graph-edge.brain-select-active .graph-edge-line{{stroke:#8faeff;stroke-width:3}} .graph-node.state-active rect,.graph-node.state-running rect,.graph-node.state-running-tests rect,.graph-edge.state-active .graph-edge-line,.graph-edge.state-running .graph-edge-line,.graph-edge.state-running-tests .graph-edge-line{{stroke:var(--good)}} .graph-node.state-waiting-inference rect,.graph-node.state-waiting-tool rect,.graph-node.state-pending rect,.graph-edge.state-waiting-inference .graph-edge-line,.graph-edge.state-waiting-tool .graph-edge-line,.graph-edge.state-pending .graph-edge-line{{stroke:var(--warn)}} .graph-node.state-failed rect,.graph-node.state-error rect,.graph-node.state-interrupted rect,.graph-edge.state-failed .graph-edge-line,.graph-edge.state-error .graph-edge-line,.graph-edge.state-interrupted .graph-edge-line{{stroke:var(--bad)}} .graph-node.state-completed{{opacity:.7}} .graph-edge-temporal .graph-edge-line{{stroke-dasharray:7 6}} .graph-legend{{display:flex;gap:11px;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:9px}} .graph-legend span::before{{content:"";display:inline-block;width:15px;border-top:2px solid #7183aa;margin-right:4px;vertical-align:middle}} .graph-legend .legend-active::before{{border-color:var(--good)}} .graph-legend .legend-waiting::before{{border-color:var(--warn)}} .graph-legend .legend-error::before{{border-color:var(--bad)}} .graph-legend .legend-temporal::before{{border-top-style:dashed}} .brain-evidence-details{{max-width:none;margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:0}} .brain-evidence-details>summary{{cursor:pointer;padding:10px 12px;color:var(--muted)}} .brain-evidence-details>.brain-map,.brain-evidence-details>.brain-signals{{margin:0 10px 10px}} @media (prefers-reduced-motion:no-preference){{.graph-edge.state-active .graph-edge-line,.graph-edge.state-running .graph-edge-line,.graph-edge.state-running-tests .graph-edge-line{{animation:graph-pulse 1.8s ease-in-out infinite}}@keyframes graph-pulse{{50%{{stroke-width:4;filter:drop-shadow(0 0 3px var(--good))}}}}}} @media (prefers-reduced-motion:reduce){{.graph-edge-line{{animation:none!important}}}}
 .brain-inspector dl{{margin:8px 0 0;display:grid;gap:7px}} .brain-inspector dl div{{display:grid;grid-template-columns:90px 1fr;gap:8px}} .brain-inspector dt{{color:var(--muted);font-size:10px;text-transform:uppercase}} .brain-inspector dd{{margin:0;overflow-wrap:anywhere}} .brain-teaching{{border-left:3px solid var(--warn);background:#272417;padding:9px 11px;margin-bottom:10px;color:var(--muted)}} .brain-diagnostics{{color:var(--warn);font-size:11px}}
 .microscope-grid{{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:10px;margin-top:10px}} .event-rail,.microscope-notices{{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(11,16,32,.58);min-width:0}} .event-rail h3,.microscope-notices h3{{margin:0 0 8px;font-size:13px}} .event-rail ol{{list-style:none;margin:0;padding:0 0 0 12px;border-left:2px solid var(--line);display:grid;gap:5px;max-height:360px;overflow:auto}} .event-rail li{{position:relative}} .event-rail li::before{{content:"";position:absolute;left:-17px;top:13px;width:8px;height:8px;border-radius:50%;background:#7085b3}}
 .brain-event{{display:grid;grid-template-columns:minmax(135px,.7fr) minmax(90px,.35fr) minmax(180px,1fr);gap:8px;width:100%;background:#141d31;border:1px solid var(--line);border-radius:7px;padding:7px;color:var(--ink);font:inherit;text-align:left;cursor:pointer}} .brain-event time,.brain-event small{{color:var(--muted);font-size:10px;overflow-wrap:anywhere}} .brain-event span{{overflow-wrap:anywhere}} .brain-event:hover,.brain-event:focus-visible{{outline:2px solid #8faeff;outline-offset:1px}}
@@ -2376,6 +2493,14 @@ DASHBOARD_JS = """(() => {
     if (event.target.classList.contains('run-filter')) {
       searchTerm = event.target.value;
       applyFilters();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    const graphChoice = event.target.closest && event.target.closest('.graph-node, .graph-edge');
+    if (graphChoice && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      showBrainDetail(graphChoice);
     }
   });
 

@@ -190,3 +190,52 @@ def test_strategy_lab_separates_derivations_denominators_and_annotations(tmp_pat
     assert "Facts and deterministic derivations above are computed" in page
     assert "&lt;b&gt;route may be slow&lt;/b&gt;" in page
     assert "<b>route may be slow</b>" not in page
+
+
+def test_live_execution_graph_is_accessible_deterministic_and_selectable(tmp_path) -> None:
+    projection = _projection()
+    snapshot = fixture_source(tmp_path).snapshot()
+    snapshot["live_execution"] = projection
+    first = render_dashboard(snapshot)
+    second = render_dashboard(snapshot)
+    graph_first = first.split('<section class="execution-graph-shell"', 1)[1].split("</section>", 1)[0]
+    graph_second = second.split('<section class="execution-graph-shell"', 1)[1].split("</section>", 1)[0]
+    assert graph_first == graph_second
+    assert '<svg class="execution-graph"' in first
+    assert 'aria-labelledby="execution-graph-svg-title execution-graph-svg-desc"' in first
+    assert 'class="graph-node state-waiting-inference" role="button" tabindex="0"' in first
+    assert 'class="graph-edge state-waiting-inference" role="button" tabindex="0"' in first
+    assert 'marker-end="url(#graph-arrow)"' in first
+    assert "event.key === 'Enter' || event.key === ' '" in DASHBOARD_JS
+
+
+def test_graph_temporal_edges_are_dashed_and_text_paths_are_disclosed(tmp_path) -> None:
+    projection = _projection()
+    projection["nodes"].append({
+        "id": "resource:dgx-spark", "kind": "resource", "label": "DGX Spark resources",
+        "state": "active", "observed_at": "2026-08-22T12:00:00+00:00",
+        "source_ref": "host-metrics", "reason": "host sample",
+    })
+    projection["edges"].append({
+        "source": "model:qwen", "target": "resource:dgx-spark", "kind": "compute",
+        "state": "active", "observed_at": "2026-08-22T12:00:00+00:00",
+        "source_ref": "host-metrics:temporal-association",
+        "reason": "per-process attribution is not inferred",
+    })
+    page = _page(tmp_path, projection)
+    assert "graph-edge-temporal" in page
+    assert "temporal association" in page
+    assert "Evidence details · regions and textual signal paths" in page
+    assert page.index("Live execution graph") < page.index("Observed signal paths")
+    assert "per-process attribution is not inferred" in page
+
+
+def test_graph_empty_state_mobile_and_reduced_motion_are_explicit(tmp_path) -> None:
+    projection = _projection(source_state="missing")
+    projection["nodes"] = []
+    projection["edges"] = []
+    page = _page(tmp_path, projection)
+    assert "No execution nodes observed." in page
+    assert "overflow:auto" in page
+    assert "prefers-reduced-motion:reduce" in page
+    assert ".graph-edge-line{animation:none!important}" in page
