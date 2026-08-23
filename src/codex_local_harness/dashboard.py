@@ -235,6 +235,7 @@ class DashboardSource:
 
     def snapshot(
         self, session_id: str | None = None, comparison: tuple[str, str] | None = None,
+        repository: str | None = None, observed_since: datetime | None = None,
     ) -> dict[str, Any]:
         statuses: list[dict[str, Any]] = []
         runs = self._load(self.runs, "runs", read_jsonl, statuses)
@@ -259,6 +260,40 @@ class DashboardSource:
         benchmark_manifest = self._load_benchmark_manifest(statuses) if self.benchmark_manifest else None
         benchmark_attempts = self._load_benchmark_attempts(statuses) if self.benchmark_attempts else ()
         benchmark_summaries = self._load_benchmark_summaries(statuses) if self.benchmark_summaries else ()
+        repositories = sorted({
+            value for value in (
+                *(item.repository for item in runs),
+                *(item.repository for item in workflow),
+            ) if value
+        })
+        run_times: dict[str, datetime] = {}
+        for record in (*adjudications, *lifecycle):
+            try:
+                stamp = datetime.fromisoformat(record.observed_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            run_times[record.run_id] = max(run_times.get(record.run_id, stamp), stamp)
+        scoped_ids: set[str] | None = None
+        if repository is not None:
+            scoped_ids = {item.run_id for item in runs if item.repository == repository}
+            scoped_ids.update(item.run_id for item in workflow if item.repository == repository and item.run_id)
+            workflow = tuple(item for item in workflow if item.repository == repository)
+            plan_events = tuple(item for item in plan_events if item.repository == repository)
+            usage_snapshots = tuple(item for item in usage_snapshots if item.repository == repository)
+        if observed_since is not None:
+            recent_ids = {run_id for run_id, stamp in run_times.items() if stamp >= observed_since}
+            scoped_ids = recent_ids if scoped_ids is None else scoped_ids & recent_ids
+            workflow = tuple(item for item in workflow if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since)
+            plan_events = tuple(item for item in plan_events if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since)
+            usage_snapshots = tuple(item for item in usage_snapshots if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since)
+        if scoped_ids is not None:
+            runs = tuple(item for item in runs if item.run_id in scoped_ids)
+            adjudications = tuple(item for item in adjudications if item.run_id in scoped_ids)
+            lifecycle = tuple(item for item in lifecycle if item.run_id in scoped_ids)
+            publication_failures = tuple(item for item in publication_failures if item.run_id in scoped_ids)
+            benchmark_manifest = None
+            benchmark_attempts = ()
+            benchmark_summaries = ()
         views = build_run_views(
             runs, adjudications, lifecycle,
         )
@@ -331,8 +366,20 @@ class DashboardSource:
                 "token_usage": view.local_tokens + view.frontier_tokens,
             }
         live_execution = project_live_execution(
-            self.v5_runs, now=current_time, session_id=selected, run_evidence=run_evidence,
+            self.v5_runs, now=current_time, session_id=selected, repository=repository,
+            observed_since=observed_since, run_evidence=run_evidence,
         )
+        repositories = sorted(set(repositories) | {
+            str(node["repository"]) for node in live_execution.get("nodes", ()) if node.get("repository")
+        })
+        workers = sorted(
+            (node for node in live_execution.get("nodes", ()) if node.get("kind") == "worker"),
+            key=lambda node: str(node.get("observed_at") or ""), reverse=True,
+        )
+        active_states = {"running-tests", "waiting-tool", "waiting-inference", "tool-error"}
+        current_run = next((node for node in workers if node.get("state") in active_states), workers[0] if workers else None)
+        latest_signal = next((signal for signal in reversed(live_execution.get("signals", ()))
+                              if current_run and signal.get("run_id") == current_run.get("run_id")), None)
         criterion_states = []
         for view in views:
             if view.contradiction:
@@ -373,6 +420,11 @@ class DashboardSource:
             "plans": plans,
             "sessions": sessions,
             "selected_session": selected,
+            "selected_repository": repository,
+            "observed_since": observed_since.isoformat() if observed_since else None,
+            "repositories": repositories,
+            "current_run": current_run,
+            "current_run_signal": latest_signal,
             "operation_usage": operation_usage,
             "accounting": accounting,
             "superseded_operations": sum(operation["current_state"] == "superseded" for operation in operations),
@@ -1134,11 +1186,23 @@ def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -
         def do_GET(self) -> None:  # noqa: N802
             parsed_url = urlsplit(self.path)
             route = parsed_url.path
-            requested_session = parse_qs(parsed_url.query).get("session", [None])[0]
             query = parse_qs(parsed_url.query)
+            requested_session = query.get("session", [None])[0]
+            requested_repository = query.get("repository", [None])[0]
+            requested_since = query.get("since", [None])[0]
             compare_values = (query.get("compare_a", [""])[0], query.get("compare_b", [""])[0])
             comparison = compare_values if all(compare_values) else None
             try:
+                for value in (requested_session, requested_repository):
+                    if value is not None and (len(value) > 256 or any(ord(char) < 32 for char in value)):
+                        raise ControlError(400, "invalid-focus")
+                observed_since = None
+                if requested_since:
+                    if len(requested_since) > 64:
+                        raise ControlError(400, "invalid-since")
+                    observed_since = datetime.fromisoformat(requested_since.replace("Z", "+00:00"))
+                    if observed_since.tzinfo is None:
+                        raise ControlError(400, "invalid-since")
                 if route == "/favicon.svg":
                     self._send(HTTPStatus.OK, "image/svg+xml", FAVICON_SVG.encode())
                     return
@@ -1153,7 +1217,9 @@ def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -
                     payload = broker.snapshot(run_id)
                     self._send(HTTPStatus.OK, "application/json", json.dumps(payload).encode())
                     return
-                snapshot = source.snapshot(requested_session, comparison)
+                snapshot = source.snapshot(
+                    requested_session, comparison, requested_repository, observed_since,
+                )
                 if route == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", render_dashboard(snapshot).encode())
                 elif route == "/api/snapshot":
@@ -1361,11 +1427,38 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         f'{"" if item["session_id"] == "legacy" else " · " + html.escape(item["session_id"][:8])}</option>'
         for item in snapshot["sessions"]
     ]
-    session_picker = (
-        '<form class="session-picker" method="get"><label>Session '
-        f'<select name="session" id="session-select">{"".join(session_options)}</select></label> '
-        '<button type="submit" class="session-submit">Go</button></form>'
+    repository_options = ['<option value="">All repositories</option>'] + [
+        f'<option value="{html.escape(item, quote=True)}"{" selected" if snapshot.get("selected_repository") == item else ""}>{html.escape(item)}</option>'
+        for item in snapshot.get("repositories", ())
+    ]
+    since_input = (
+        f'<input type="hidden" name="since" value="{html.escape(snapshot["observed_since"], quote=True)}">'
+        if snapshot.get("observed_since") else ""
     )
+    session_picker = (
+        '<section class="cockpit"><div><span class="eyebrow">LIVE COCKPIT</span><h2>What is working now?</h2></div>'
+        '<form class="session-picker" method="get"><label>Repository '
+        f'<select name="repository" id="repository-select">{"".join(repository_options)}</select></label><label>Session '
+        f'<select name="session" id="session-select">{"".join(session_options)}</select></label>{since_input}'
+        '<button type="submit" class="session-submit">Focus</button></form>'
+        '<div class="cockpit-actions"><button type="button" id="start-fresh-btn">Start Fresh Session</button>'
+        '<button type="button" id="show-history-btn">Show History</button>'
+        '<button type="button" id="reset-view-btn">Reset View</button></div></section>'
+    )
+    current = snapshot.get("current_run")
+    signal = snapshot.get("current_run_signal")
+    if current:
+        current_run_html = (
+            '<section class="current-run"><span class="eyebrow">CURRENT RUN</span>'
+            f'<h2>{html.escape(str(current.get("role") or "worker"))} · {html.escape(str(current.get("state") or "unknown"))}</h2>'
+            f'<p>{html.escape(str(current.get("model") or "unknown model"))}</p>'
+            f'<dl><div><dt>Repository</dt><dd>{html.escape(str(current.get("repository") or "unknown"))}</dd></div>'
+            f'<div><dt>Run</dt><dd><code>{html.escape(str(current.get("run_id") or "unknown"))}</code></dd></div>'
+            f'<div><dt>Tools</dt><dd>{html.escape(str(current.get("tool_calls", 0)))}</dd></div>'
+            f'<div><dt>Latest signal</dt><dd>{html.escape(str((signal or {}).get("reason") or current.get("reason") or "No signal"))}</dd></div></dl></section>'
+        )
+    else:
+        current_run_html = '<section class="current-run"><span class="eyebrow">CURRENT RUN</span><h2>No run in this focus</h2><p>Start a worker or show history.</p></section>'
     accounting_html = _accounting_html(snapshot["accounting"], views)
     brain_html = _render_agent_brain(snapshot.get("live_execution", {}))
     strategy_html = _render_strategy(
@@ -1388,6 +1481,7 @@ main{{width:100%;max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-s
 .operation-pair{{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:14px;min-width:0}} .operation-pair .operation{{margin:0}} .running-plan{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}} .plan-head{{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}} .plan-objective{{margin:9px 0;color:var(--ink)}} .plan-steps{{list-style:none;padding:0;margin:10px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px}} .plan-step{{position:relative;border:1px solid var(--line);border-radius:7px;padding:8px;min-width:0;overflow-wrap:anywhere}} .plan-step.pending{{color:#626b7c;border-color:#343946;background:#181b22}} .plan-step.active{{border-color:var(--warn)}} .plan-step.completed,.plan-step.skipped{{color:var(--muted)}} .plan-step.blocked{{border-color:var(--bad)}} .plan-step.active::after{{content:"";position:absolute;top:4px;left:4px;width:6px;height:6px;border-radius:50%;background:#fff5bd;box-shadow:0 0 3px rgba(243,201,105,.5)}} @media (prefers-reduced-motion:no-preference){{.plan-step.active::after{{animation:plan-focus 4s linear infinite}}@keyframes plan-focus{{0%,100%{{top:4px;left:4px}}25%{{top:4px;left:calc(100% - 10px)}}50%{{top:calc(100% - 10px);left:calc(100% - 10px)}}75%{{top:calc(100% - 10px);left:4px}}}}}} @media (prefers-reduced-motion:reduce){{.plan-step.active::after{{top:4px;right:4px;left:auto}}}} .plan-state{{display:block;font-size:10px;text-transform:uppercase;color:var(--muted)}} .plan-diagnostic{{display:inline-block;margin:7px 5px 0 0;color:var(--bad);font-size:11px}} .plan-change{{border-left:3px solid var(--warn);padding-left:8px;color:var(--warn)}} .plan-history{{margin-top:10px;color:var(--muted)}}
 .session-picker{{margin:0 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px;font:inherit;max-width:100%}}
 .session-submit{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer}} .session-submit:hover{{color:var(--ink)}}
+.cockpit,.current-run{{background:var(--panel);border:1px solid #41527b;border-radius:12px;padding:14px;margin-bottom:14px}} .cockpit{{display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,2fr);gap:10px;align-items:center}} .cockpit h2,.current-run h2{{margin:2px 0}} .cockpit-actions{{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}} .cockpit-actions button{{background:#18223a;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:8px 12px;font:inherit;cursor:pointer}} #start-fresh-btn{{border-color:var(--good)}} .current-run{{border-left:4px solid var(--good)}} .current-run p{{color:var(--muted)}} .current-run dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:0}} .current-run dl div{{min-width:0}} .current-run dt{{color:var(--muted);font-size:10px;text-transform:uppercase}} .current-run dd{{margin:2px 0;overflow-wrap:anywhere}} @media(max-width:560px){{.cockpit{{grid-template-columns:1fr}}.session-picker{{align-items:stretch;flex-direction:column}}.cockpit-actions button{{flex:1 1 100%}}}}
 .source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
 th,td{{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}} th{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
 tr.contradiction{{background:#3a1e2a}} .passed{{color:var(--good)}} .failed,.interrupted,.timed-out,.cancelled{{color:var(--bad)}} .unadjudicated,.unknown{{color:var(--warn)}}
@@ -1484,6 +1578,8 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 </style>
 </head><body><main>
 <h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
+{session_picker}
+{current_run_html}
 {source_banner}
 {brain_html}
 {strategy_html}
@@ -1491,7 +1587,6 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 <details class="diagnostic-secondary"><summary>Operational verdict · {html.escape(str(verdict.get('headline', 'unknown')))}</summary>{verdict_html}</details>
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>
-{session_picker}
 <h2>Division of labor</h2>{accounting_html}
 <h2>Current operations</h2>{operations}
 <h2>Run history</h2>
@@ -1934,6 +2029,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 DASHBOARD_JS = """(() => {
+  const focusUrl = () => new URL(window.location.href);
+  const navigateFocus = (mutate) => { const url = focusUrl(); mutate(url.searchParams); window.location.assign(url); };
+  const savedCutoff = localStorage.getItem('agentBrainSince');
+  if (savedCutoff && !focusUrl().searchParams.has('since')) {
+    const restored = focusUrl(); restored.searchParams.set('since', savedCutoff); window.location.replace(restored);
+  }
   let initial = true;
   let activeFilter = null;
   let searchTerm = '';
@@ -2046,6 +2147,23 @@ DASHBOARD_JS = """(() => {
   };
 
   document.addEventListener('click', (event) => {
+    if (event.target.closest('#start-fresh-btn')) {
+      const since = new Date().toISOString();
+      localStorage.setItem('agentBrainSince', since);
+      navigateFocus((params) => { params.set('since', since); params.delete('session'); });
+      return;
+    }
+    if (event.target.closest('#show-history-btn')) {
+      localStorage.removeItem('agentBrainSince');
+      navigateFocus((params) => params.delete('since'));
+      return;
+    }
+    if (event.target.closest('#reset-view-btn')) {
+      localStorage.removeItem('agentBrainSince');
+      activeFilter = null; searchTerm = ''; sortState = null; selectedBrainKey = null; openDetailIds.clear();
+      window.location.assign(window.location.pathname);
+      return;
+    }
     const brainChoice = event.target.closest('[data-brain-key]');
     if (brainChoice) {
       showBrainDetail(brainChoice);
@@ -2077,7 +2195,7 @@ DASHBOARD_JS = """(() => {
   });
 
   document.addEventListener('change', (event) => {
-    if (event.target.id === 'session-select' && event.target.form) {
+    if ((event.target.id === 'session-select' || event.target.id === 'repository-select') && event.target.form) {
       event.target.form.submit();
     }
   });

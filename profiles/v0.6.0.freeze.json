@@ -7,12 +7,12 @@
   "sha256": {
     "benchmark": "0324b05589fc6360808e591a98c9a7505faba187d7f7cd7a2235e5ab0ed8c15d",
     "benchmark_cli": "ec8968f79899133be6729a6fc7b1d7f3439380135cd9e1468024561cd36f0724",
-    "dashboard": "53397db7f8fc2ea9e24aa6353ac22a2bda47e5acb044086f754fe3e8738881d4",
+    "dashboard": "2ade0a59d3f2e5d70f03415d234fbd1453054347276dbb0490dbc7c4d2351e5a",
     "manifest": "cce6769c9917cf2cec3a30c020c8f19c9eb074d43cde3ff5957cb08b9852a0b3",
     "paired_runner": "c2aef42265e193b8a23967f85b5df4eaa58805f7feb39d620cd6724f66c2ee1e",
     "routes": "f5c281deff52b0ec19f9aa3f7b646618a7420e2c72f26661247eae7130512dfa",
     "reviewer": "fbd641ffe4eaf707b4d61fcafc42cebc0d84b31958a22d84915cac6edf89f3dd",
-    "worker": "80e1d94ff44752261e03a477a537d9a344d3bdf3788e8160ff4099c6057027c0",
+    "worker": "b503f7c589bab3167f31333ddb6be43618bcf074cfb8a5a45cd672fd4071b16e",
     "dashboard_unit": "9baa7c77a7cd554fb62a4333f778b8fd58e762cba6d09e94a44a2bdd8e7ea819"
   }
 }

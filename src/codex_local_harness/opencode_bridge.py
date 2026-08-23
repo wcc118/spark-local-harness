@@ -110,7 +110,7 @@ def _events(base_url: str, password: str, timeout: float):
 
 def run_bridge(
     *, base_url: str, password: str, run_id: str, task: str, agent: str,
-    model: str, log: Path, control: Path, secret: Path, timeout: float,
+    model: str, repository: str | None = None, log: Path, control: Path, secret: Path, timeout: float,
 ) -> int:
     deadline = time.monotonic() + timeout
     diagnostics = ExecutionDiagnostics(agent, load_stage_budgets(os.environ.get("CODEX_LOCAL_STAGE_BUDGETS")))
@@ -150,6 +150,7 @@ def run_bridge(
     _atomic_json(control, {
         "schema_version": 1, "run_id": run_id, "session_id": session_id,
         "base_url": base_url, "credential_file": str(secret), "state": "active",
+        "role": agent, "model": model, "repository": repository,
         "effective_policy": effective_policy,
     })
 
@@ -213,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-file", type=Path, required=True)
     parser.add_argument("--agent", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--repository")
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--control", type=Path, required=True)
     parser.add_argument("--secret", type=Path, required=True)
@@ -225,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_bridge(
             base_url=args.base_url, password=password, run_id=args.run_id,
             task=args.task_file.read_text(encoding="utf-8"), agent=args.agent,
-            model=args.model, log=args.log, control=args.control, secret=args.secret,
+            model=args.model, repository=args.repository, log=args.log, control=args.control, secret=args.secret,
             timeout=args.timeout,
         )
     except (BridgeError, OSError, ValueError) as exc:

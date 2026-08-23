@@ -129,6 +129,7 @@ def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, 
             "source": "opencode-server-resolved", "evaluation_order": ["global", "role:coder"],
             "global": {"bash": "ask"}, "role": {"edit": "allow"},
         },
+        "role": "coder", "model": "vllm/model-name", "repository": None,
     }
     assert not secret.exists()
     events = [json.loads(line) for line in log.read_text().splitlines()]
