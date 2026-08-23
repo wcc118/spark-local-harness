@@ -312,7 +312,7 @@ def test_render_dashboard_emits_single_title(tmp_path):
     # Regression assertion: exactly one title element with the expected text
     assert page.count("<title>") == 1
     assert page.count("</title>") == 1
-    assert "<title>Codex agent harness diagnostics</title>" in page
+    assert "<title>Agent Brain · Agent Brain</title>" in page
 
 
 def test_publication_failures_are_visible_without_hiding_valid_runs(tmp_path):
@@ -627,7 +627,7 @@ def test_session_options_show_a_readable_label_not_a_bare_id(tmp_path):
         "b", "issue-19", "post-merge", "passed", "2026-08-16T00:01:00Z", 19,
     ))  # no session_id -> falls into the "legacy" bucket
     page = render_dashboard(DashboardSource(base.runs, base.adjudications, base.lifecycle, workflow).snapshot())
-    assert "owner/repo#19 · active · 1 ops · thread-a" in page
+    assert "repo · Issue 19 · Local Work · active · 1 ops · thread-a" in page
     assert "Legacy (no session ID) · completed · 1 ops</option>" in page
 
 
@@ -1166,3 +1166,32 @@ def test_focused_cockpit_has_non_destructive_view_controls(tmp_path):
     assert 'id="repository-select"' in page
     assert "Start Fresh Session" in page
     assert "localStorage.setItem('agentBrainSince'" in DASHBOARD_JS
+
+
+def test_repository_session_identity_and_spark_pulse_are_prominent(tmp_path):
+    snapshot = fixture_source(tmp_path).snapshot()
+    snapshot["identity"] = {
+        "scope_repository": "wcc118/codex-local-harness",
+        "active_repository": "/work/another-project",
+        "harness_repository": "wcc118/codex-local-harness",
+        "mismatch": True,
+        "session_label": "codex-local-harness · Issue 146 · Coder",
+        "session_id": "opaque-session-id",
+        "issue": 146, "pull_request": 147, "branch": "issue-146", "commit": "abc123",
+    }
+    snapshot["spark_metrics"] = {
+        "source_state": "ok", "memory_semantics": "unified-system-memory",
+        "observed_at": "2026-08-23T02:00:00Z", "diagnostics": [],
+        "gpu_utilization_percent": 72.0, "memory_used_bytes": 90, "memory_total_bytes": 100,
+        "memory_available_bytes": 10 * 1024 ** 3, "swap_used_bytes": 2,
+        "swap_total_bytes": 10, "gpu_temperature_c": 50.0, "gpu_power_watts": 40.0,
+        "gpu_sm_clock_mhz": 2400.0, "samples": [],
+    }
+    page = render_dashboard(snapshot)
+    assert "wcc118/codex-local-harness" in page
+    assert "codex-local-harness · Issue 146 · Coder" in page
+    assert "opaque-session-id" in page
+    assert "while the active worker is in /work/another-project" in page
+    assert "GB10 unified system memory—not dedicated VRAM" in page
+    assert "GPU utilization" in page and "72%" in page
+    assert "<title>codex-local-harness · codex-local-harness · Issue 146 · Coder · Agent Brain</title>" in page
