@@ -23,7 +23,12 @@ from .operation_usage import OperationUsageSnapshot, derive_usage
 from .plan_event import derive_plans, read_plan_records
 from .read_model import RunView, build_run_views, summarize_views
 from .strategy import derive_strategy, read_annotations
+from .spark_metrics import SparkMetricsSampler
 from .workflow import derive_operations, read_workflow_records
+
+
+HARNESS_REPOSITORY = "wcc118/codex-local-harness"
+_SPARK_SAMPLER = SparkMetricsSampler()
 
 
 @dataclass(frozen=True)
@@ -302,7 +307,7 @@ class DashboardSource:
         plans = derive_plans(plan_events, now=self._current_time())
         current_operations = [operation for operation in operations if operation["current_state"] != "superseded"]
         sessions = _derive_sessions(current_operations, self._current_time(), plans)
-        selected = session_id if session_id and any(item["session_id"] == session_id for item in sessions) else None
+        selected = session_id
         selected_run_ids: set[str] | None = None
         if selected is not None:
             current_operations = [item for item in current_operations if (item["session_id"] or "legacy") == selected]
@@ -369,17 +374,76 @@ class DashboardSource:
             self.v5_runs, now=current_time, session_id=selected, repository=repository,
             observed_since=observed_since, run_evidence=run_evidence,
         )
+        identity_execution = live_execution if repository is None else project_live_execution(
+            self.v5_runs, now=current_time, session_id=selected,
+            observed_since=observed_since, run_evidence=run_evidence,
+        )
         repositories = sorted(set(repositories) | {
             str(node["repository"]) for node in live_execution.get("nodes", ()) if node.get("repository")
         })
         workers = sorted(
-            (node for node in live_execution.get("nodes", ()) if node.get("kind") == "worker"),
+            (node for node in identity_execution.get("nodes", ()) if node.get("kind") == "worker"),
             key=lambda node: str(node.get("observed_at") or ""), reverse=True,
         )
         active_states = {"running-tests", "waiting-tool", "waiting-inference", "tool-error"}
         current_run = next((node for node in workers if node.get("state") in active_states), workers[0] if workers else None)
+        known_sessions = {item["session_id"] for item in sessions}
+        for worker in workers:
+            worker_session = worker.get("session_id")
+            if not worker_session or worker_session in known_sessions:
+                continue
+            sample = {
+                "repository": worker.get("repository"), "issue": worker.get("issue"),
+                "role": worker.get("role"), "updated_at": worker.get("observed_at"),
+            }
+            sessions.append({
+                "session_id": worker_session, "status": (
+                    "active" if worker.get("state") in active_states else "completed"
+                ), "updated_at": worker.get("observed_at") or "", "operations": 0,
+                "label": _session_label(worker_session, sample),
+            })
+            known_sessions.add(worker_session)
+        sessions.sort(key=lambda item: (item["updated_at"], item["session_id"]), reverse=True)
+        session_by_id = {item["session_id"]: item for item in sessions}
+        if current_run:
+            current_run["session_label"] = session_by_id.get(
+                current_run.get("session_id"), {},
+            ).get("label")
         latest_signal = next((signal for signal in reversed(live_execution.get("signals", ()))
                               if current_run and signal.get("run_id") == current_run.get("run_id")), None)
+        spark_metrics = _SPARK_SAMPLER.sample(current_time)
+        resource_state = "unavailable" if spark_metrics["source_state"] == "unavailable" else "active"
+        live_execution.setdefault("nodes", []).append({
+            "id": "resource:dgx-spark", "kind": "resource", "label": "DGX Spark resources",
+            "state": resource_state, "observed_at": spark_metrics["observed_at"],
+            "source_ref": "host-metrics:nvidia-smi+/proc/meminfo",
+            "reason": "read-only host utilization sample; unified memory semantics",
+            "gpu_utilization_percent": spark_metrics.get("gpu_utilization_percent"),
+            "memory_available_bytes": spark_metrics.get("memory_available_bytes"),
+        })
+        for model_node in (node for node in live_execution.get("nodes", ()) if node.get("kind") == "model"):
+            live_execution.setdefault("edges", []).append({
+                "source": model_node["id"], "target": "resource:dgx-spark", "kind": "compute",
+                "state": resource_state, "observed_at": spark_metrics["observed_at"],
+                "source_ref": "host-metrics:temporal-association",
+                "reason": "model and host metrics are contemporaneous; per-process attribution is not inferred",
+            })
+        scope_repository = repository or (current_run or {}).get("repository")
+        active_repository = (current_run or {}).get("repository")
+        identity = {
+            "scope_repository": scope_repository,
+            "active_repository": active_repository,
+            "harness_repository": HARNESS_REPOSITORY,
+            "mismatch": bool(repository and active_repository and repository != active_repository),
+            "session_label": session_by_id.get(selected, {}).get("label") if selected else (
+                (current_run or {}).get("session_label")
+            ),
+            "session_id": selected or (current_run or {}).get("session_id"),
+            "branch": (current_run or {}).get("branch"),
+            "commit": (current_run or {}).get("commit"),
+            "issue": (current_run or {}).get("issue"),
+            "pull_request": (current_run or {}).get("pull_request"),
+        }
         criterion_states = []
         for view in views:
             if view.contradiction:
@@ -425,6 +489,8 @@ class DashboardSource:
             "repositories": repositories,
             "current_run": current_run,
             "current_run_signal": latest_signal,
+            "identity": identity,
+            "spark_metrics": spark_metrics,
             "operation_usage": operation_usage,
             "accounting": accounting,
             "superseded_operations": sum(operation["current_state"] == "superseded" for operation in operations),
@@ -715,6 +781,7 @@ _BRAIN_REGIONS = (
     ("verification", "Review + verification", "Reviewer and test evidence"),
     ("tools", "Tools", "Observable external actions"),
     ("memory", "Durable memory", "Issue, workflow, and retained result state"),
+    ("resource", "DGX compute", "Live GPU and unified-memory pressure"),
 )
 _BRAIN_STATES = {
     "active", "running", "running-tests", "waiting-inference", "waiting-tool",
@@ -738,6 +805,8 @@ def _brain_region(node: dict[str, Any]) -> str:
         return "tools"
     if kind in {"workflow", "issue", "memory"}:
         return "memory"
+    if kind == "resource":
+        return "resource"
     return "action"
 
 
@@ -1304,13 +1373,16 @@ def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -
             self.end_headers()
             fingerprint = None
             heartbeat = time.monotonic()
+            resource_refresh = time.monotonic()
             try:
                 while True:
                     current = source.fingerprint()
-                    if current != fingerprint:
+                    now = time.monotonic()
+                    if current != fingerprint or now - resource_refresh >= 2:
                         self.wfile.write(b"event: snapshot\ndata: {\"changed\":true}\n\n")
                         self.wfile.flush()
                         fingerprint = current
+                        resource_refresh = now
                     elif time.monotonic() - heartbeat >= 15:
                         self.wfile.write(b": heartbeat\n\n")
                         self.wfile.flush()
@@ -1325,9 +1397,99 @@ def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -
     return DashboardHandler
 
 
+def _metric_sparkline(samples: list[dict[str, Any]], key: str, label: str) -> str:
+    values = [item.get(key) for item in samples[-60:]]
+    numeric = [float(value) for value in values if isinstance(value, (int, float))]
+    if len(numeric) < 2:
+        return '<span class="spark-unavailable">trend unavailable</span>'
+    low, high = min(numeric), max(numeric)
+    spread = max(high - low, 1.0)
+    points = " ".join(
+        f"{index * 100 / max(1, len(numeric) - 1):.1f},{28 - ((value - low) / spread * 24):.1f}"
+        for index, value in enumerate(numeric)
+    )
+    return (
+        f'<svg class="resource-spark" viewBox="0 0 100 32" role="img" aria-label="{html.escape(label)}">'
+        f'<polyline points="{points}"/></svg>'
+    )
+
+
+def _spark_pulse_html(metrics: dict[str, Any]) -> str:
+    def percent(used: Any, total: Any) -> float | None:
+        if not isinstance(used, (int, float)) or not isinstance(total, (int, float)) or total <= 0:
+            return None
+        return min(100.0, max(0.0, used / total * 100))
+
+    def display(value: Any, suffix: str = "") -> str:
+        return "Unavailable" if not isinstance(value, (int, float)) else f"{value:.0f}{suffix}"
+
+    memory_percent = percent(metrics.get("memory_used_bytes"), metrics.get("memory_total_bytes"))
+    swap_percent = percent(metrics.get("swap_used_bytes"), metrics.get("swap_total_bytes"))
+    available = metrics.get("memory_available_bytes")
+    available_gib = available / (1024 ** 3) if isinstance(available, (int, float)) else None
+    gpu = metrics.get("gpu_utilization_percent")
+    pressure = "critical" if memory_percent is not None and memory_percent >= 95 else (
+        "warning" if memory_percent is not None and memory_percent >= 85 else "healthy"
+    )
+    samples = metrics.get("samples") if isinstance(metrics.get("samples"), list) else []
+    cards = (
+        ("GPU utilization", display(gpu, "%"), "gpu_utilization_percent", "GPU utilization trend"),
+        ("Unified memory", display(memory_percent, "%"), "memory_used_bytes", "Unified memory trend"),
+        ("Memory available", "Unavailable" if available_gib is None else f"{available_gib:.1f} GiB", "memory_available_bytes", "Available memory trend"),
+        ("Swap used", display(swap_percent, "%"), "swap_used_bytes", "Swap use trend"),
+        ("Temperature", display(metrics.get("gpu_temperature_c"), "°C"), "gpu_temperature_c", "GPU temperature trend"),
+        ("Power", display(metrics.get("gpu_power_watts"), " W"), "gpu_power_watts", "GPU power trend"),
+        ("SM clock", display(metrics.get("gpu_sm_clock_mhz"), " MHz"), "gpu_sm_clock_mhz", "SM clock trend"),
+    )
+    cards_html = "".join(
+        f'<section class="resource-card"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong>'
+        f'{_metric_sparkline(samples, key, trend)}</section>'
+        for label, value, key, trend in cards
+    )
+    diagnostics = " · ".join(str(item) for item in metrics.get("diagnostics", ()))
+    return (
+        f'<section class="spark-pulse state-{pressure}" aria-labelledby="spark-pulse-title">'
+        '<div class="spark-pulse-head"><div><span class="eyebrow">DGX SPARK · LIVE RESOURCES</span>'
+        '<h2 id="spark-pulse-title">Spark Pulse</h2><p>GB10 unified system memory—not dedicated VRAM.</p></div>'
+        f'<span class="brain-source">{html.escape(str(metrics.get("source_state") or "unavailable"))}</span></div>'
+        f'<div class="resource-grid">{cards_html}</div>'
+        f'<p class="resource-note">{html.escape(diagnostics or "Read-only host telemetry; no per-process attribution inferred.")}</p></section>'
+    )
+
+
+def _identity_html(identity: dict[str, Any]) -> str:
+    scope = str(identity.get("scope_repository") or "All repositories")
+    active = str(identity.get("active_repository") or "No active worker")
+    session = str(identity.get("session_label") or "No active session")
+    raw_session = str(identity.get("session_id") or "Unavailable")
+    mismatch = (
+        f'<p class="identity-mismatch">Viewing {html.escape(scope)} while the active worker is in {html.escape(active)}.</p>'
+        if identity.get("mismatch") else ""
+    )
+    issue = f'Issue {identity["issue"]}' if identity.get("issue") else "No issue"
+    pr = f'PR {identity["pull_request"]}' if identity.get("pull_request") else "No PR"
+    revision = " / ".join(filter(None, (identity.get("branch"), identity.get("commit")))) or "Revision unavailable"
+    return (
+        '<header class="identity-header"><div><span class="eyebrow">AGENT BRAIN SCOPE</span>'
+        f'<h1>{html.escape(scope)}</h1><p>{html.escape(session)}</p></div>'
+        '<dl><div><dt>Active worker</dt><dd>' + html.escape(active) + '</dd></div>'
+        '<div><dt>Harness</dt><dd>' + html.escape(str(identity.get("harness_repository") or HARNESS_REPOSITORY)) + '</dd></div>'
+        '<div><dt>Work</dt><dd>' + html.escape(f"{issue} · {pr}") + '</dd></div>'
+        '<div><dt>Revision</dt><dd>' + html.escape(revision) + '</dd></div>'
+        '<div><dt>Exact session ID</dt><dd><code>' + html.escape(raw_session) + '</code></dd></div></dl>'
+        f'{mismatch}</header>'
+    )
+
+
 def render_dashboard(snapshot: dict[str, Any]) -> str:
     summary = snapshot["summary"]
     views = snapshot["runs"]
+    identity = snapshot.get("identity", {})
+    identity_html = _identity_html(identity)
+    spark_pulse_html = _spark_pulse_html(snapshot.get("spark_metrics", {}))
+    title_scope = str(identity.get("scope_repository") or "Agent Brain").rstrip("/").split("/")[-1]
+    title_session = identity.get("session_label")
+    page_title = f"{title_session} · Agent Brain" if title_session else f"{title_scope} · Agent Brain"
 
     # Render operational verdict and attention queue
     verdict = snapshot.get("operational_verdict", {
@@ -1454,7 +1616,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         current_run_html = (
             '<section class="current-run"><span class="eyebrow">CURRENT RUN</span>'
             f'<h2>{html.escape(str(current.get("role") or "worker"))} · {html.escape(str(current.get("state") or "unknown"))}</h2>'
-            f'<p>{html.escape(str(current.get("model") or "unknown model"))}</p>'
+            f'<p>{html.escape(str(current.get("session_label") or "Unlabeled session"))} · {html.escape(str(current.get("model") or "unknown model"))}</p>'
             f'<dl><div><dt>Repository</dt><dd>{html.escape(str(current.get("repository") or "unknown"))}</dd></div>'
             f'<div><dt>Run</dt><dd><code>{html.escape(str(current.get("run_id") or "unknown"))}</code></dd></div>'
             f'<div><dt>Tools</dt><dd>{html.escape(str(current.get("tool_calls", 0)))}</dd></div>'
@@ -1471,7 +1633,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<title>Codex agent harness diagnostics</title>
+<title>{html.escape(page_title)}</title>
 <style>
 :root{{--bg:#0b1020;--panel:#151c30;--ink:#eef2ff;--muted:#9aa6c3;--line:#2a3552;--good:#59d499;--warn:#f3c969;--bad:#ff7885}}
 *{{box-sizing:border-box}} html,body{{max-width:100%;overflow-x:hidden}} body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,sans-serif}}
@@ -1485,6 +1647,9 @@ main{{width:100%;max-width:1500px;margin:auto;padding:28px}} h1{{margin:0;font-s
 .session-picker{{margin:0 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}} select{{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px;font:inherit;max-width:100%}}
 .session-submit{{background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 12px;font:inherit;cursor:pointer}} .session-submit:hover{{color:var(--ink)}}
 .cockpit,.current-run{{background:var(--panel);border:1px solid #41527b;border-radius:12px;padding:14px;margin-bottom:14px}} .cockpit{{display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,2fr);gap:10px;align-items:center}} .cockpit h2,.current-run h2{{margin:2px 0}} .cockpit-actions{{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}} .cockpit-actions button{{min-height:44px;background:#18223a;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:8px 12px;font:inherit;cursor:pointer}} #start-fresh-btn{{border-color:var(--good)}} .current-run{{border-left:4px solid var(--good)}} .current-run p{{color:var(--muted)}} .current-run dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:0}} .current-run dl div{{min-width:0}} .current-run dt{{color:var(--muted);font-size:10px;text-transform:uppercase}} .current-run dd{{margin:2px 0;overflow-wrap:anywhere}} @media(max-width:560px){{.cockpit{{grid-template-columns:1fr}}.session-picker{{align-items:stretch;flex-direction:column}}.cockpit-actions button{{flex:1 1 100%}}}}
+.identity-header{{position:sticky;top:0;z-index:10;margin:-28px -28px 14px;padding:16px 28px;background:rgba(11,16,32,.96);backdrop-filter:blur(12px);border-bottom:1px solid #41527b;display:grid;grid-template-columns:minmax(220px,1fr) minmax(420px,2fr);gap:16px}} .identity-header h1{{overflow-wrap:anywhere}} .identity-header p{{margin:3px 0;color:var(--muted)}} .identity-header dl{{display:grid;grid-template-columns:repeat(3,minmax(130px,1fr));gap:7px;margin:0}} .identity-header dl div{{min-width:0}} .identity-header dt{{font-size:9px;color:var(--muted);text-transform:uppercase}} .identity-header dd{{margin:1px 0;overflow-wrap:anywhere}} .identity-mismatch{{grid-column:1/-1;color:var(--warn)!important;border-left:3px solid var(--warn);padding-left:8px}}
+.spark-pulse{{background:linear-gradient(135deg,#111d31,#12192a);border:1px solid #41527b;border-radius:14px;padding:15px;margin-bottom:18px}} .spark-pulse.state-warning{{border-color:var(--warn)}} .spark-pulse.state-critical{{border-color:var(--bad)}} .spark-pulse-head{{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}} .spark-pulse-head h2{{margin:2px 0}} .spark-pulse-head p,.resource-note{{color:var(--muted);margin:0}} .resource-grid{{display:grid;grid-template-columns:repeat(7,minmax(105px,1fr));gap:8px;margin-top:12px}} .resource-card{{min-width:0;background:rgba(11,16,32,.65);border:1px solid var(--line);border-radius:8px;padding:9px}} .resource-card span,.resource-card strong{{display:block}} .resource-card span{{color:var(--muted);font-size:10px}} .resource-card strong{{font-size:17px;margin:2px 0}} .resource-spark{{width:100%;height:32px;display:block}} .resource-spark polyline{{fill:none;stroke:var(--good);stroke-width:2;vector-effect:non-scaling-stroke}} .spark-unavailable{{font-size:9px!important}} .resource-note{{font-size:10px;margin-top:8px}}
+@media(max-width:900px){{.identity-header{{grid-template-columns:1fr}}.identity-header dl{{grid-template-columns:repeat(2,minmax(120px,1fr))}}.resource-grid{{grid-template-columns:repeat(4,minmax(100px,1fr))}}}} @media(max-width:560px){{.identity-header{{position:static;margin:-16px -16px 14px;padding:14px 16px}}.identity-header dl{{grid-template-columns:1fr 1fr}}.resource-grid{{display:flex;overflow-x:auto;scroll-snap-type:x mandatory}}.resource-card{{min-width:145px;scroll-snap-align:start}}}}
 .source-warning{{border:1px solid var(--bad);background:#3a1e2a;border-radius:8px;padding:10px;margin-bottom:14px}}
 th,td{{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}} th{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
 tr.contradiction{{background:#3a1e2a}} .passed{{color:var(--good)}} .failed,.interrupted,.timed-out,.cancelled{{color:var(--bad)}} .unadjudicated,.unknown{{color:var(--warn)}}
@@ -1509,7 +1674,7 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .agent-brain{{background:linear-gradient(145deg,#101a31,#12182a 55%,#17172a);border:1px solid #41527b;border-radius:16px;padding:20px;margin:0 0 18px;box-shadow:0 18px 55px rgba(0,0,0,.22)}}
 .brain-heading{{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:15px}} .brain-heading h2{{font-size:25px;margin:2px 0}} .brain-heading p{{color:var(--muted);margin:0}} .eyebrow{{color:#8faeff;font-size:10px;font-weight:800;letter-spacing:.14em}}
 .brain-source,.brain-node-state{{border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:10px;font-weight:700;text-transform:uppercase}} .brain-source{{white-space:nowrap}}
-.brain-map{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-areas:"intake executive executive routing" "memory action verification tools";gap:10px}} .region-intake{{grid-area:intake}} .region-executive{{grid-area:executive}} .region-routing{{grid-area:routing}} .region-action{{grid-area:action}} .region-verification{{grid-area:verification}} .region-tools{{grid-area:tools}} .region-memory{{grid-area:memory}}
+.brain-map{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-areas:"intake executive executive routing" "memory action verification tools" "resource resource resource resource";gap:10px}} .region-intake{{grid-area:intake}} .region-executive{{grid-area:executive}} .region-routing{{grid-area:routing}} .region-action{{grid-area:action}} .region-verification{{grid-area:verification}} .region-tools{{grid-area:tools}} .region-memory{{grid-area:memory}} .region-resource{{grid-area:resource;min-height:0}}
 .brain-region{{min-width:0;min-height:135px;border:1px solid var(--line);border-radius:12px;padding:11px;background:rgba(11,16,32,.58)}} .brain-region h3,.brain-signals h3,.brain-inspector h3{{margin:0;font-size:13px}} .brain-region>p{{color:var(--muted);font-size:10px;margin:2px 0 9px}} .brain-region-nodes{{display:grid;gap:6px}} .brain-region-empty,.brain-empty{{color:#68738e;font-size:11px;margin:12px 0}}
 .brain-node,.brain-edge{{font:inherit;color:var(--ink);text-align:left;cursor:pointer;background:#18223a;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}} .brain-node:hover,.brain-node:focus-visible,.brain-edge:hover,.brain-edge:focus-visible,.brain-select-active{{outline:2px solid #8faeff;outline-offset:1px}} .brain-node strong,.brain-node small,.brain-edge span,.brain-edge small{{display:block;overflow-wrap:anywhere}} .brain-node-kind{{display:block;color:var(--muted);font-size:9px;text-transform:uppercase}} .brain-node-state{{display:inline-block;margin:5px 5px 0 0}} .brain-node small,.brain-edge small{{color:var(--muted);font-size:9px;margin-top:3px}}
 .state-active,.state-running,.state-running-tests{{border-color:var(--good)}} .state-waiting-inference,.state-waiting-tool,.state-pending{{border-color:var(--warn)}} .state-failed,.state-interrupted,.state-error{{border-color:var(--bad)}} .state-stale{{border-style:dashed;color:var(--warn)}} .state-unknown,.state-unavailable{{border-style:dotted;color:var(--muted)}} .state-completed{{border-color:#526483;color:#aebad5}}
@@ -1521,8 +1686,8 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 .diagnostic-secondary{{margin:0 0 16px}} .diagnostic-secondary>summary{{cursor:pointer;color:var(--muted);margin:0 0 8px}} .diagnostic-secondary .operational-verdict{{margin:0}}
 @media (prefers-reduced-motion:no-preference){{.brain-edge.state-active,.brain-edge.state-running,.brain-edge.state-running-tests,.brain-edge.state-waiting-inference,.brain-edge.state-waiting-tool{{animation:brain-signal 2.4s linear infinite}}@keyframes brain-signal{{to{{background-position:-200% 0}}}}}}
 @media (prefers-reduced-motion:reduce){{.brain-edge{{animation:none!important}}}}
-@media (max-width:900px){{.brain-map{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"executive routing" "intake action" "verification tools" "memory memory"}} .brain-lower,.microscope-grid{{grid-template-columns:1fr}}}}
-@media (max-width:560px){{.agent-brain{{padding:12px;border-radius:12px}} .brain-map{{grid-template-columns:1fr;grid-template-areas:"executive" "routing" "action" "verification" "tools" "intake" "memory"}} .brain-region{{min-height:0}} .brain-edge{{flex-basis:82vw}} .brain-inspector dl div{{grid-template-columns:72px 1fr}} .brain-event{{grid-template-columns:1fr;gap:2px}}}}
+@media (max-width:900px){{.brain-map{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"executive routing" "intake action" "verification tools" "memory memory" "resource resource"}} .brain-lower,.microscope-grid{{grid-template-columns:1fr}}}}
+@media (max-width:560px){{.agent-brain{{padding:12px;border-radius:12px}} .brain-map{{grid-template-columns:1fr;grid-template-areas:"executive" "routing" "resource" "action" "verification" "tools" "intake" "memory"}} .brain-region{{min-height:0}} .brain-edge{{flex-basis:82vw}} .brain-inspector dl div{{grid-template-columns:72px 1fr}} .brain-event{{grid-template-columns:1fr;gap:2px}}}}
 </style>
 <style>
 .operational-verdict{{border:2px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;margin:0 0 16px}} .operational-verdict.severity-critical{{border-color:var(--bad)}} .operational-verdict.severity-degraded{{border-color:var(--warn)}} .operational-verdict.severity-no-data{{border-color:var(--muted);background:#1b2338}} .operational-verdict.severity-healthy{{border-color:var(--good)}}
@@ -1580,9 +1745,11 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 @media (max-width:560px){{.console-wrapper{{border-radius:0;border-left:none;border-right:none}} .console-panel{{padding:0}} .console-header{{padding:12px}} .console-header h3{{font-size:14px}} .console-connection-form{{padding:16px}} .console-status{{flex-direction:column;align-items:flex-start}} .console-controls{{flex-direction:column;align-items:stretch}} .console-filters{{flex-wrap:wrap}} .console-filters label{{flex:1}} .console-transcript{{max-height:240px}} .permissions-list,.questions-list{{grid-template-columns:1fr}} .permission-actions{{flex-direction:column}} .question-actions{{flex-direction:column}}}}
 </style>
 </head><body><main>
-<h1>Harness diagnostic loop</h1><p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
+{identity_html}
+<p class="subtitle">Release {html.escape(str(snapshot['release']))} · <strong>{html.escape(str(snapshot['mode']).upper())}</strong> · read-only · <span id="connection">connecting</span> · <span class="freshness {freshness_severity}">{html.escape(newest_text)}</span></p>
 {session_picker}
 {current_run_html}
+{spark_pulse_html}
 {source_banner}
 {brain_html}
 {strategy_html}
@@ -1799,14 +1966,20 @@ def _session_label(session_id: str, sample: dict[str, Any]) -> str:
         return "Legacy (no session ID)"
     repository = sample.get("repository")
     issue = sample.get("issue")
-    if repository and issue:
-        return f"{repository}#{issue}"
+    role = sample.get("role") or sample.get("current_stage")
+    pieces = []
+    if repository:
+        pieces.append(str(repository).rstrip("/").split("/")[-1])
     if issue:
-        return f"issue {issue}"
+        pieces.append(f"Issue {issue}")
+    if role:
+        pieces.append(str(role).replace("-", " ").title())
+    if pieces:
+        return " · ".join(pieces)
     operation_id = sample.get("operation_id")
     if operation_id:
-        return str(operation_id)
-    return session_id[:8]
+        return f"Operation {operation_id}"
+    return "Unlabeled session"
 
 
 def _derive_sessions(
