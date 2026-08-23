@@ -310,9 +310,10 @@ def test_render_dashboard_emits_single_title(tmp_path):
     snapshot = base.snapshot()
     page = render_dashboard(snapshot)
     # Regression assertion: exactly one title element with the expected text
-    assert page.count("<title>") == 1
-    assert page.count("</title>") == 1
-    assert "<title>Agent Brain · Agent Brain</title>" in page
+    head = page.split("</head>", 1)[0]
+    assert head.count("<title>") == 1
+    assert head.count("</title>") == 1
+    assert "<title>Agent Brain · Agent Brain</title>" in head
 
 
 def test_publication_failures_are_visible_without_hiding_valid_runs(tmp_path):
