@@ -1200,7 +1200,10 @@ def make_handler(source: DashboardSource, broker: ControlBroker | None = None) -
                 if requested_since:
                     if len(requested_since) > 64:
                         raise ControlError(400, "invalid-since")
-                    observed_since = datetime.fromisoformat(requested_since.replace("Z", "+00:00"))
+                    try:
+                        observed_since = datetime.fromisoformat(requested_since.replace("Z", "+00:00"))
+                    except ValueError as exc:
+                        raise ControlError(400, "invalid-since") from exc
                     if observed_since.tzinfo is None:
                         raise ControlError(400, "invalid-since")
                 if route == "/favicon.svg":

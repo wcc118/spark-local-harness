@@ -91,6 +91,9 @@ def test_http_surface_is_get_only_and_no_store(tmp_path):
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(urllib.request.Request(base + "/", data=b"", method="POST"))
         assert error.value.code == 405
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(base + "/api/snapshot?since=not-a-time")
+        assert error.value.code == 400
     finally:
         server.shutdown()
         server.server_close()
