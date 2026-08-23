@@ -1194,4 +1194,4 @@ def test_repository_session_identity_and_spark_pulse_are_prominent(tmp_path):
     assert "while the active worker is in /work/another-project" in page
     assert "GB10 unified system memory—not dedicated VRAM" in page
     assert "GPU utilization" in page and "72%" in page
-    assert "<title>codex-local-harness · codex-local-harness · Issue 146 · Coder · Agent Brain</title>" in page
+    assert "<title>codex-local-harness · Issue 146 · Coder · Agent Brain</title>" in page

@@ -374,11 +374,15 @@ class DashboardSource:
             self.v5_runs, now=current_time, session_id=selected, repository=repository,
             observed_since=observed_since, run_evidence=run_evidence,
         )
+        identity_execution = live_execution if repository is None else project_live_execution(
+            self.v5_runs, now=current_time, session_id=selected,
+            observed_since=observed_since, run_evidence=run_evidence,
+        )
         repositories = sorted(set(repositories) | {
             str(node["repository"]) for node in live_execution.get("nodes", ()) if node.get("repository")
         })
         workers = sorted(
-            (node for node in live_execution.get("nodes", ()) if node.get("kind") == "worker"),
+            (node for node in identity_execution.get("nodes", ()) if node.get("kind") == "worker"),
             key=lambda node: str(node.get("observed_at") or ""), reverse=True,
         )
         active_states = {"running-tests", "waiting-tool", "waiting-inference", "tool-error"}
@@ -1485,7 +1489,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     spark_pulse_html = _spark_pulse_html(snapshot.get("spark_metrics", {}))
     title_scope = str(identity.get("scope_repository") or "Agent Brain").rstrip("/").split("/")[-1]
     title_session = identity.get("session_label")
-    page_title = f"{title_scope} · {title_session} · Agent Brain" if title_session else f"{title_scope} · Agent Brain"
+    page_title = f"{title_session} · Agent Brain" if title_session else f"{title_scope} · Agent Brain"
 
     # Render operational verdict and attention queue
     verdict = snapshot.get("operational_verdict", {
