@@ -91,6 +91,9 @@ def test_http_surface_is_get_only_and_no_store(tmp_path):
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(urllib.request.Request(base + "/", data=b"", method="POST"))
         assert error.value.code == 405
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(base + "/api/snapshot?since=not-a-time")
+        assert error.value.code == 400
     finally:
         server.shutdown()
         server.server_close()
@@ -607,7 +610,7 @@ def test_session_picker_has_no_csp_blocked_inline_handler(tmp_path):
     page = render_dashboard(base.snapshot())
     assert "onchange" not in page
     assert '<select name="session" id="session-select">' in page
-    assert '<button type="submit" class="session-submit">Go</button>' in page
+    assert '<button type="submit" class="session-submit">Focus</button>' in page
     from codex_local_harness.dashboard import DASHBOARD_JS
     assert "event.target.id === 'session-select'" in DASHBOARD_JS
     assert "event.target.form.submit()" in DASHBOARD_JS
@@ -1022,12 +1025,13 @@ def test_sensitive_warning_in_console(tmp_path):
 
 
 def test_console_token_stored_in_sessionStorage_only():
-    """Test that DASHBOARD_JS uses sessionStorage, never localStorage."""
+    """Console secrets stay in sessionStorage; localStorage holds only a view cutoff."""
     # Check for sessionStorage usage
     assert "sessionStorage" in DASHBOARD_JS
     assert "sessionStorage.setItem" in DASHBOARD_JS
     assert "sessionStorage.getItem" in DASHBOARD_JS
-    assert "localStorage" not in DASHBOARD_JS
+    assert "localStorage.setItem('consoleToken'" not in DASHBOARD_JS
+    assert "localStorage.setItem('agentBrainSince'" in DASHBOARD_JS
 
 
 def test_console_uses_password_input_for_token(tmp_path):
@@ -1152,3 +1156,13 @@ def test_console_autoscroll_functionality(tmp_path):
     page = render_dashboard(base.snapshot())
 
     assert "Autoscroll" in page or "autoscroll" in page.lower()
+
+
+def test_focused_cockpit_has_non_destructive_view_controls(tmp_path):
+    page = render_dashboard(fixture_source(tmp_path).snapshot())
+    assert 'id="start-fresh-btn"' in page
+    assert 'id="show-history-btn"' in page
+    assert 'id="reset-view-btn"' in page
+    assert 'id="repository-select"' in page
+    assert "Start Fresh Session" in page
+    assert "localStorage.setItem('agentBrainSince'" in DASHBOARD_JS

@@ -36,6 +36,23 @@ def _safe_result(path: Path) -> tuple[dict[str, Any] | None, bool]:
     return (value, False) if isinstance(value, dict) else (None, True)
 
 
+def _safe_control(path: Path) -> tuple[dict[str, Any] | None, bool]:
+    value, malformed = _safe_result(path)
+    if value is None:
+        return None, malformed
+    state = value.get("state")
+    if state not in {"active", "completed", "failed", "interrupted", "timed-out"}:
+        return None, True
+    return ({
+        "run_id": str(value.get("run_id") or "")[:128],
+        "session_id": str(value.get("session_id") or "")[:128] or None,
+        "role": str(value.get("role") or "worker")[:32],
+        "model": str(value.get("model") or "unknown")[:128],
+        "repository": str(value.get("repository") or "")[:256] or None,
+        "state": state,
+    }, False)
+
+
 def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, bool]:
     """Read bounded OpenCode events without retaining prompt or output content."""
     try:
@@ -188,6 +205,7 @@ def _diagnostic_signals(run_id: str, events: list[dict[str, Any]]) -> list[dict[
 
 def project_live_execution(
     runs_dir: Path | None, *, now: datetime | None = None, session_id: str | None = None,
+    repository: str | None = None, observed_since: datetime | None = None,
     run_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
@@ -226,14 +244,27 @@ def project_live_execution(
         events, malformed, partial_tail = _read_events(log_path)
         result_path = runs_dir / f"{run_id}.result.json"
         result, result_malformed = _safe_result(result_path) if result_path.exists() else (None, False)
+        control_path = runs_dir / f"{run_id}.control.json"
+        control, control_malformed = _safe_control(control_path) if control_path.exists() else (None, False)
         canonical = run_evidence.get(run_id, {})
-        identity = result or canonical
+        identity = result or canonical or control or {}
+        if control:
+            identity = {**control, **identity}
         result_session = identity.get("session_id")
         if session_id is not None and result_session != session_id:
+            continue
+        if repository is not None and identity.get("repository") != repository:
             continue
         observed_at = max((event["observed_at"] or "" for event in events), default="")
         if not observed_at:
             observed_at = datetime.fromtimestamp(log_path.stat().st_mtime, timezone.utc).isoformat()
+        if observed_since is not None:
+            try:
+                event_time = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if event_time < observed_since:
+                continue
         age_seconds = max(0.0, now.timestamp() - log_path.stat().st_mtime)
         if result is not None:
             state, reason = _terminal_state(result)
@@ -243,12 +274,16 @@ def project_live_execution(
             state = "interrupted" if state in {"cancelled", "timed-out"} else state
             reason = "canonical lifecycle evidence reports terminal state"
             source_ref = str(canonical.get("source_ref") or f"lifecycle:{run_id}")
+        elif control and control["state"] != "active":
+            state = str(control["state"])
+            reason = "retained control descriptor reports terminal state"
+            source_ref = f"v5-control:{control_path.name}"
         else:
             state, reason = _live_state(events, age_seconds)
             source_ref = f"v5-log:{log_path.name}"
         role = str(identity.get("role") or "worker")[:32]
         model = str(identity.get("model") or "unknown")[:128]
-        repository = str(identity.get("repository") or "")[:256]
+        node_repository = str(identity.get("repository") or "")[:256]
         observed_calls = {
             str(event.get("call_id") or event["source_ref"])
             for event in events if event["kind"] == "tool-use"
@@ -264,7 +299,7 @@ def project_live_execution(
             "id": worker_id, "kind": "worker", "label": f"{role} {run_id[:12]}",
             "state": state, "observed_at": observed_at, "source_ref": source_ref,
             "reason": reason, "run_id": run_id, "role": role, "model": model,
-            "repository": repository or None,
+            "repository": node_repository or None,
             "issue": identity.get("issue") if isinstance(identity.get("issue"), int) else None,
             "session_id": (
                 str(identity["session_id"])[:128]
@@ -307,10 +342,10 @@ def project_live_execution(
                 "state": state, "observed_at": observed_at, "source_ref": source_ref,
                 "reason": reason,
             }
-        if repository:
-            repository_id = f"repository:{repository}"
+        if node_repository:
+            repository_id = f"repository:{node_repository}"
             nodes[repository_id] = {
-                "id": repository_id, "kind": "repository", "label": Path(repository).name,
+                "id": repository_id, "kind": "repository", "label": Path(node_repository).name,
                 "state": state, "observed_at": observed_at, "source_ref": source_ref,
                 "reason": f"checkout observed for run {run_id[:12]}",
             }
@@ -342,6 +377,8 @@ def project_live_execution(
             diagnostics.append(f"{log_path.name}: partial final record ignored")
         if result_malformed:
             diagnostics.append(f"{result_path.name}: malformed result ignored")
+        if control_malformed:
+            diagnostics.append(f"{control_path.name}: malformed control descriptor ignored")
 
     ordered_nodes = sorted(nodes.values(), key=lambda item: (item["kind"], item["id"]))
     ordered_edges = sorted(edges.values(), key=lambda item: (item["kind"], item["source"], item["target"]))
@@ -387,7 +424,7 @@ def live_fingerprint(runs_dir: Path | None) -> tuple[tuple[str, int, int], ...]:
         return ()
     values = []
     try:
-        paths = sorted((*runs_dir.glob("*.jsonl"), *runs_dir.glob("*.result.json")), key=lambda path: path.name)
+        paths = sorted((*runs_dir.glob("*.jsonl"), *runs_dir.glob("*.result.json"), *runs_dir.glob("*.control.json")), key=lambda path: path.name)
         for path in paths[-MAX_RUNS * 2:]:
             stat = path.stat()
             values.append((path.name, stat.st_mtime_ns, stat.st_size))

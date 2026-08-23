@@ -56,6 +56,25 @@ def test_missing_and_unconfigured_sources_are_safe(tmp_path: Path) -> None:
     assert project_live_execution(tmp_path / "missing", now=NOW)["source_state"] == "missing"
 
 
+def test_control_descriptor_supplies_identity_and_terminal_state_without_exposing_secrets(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _write_log(runs, "controlled", [_event("step_finish")])
+    (runs / "controlled.control.json").write_text(json.dumps({
+        "run_id": "controlled", "session_id": "session-1", "role": "helper",
+        "model": "vllm/coder-next", "repository": "/work/project", "state": "completed",
+        "base_url": "http://secret-host", "credential_file": "/secret/token",
+        "effective_policy": {"bash": "allow"},
+    }), encoding="utf-8")
+
+    snapshot = project_live_execution(runs, now=NOW, repository="/work/project")
+    worker = next(node for node in snapshot["nodes"] if node["kind"] == "worker")
+    assert (worker["role"], worker["model"], worker["state"]) == ("helper", "vllm/coder-next", "completed")
+    encoded = json.dumps(snapshot)
+    assert "secret-host" not in encoded
+    assert "/secret/token" not in encoded
+    assert "effective_policy" not in encoded
+
+
 def test_invalid_event_timestamp_degrades_to_explicit_unknown_time(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     event = _event("step_start")

@@ -248,6 +248,7 @@ case "$worker_sandbox" in
 esac
 
 worker_repository=${CODEX_LOCAL_REPOSITORY:-}
+worker_repository_display=${worker_repository:-$worker_source_repo_path}
 worker_issue=${CODEX_LOCAL_ISSUE:-}
 worker_pr=${CODEX_LOCAL_PR:-}
 record_run=${CODEX_LOCAL_RECORD_RUN:-0}
@@ -418,6 +419,7 @@ if [[ $worker_sandbox == container ]]; then
       --base-url "http://127.0.0.1:$worker_server_port" \
       --password-file "$worker_control_secret" --run-id "$worker_run_id" \
       --task-file "$worker_task_file" --agent "$worker_agent" --model "$worker_model" \
+      --repository "$worker_repository_display" \
       --log "$worker_log" --control "$worker_control" --secret "$worker_control_secret" \
       --timeout "$worker_timeout"
     bridge_status=$?
