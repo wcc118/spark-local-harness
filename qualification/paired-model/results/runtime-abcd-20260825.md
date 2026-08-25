@@ -1,7 +1,9 @@
 # OpenCode versus Qwen Code on Spark
 
-Issue: [#151](https://github.com/wcc118/codex-local-harness/issues/151)  
-Run date: 2026-08-25  
+Issue: [#151](https://github.com/wcc118/codex-local-harness/issues/151)
+
+Run date: 2026-08-25
+
 Hardware/server: one sequential Spark vLLM endpoint, vLLM `0.19.2rc1.dev206+g95995bbef.d20260425`
 
 ## Frozen conditions
