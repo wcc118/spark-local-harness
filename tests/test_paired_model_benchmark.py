@@ -14,6 +14,10 @@ SPEC = importlib.util.spec_from_file_location("paired_benchmark", ROOT / "run.py
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(MODULE)
+RUNTIME_SPEC = importlib.util.spec_from_file_location("runtime_benchmark", ROOT / "run_runtime.py")
+RUNTIME_MODULE = importlib.util.module_from_spec(RUNTIME_SPEC)
+assert RUNTIME_SPEC.loader
+RUNTIME_SPEC.loader.exec_module(RUNTIME_MODULE)
 
 
 def test_manifest_has_ten_real_cases_and_identity_covers_task_check_policy_source():
@@ -60,6 +64,52 @@ def test_event_normalization_deduplicates_tool_lifecycle_and_preserves_unknown_t
     assert result["permissions_requested"] == 1
     assert result["interventions"] == 1
     assert result["tokens_total"] is None
+
+
+def test_qwen_event_normalization_records_tools_tokens_and_denials():
+    events = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "one", "name": "write_file", "input": {}},
+        ], "usage": {"total_tokens": 120}}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "one", "is_error": False},
+        ]}},
+        {"type": "result", "usage": {"total_tokens": 140}, "permission_denials": ["shell"]},
+    ]
+    result = RUNTIME_MODULE.normalize_qwen(events)
+    assert result["tool_calls"] == 1
+    assert result["completed_tool_calls"] == 1
+    assert result["tokens_total"] == 140
+    assert result["permissions_requested"] == 1
+    assert result["tool_errors"] == 0
+
+
+def test_runtime_environments_are_isolated_and_disable_external_capabilities(tmp_path: Path):
+    opencode_config = tmp_path / "opencode.json"
+    opencode_config.write_text(json.dumps({
+        "mcp": {"github": {"enabled": True}},
+        "permission": {}, "agent": {"coder": {"permission": {}}},
+    }))
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "coder.md").write_text("bounded coder")
+    args = type("Args", (), {
+        "opencode_config": opencode_config, "opencode_agents": agents,
+        "qwen_api_key": "not-needed", "qwen_base_url": "http://localhost/v1",
+        "model": "vllm/Qwen/Test",
+    })()
+    open_attempt = tmp_path / "open"
+    open_env = RUNTIME_MODULE.opencode_environment(args, open_attempt)
+    rendered = json.loads((Path(open_env["XDG_CONFIG_HOME"]) / "opencode/opencode.json").read_text())
+    assert rendered["mcp"]["github"]["enabled"] is False
+    assert rendered["permission"]["external_directory"] == "deny"
+    assert rendered["agent"]["coder"]["permission"]["task"] == "deny"
+
+    qwen_attempt = tmp_path / "qwen"
+    qwen_env = RUNTIME_MODULE.qwen_environment(args, qwen_attempt)
+    settings = json.loads((Path(qwen_env["QWEN_CONFIG_DIR"]) / "settings.json").read_text())
+    assert settings["privacy"]["usageStatisticsEnabled"] is False
+    assert "Agent" in settings["permissions"]["deny"]
 
 
 def test_compare_preserves_routes_until_all_ten_identity_matched_pairs(tmp_path: Path, capsys):

@@ -25,6 +25,23 @@ The 2026-08-22 controlled run produced 10/10 correct for Coder Next and 0/10
 for Qwen 3.8; every Qwen attempt timed out. Raw events and workspaces remain in
 the operator data directory and are intentionally not committed.
 
+The runner can also compare headless runtimes while holding the model endpoint
+fixed. Select `--runtime opencode` (the default) or `--runtime qwen-code`, and
+record the pinned runtime version explicitly. Qwen Code additionally requires
+its executable path and OpenAI-compatible vLLM endpoint:
+
+```bash
+python3 qualification/paired-model/run_runtime.py \
+  --output ~/.local/share/codex-local-harness/runtime-benchmark \
+  --runtime qwen-code --runtime-version 0.22.0 \
+  --qwen ~/.local/share/codex-local-harness/qwen-code/0.22.0/node_modules/.bin/qwen \
+  --model vllm/Qwen/Qwen3-Coder-Next-FP8 --route qwen-code/coder-next
+```
+
+Runtime-qualified attempts use separate directories even when the model and
+policy match. Qwen Code runs with an isolated configuration home, telemetry
+disabled, no inherited credentials, and the same per-case timeout and oracle.
+
 Coder Next remains the default. To run a deliberate Qwen 3.8 experiment, use
 `CODEX_LOCAL_TIER=experimental-qwen38` with the appropriate stable worker entry
 point. This tier is retained for diagnosis and is not production-qualified.
