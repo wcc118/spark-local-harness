@@ -29,7 +29,7 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "CODEX_LOCAL_AGENT" in content
     assert 'worker_runtime=$(jq -r' in content
     assert "qwen-code is qualified only for native coder routes" in content
-    assert "qwen --safe-mode --auth-type openai --approval-mode yolo" in content
+    assert "qwen --auth-type openai --approval-mode yolo" in content
     assert "qwen-code requires container confinement" in content
     assert "runtime.advisory_output" in content
     assert "select(.type == \"text\") | .part.text" in content
