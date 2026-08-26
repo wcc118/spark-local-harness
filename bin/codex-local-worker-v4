@@ -143,6 +143,14 @@ configured_agent=$(jq -er --arg route "$worker_route" '.routes[$route].agent' "$
 }
 worker_agent=${CODEX_LOCAL_AGENT:-$configured_agent}
 worker_model=${CODEX_LOCAL_MODEL:-$(jq -er --arg route "$worker_route" '.routes[$route].model' "$worker_config")}
+worker_runtime=$(jq -r --arg route "$worker_route" '.routes[$route].runtime // "opencode"' "$worker_config")
+worker_mode=$(jq -r --arg route "$worker_route" '.routes[$route].mode // "tailored"' "$worker_config")
+case "$worker_runtime" in opencode|qwen-code) ;; *) echo "ERROR: unsupported worker runtime: $worker_runtime" >&2; exit 2 ;; esac
+case "$worker_mode" in native|tailored) ;; *) echo "ERROR: unsupported worker mode: $worker_mode" >&2; exit 2 ;; esac
+if [[ $worker_runtime == qwen-code && ( $worker_role != coder || $worker_mode != native ) ]]; then
+  echo "ERROR: qwen-code is qualified only for native coder routes" >&2
+  exit 2
+fi
 
 if [[ "$worker_model" == lmstudio/* ]]; then
   lmstudio_base_url=${LMSTUDIO_BASE_URL:-http://10.0.0.92:1234/v1}
@@ -158,8 +166,8 @@ if [[ "$worker_model" == lmstudio/* ]]; then
 fi
 
 if [[ ${CODEX_LOCAL_DRY_RUN:-0} == 1 ]]; then
-  printf 'role=%s\nagent=%s\nmodel=%s\ntier=%s\nrepo=%s\n' \
-    "$worker_role" "$worker_agent" "$worker_model" "$worker_tier" "$worker_repo_path"
+  printf 'role=%s\nagent=%s\nmodel=%s\nruntime=%s\nmode=%s\ntier=%s\nrepo=%s\n' \
+    "$worker_role" "$worker_agent" "$worker_model" "$worker_runtime" "$worker_mode" "$worker_tier" "$worker_repo_path"
   exit 0
 fi
 
@@ -211,7 +219,7 @@ umask 077
 worker_runtime_parent=/home/connellwc83/.local/share/opencode-orchestration/worker-homes
 install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
-install -d -m 700 "$worker_runtime_home/.config/opencode/agents" \
+install -d -m 700 "$worker_runtime_home/.config/opencode/agents" "$worker_runtime_home/.qwen" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
 jq '.mcp.github.enabled = false
     | .permission.external_directory = "deny"
@@ -227,11 +235,16 @@ if [[ -d /home/connellwc83/projects/codex-local-harness/agents ]]; then
   cp -a /home/connellwc83/projects/codex-local-harness/agents/. \
     "$worker_runtime_home/.config/opencode/agents/"
 fi
-worker_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
-[[ -x $worker_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $worker_opencode" >&2; exit 2; }
+printf '%s\n' '{"tools":{"approvalMode":"yolo","core":["read_file","grep_search","glob","edit","write_file","run_shell_command"],"disabled":["agent","list_agents","task_stop","send_message","skill","tool_search","read_mcp_resource","web_fetch","computer_use__bring_to_front","computer_use__check_for_update","computer_use__check_permissions","computer_use__click","computer_use__double_click","computer_use__drag","computer_use__end_session","computer_use__get_accessibility_tree","computer_use__get_agent_cursor_state","computer_use__get_config","computer_use__get_cursor_position","computer_use__get_recording_state","computer_use__get_screen_size","computer_use__get_window_state","computer_use__hotkey","computer_use__kill_app","computer_use__launch_app","computer_use__list_apps","computer_use__list_windows","computer_use__move_cursor","computer_use__page","computer_use__press_key","computer_use__replay_trajectory","computer_use__right_click","computer_use__scroll","computer_use__set_agent_cursor_enabled","computer_use__set_agent_cursor_motion","computer_use__set_agent_cursor_style","computer_use__set_config","computer_use__set_value","computer_use__start_recording","computer_use__start_session","computer_use__stop_recording","computer_use__type_text","computer_use__zoom","create_sub_session","enter_worktree","exit_worktree","get_goal","update_goal","monitor","loop_wakeup","cron_create","cron_list","cron_delete"]},"telemetry":{"enabled":false}}' \
+  >"$worker_runtime_home/.qwen/settings.json"
+worker_opencode=
+if [[ $worker_runtime == opencode ]]; then
+  worker_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
+  [[ -x $worker_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $worker_opencode" >&2; exit 2; }
+fi
 worker_path=/home/connellwc83/.local/bin:/home/connellwc83/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 worker_sandbox=${CODEX_LOCAL_SANDBOX:-container}
-worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.1.0}
+worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.2.0}
 case "$worker_sandbox" in
   container)
     command -v docker >/dev/null || { echo "ERROR: Docker is required for worker confinement" >&2; exit 69; }
@@ -348,7 +361,7 @@ if [[ $worker_role == coder && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   worker_task=$'HARNESS DELIVERY BOUNDARY: Work only in the local checkout. Do not push, use gh, create a PR, comment, or change labels. Commit the verified implementation on a clean local issue branch; the deterministic harness owns all remote publication.\n\n'"$worker_task"
 fi
 
-echo "Starting local worker: role=$worker_role tier=$worker_tier model=$worker_model run_id=$worker_run_id" >&2
+echo "Starting local worker: role=$worker_role tier=$worker_tier runtime=$worker_runtime mode=$worker_mode model=$worker_model run_id=$worker_run_id" >&2
 if [[ $record_run == 1 ]]; then
   worker_started_epoch=$(date -u +%s)
   diagnostic_now=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
@@ -397,10 +410,17 @@ if [[ $worker_sandbox == container ]]; then
     --tmpfs /tmp:rw,nosuid,nodev,size=1g
     --mount "$repository_mount"
     --mount "type=bind,src=$worker_runtime_home,dst=$worker_runtime_home"
-    --mount "type=bind,src=$worker_opencode,dst=/usr/local/bin/opencode,readonly"
     --workdir "$worker_repo_path")
+  [[ $worker_runtime != opencode ]] || docker_args+=(--mount "type=bind,src=$worker_opencode,dst=/usr/local/bin/opencode,readonly")
   for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
-  if [[ ${CODEX_LOCAL_SESSION_BRIDGE:-1} == 1 ]]; then
+  if [[ $worker_runtime == qwen-code ]]; then
+    qwen_model=${worker_model#vllm/}
+    timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+      docker "${docker_args[@]}" \
+      --env OPENAI_API_KEY=not-needed --env OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+      "$worker_container_image" qwen --safe-mode --auth-type openai --approval-mode yolo --model "$qwen_model" \
+      --output-format stream-json --prompt "$worker_task" >"$worker_log"
+  elif [[ $worker_mode == tailored && ${CODEX_LOCAL_SESSION_BRIDGE:-1} == 1 ]]; then
     worker_server_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
     worker_server_password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
     worker_server_env="$worker_runtime_home/opencode-server.env"
@@ -437,15 +457,18 @@ if [[ $worker_sandbox == container ]]; then
     worker_server_container=
     (( bridge_status == 0 ))
   else
+    opencode_args=(run --format json --dir "$worker_repo_path")
+    [[ $worker_mode != tailored ]] || opencode_args+=(--agent "$worker_agent")
     timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
       docker "${docker_args[@]}" "$worker_container_image" \
-      opencode run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
-      --model "$worker_model" "$worker_task" >"$worker_log"
+      opencode "${opencode_args[@]}" --model "$worker_model" "$worker_task" >"$worker_log"
   fi
 else
+  [[ $worker_runtime == opencode ]] || { echo "ERROR: qwen-code requires container confinement" >&2; exit 2; }
+  opencode_args=(run --format json --dir "$worker_repo_path")
+  [[ $worker_mode != tailored ]] || opencode_args+=(--agent "$worker_agent")
   "${worker_env[@]}" "${execution_env[@]}" timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
-    "$worker_opencode" run --format json --dir "$worker_repo_path" --agent "$worker_agent" \
-    --model "$worker_model" "$worker_task" >"$worker_log"
+    "$worker_opencode" "${opencode_args[@]}" --model "$worker_model" "$worker_task" >"$worker_log"
 fi
 inference_status=$?
 set -e
@@ -464,7 +487,9 @@ if [[ $worker_role == reviewer ]]; then
 fi
 
 output_status=0
-if [[ $worker_agent == advisory ]]; then
+if [[ $worker_runtime == qwen-code ]]; then
+  jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' "$worker_log" || output_status=$?
+elif [[ $worker_agent == advisory ]]; then
   env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.runtime.advisory_output --log "$worker_log" || output_status=$?
 else
   jq -r 'select(.type == "text") | .part.text' "$worker_log" || output_status=$?
@@ -510,7 +535,7 @@ if [[ $record_run == 1 ]]; then
   legacy_ledger=${CODEX_LOCAL_LEGACY_LEDGER:-/home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh}
   if ! "$legacy_ledger" \
     "$worker_repository" "$worker_issue" "$worker_role" "$worker_model" "$worker_log" \
-    "run_id=$worker_run_id inference_status=$inference_status workflow_status=$workflow_status"; then
+    "run_id=$worker_run_id runtime=$worker_runtime mode=$worker_mode inference_status=$inference_status workflow_status=$workflow_status"; then
     echo "WARN: legacy aggregate ledger ingestion failed for run $worker_run_id" >&2
     record_publication_failure finish legacy-ledger
   fi
@@ -563,6 +588,7 @@ if [[ $record_run == 1 ]]; then
   health_args=(
     --log "$worker_log" --records "$health_records" --run-id "$worker_run_id"
     --issue "$worker_issue" --role "$worker_role" --model "$worker_model"
+    --runtime "$worker_runtime"
     --profile codex-led-v4 --task-class "$task_class" --status "$health_status"
     --inference-status "$inference_status" --workflow-status "$workflow_status"
     --delivery-ready "$delivery_ready" --dirty-entries "$dirty_entries"

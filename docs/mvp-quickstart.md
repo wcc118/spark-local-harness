@@ -13,7 +13,7 @@ Build the confined worker image once after cloning, and again whenever
 `docker/worker/Dockerfile` changes:
 
 ```bash
-docker build -t codex-local-worker:0.1.0 docker/worker
+docker build -t codex-local-worker:0.2.0 docker/worker
 ```
 
 Local workers run in this container by default. Only the selected checkout and

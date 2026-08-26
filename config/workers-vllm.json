@@ -2,30 +2,56 @@
   "routes": {
     "helper/standard": {
       "agent": "helper",
+      "runtime": "opencode",
+      "mode": "tailored",
       "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "coder/standard": {
       "agent": "coder",
+      "runtime": "qwen-code",
+      "mode": "native",
       "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "coder/complex": {
       "agent": "coder",
+      "runtime": "qwen-code",
+      "mode": "native",
       "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "reviewer/standard": {
       "agent": "reviewer",
+      "runtime": "opencode",
+      "mode": "native",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    },
+    "coder/tailored": {
+      "agent": "coder",
+      "runtime": "opencode",
+      "mode": "tailored",
+      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    },
+    "reviewer/tailored": {
+      "agent": "reviewer",
+      "runtime": "opencode",
+      "mode": "tailored",
       "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
     },
     "coder/experimental-qwen38": {
       "agent": "coder",
+      "runtime": "opencode",
+      "mode": "tailored",
       "model": "vllm/Qwen/Qwen3.8-27B-FP8"
     },
     "helper/experimental-qwen38": {
       "agent": "helper",
+      "runtime": "opencode",
+      "mode": "tailored",
       "model": "vllm/Qwen/Qwen3.8-27B-FP8"
     },
     "reviewer/experimental-qwen38": {
       "agent": "reviewer",
+      "runtime": "opencode",
+      "mode": "tailored",
       "model": "vllm/Qwen/Qwen3.8-27B-FP8"
     }
   },

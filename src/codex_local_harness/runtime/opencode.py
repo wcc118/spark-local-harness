@@ -40,12 +40,13 @@ class OpenCodeStats:
         generated_artifacts: int = 0,
         repository: str | None = None,
         pull_request: int | None = None,
+        runtime: str = "opencode",
     ) -> RunHealth:
         return RunHealth(
             run_id=run_id,
             issue=issue,
             role=role,
-            runtime="opencode",
+            runtime=runtime,
             model=model,
             profile=profile,
             task_class=task_class,
@@ -73,7 +74,9 @@ class OpenCodeStats:
         )
 
 
-def parse_log(path: Path) -> OpenCodeStats:
+def parse_log(path: Path, runtime: str = "opencode") -> OpenCodeStats:
+    if runtime == "qwen-code":
+        return _parse_qwen_log(path)
     input_tokens = output_tokens = reasoning_tokens = turns = 0
     tool_call_ids: set[str] = set()
     tool_error_ids: set[str] = set()
@@ -136,6 +139,43 @@ def parse_log(path: Path) -> OpenCodeStats:
     )
 
 
+def _parse_qwen_log(path: Path) -> OpenCodeStats:
+    result: dict[str, Any] | None = None
+    tool_calls = tool_errors = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid Qwen Code event at line {line_number}: {exc}") from exc
+            if not isinstance(event, dict):
+                raise ValueError(f"invalid Qwen Code event at line {line_number}: event is not an object")
+            if event.get("type") == "assistant":
+                content = (event.get("message") or {}).get("content") or []
+                tool_calls += sum(1 for item in content if isinstance(item, dict) and item.get("type") == "tool_use")
+            elif event.get("type") == "tool_result" and event.get("is_error"):
+                tool_errors += 1
+            elif event.get("type") == "result":
+                result = event
+    if result is None:
+        raise ValueError("Qwen Code log has no result event")
+    usage = result.get("usage") or {}
+    return OpenCodeStats(
+        _non_negative_int(usage.get("input_tokens", 0), "input tokens"),
+        _non_negative_int(usage.get("output_tokens", 0), "output tokens"),
+        0,
+        _non_negative_int(result.get("num_turns", 0), "turns"),
+        tool_calls,
+        tool_errors,
+        _non_negative_int(result.get("duration_ms", 0), "duration") / 1000,
+        _non_negative_int(usage.get("cache_read_input_tokens", 0), "cache read"),
+        None,
+        "observed",
+    )
+
+
 def _non_negative_int(value: Any, name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
@@ -150,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--role", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--runtime", choices=("opencode", "qwen-code"), default="opencode")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--task-class", required=True)
     parser.add_argument("--status", required=True)
@@ -165,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         try:
-            stats = parse_log(args.log)
+            stats = parse_log(args.log, args.runtime)
         except ValueError:
             if not args.allow_malformed:
                 raise
@@ -186,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             generated_artifacts=args.generated_artifacts,
             repository=args.repository,
             pull_request=args.pull_request,
+            runtime=args.runtime,
         )
         append_jsonl(args.records, health)
     except (OSError, ValueError) as exc:
