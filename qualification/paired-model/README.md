@@ -42,6 +42,24 @@ Runtime-qualified attempts use separate directories even when the model and
 policy match. Qwen Code runs with an isolated configuration home, telemetry
 disabled, no inherited credentials, and the same per-case timeout and oracle.
 
+For an untailored baseline, add `--mode native`. Native mode generates a fresh
+runtime configuration containing only the vLLM connection and non-behavioral
+isolation settings; it does not copy OpenCode agents or select the custom coder.
+Both runtimes receive the same neutral containment boundary.
+
+```bash
+python3 qualification/paired-model/run_runtime.py \
+  --output ~/.local/share/codex-local-harness/native-opencode \
+  --runtime opencode --mode native --runtime-version 1.18.21 \
+  --model vllm/Qwen/Qwen3-Coder-Next-FP8 --route native/opencode
+
+python3 qualification/paired-model/run_runtime.py \
+  --output ~/.local/share/codex-local-harness/native-qwen-code \
+  --runtime qwen-code --mode native --runtime-version 0.22.0 \
+  --qwen ~/.local/share/codex-local-harness/qwen-code/0.22.0/node_modules/.bin/qwen \
+  --model vllm/Qwen/Qwen3-Coder-Next-FP8 --route native/qwen-code
+```
+
 Coder Next remains the default. To run a deliberate Qwen 3.8 experiment, use
 `CODEX_LOCAL_TIER=experimental-qwen38` with the appropriate stable worker entry
 point. This tier is retained for diagnosis and is not production-qualified.

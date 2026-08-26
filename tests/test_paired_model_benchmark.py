@@ -112,6 +112,32 @@ def test_runtime_environments_are_isolated_and_disable_external_capabilities(tmp
     assert "Agent" in settings["permissions"]["deny"]
 
 
+def test_native_runtime_environments_exclude_behavioral_agents(tmp_path: Path):
+    args = type("Args", (), {
+        "qwen_api_key": "not-needed", "qwen_base_url": "http://localhost:8000/v1",
+        "model": "vllm/Qwen/Test",
+    })()
+    open_env = RUNTIME_MODULE.native_opencode_environment(args, tmp_path / "open")
+    open_config = json.loads(RUNTIME_MODULE.effective_config_path("opencode", open_env).read_text())
+    assert "agent" not in open_config
+    assert open_config["provider"]["vllm"]["models"] == {"Qwen/Test": {"name": "Qwen/Test"}}
+    assert open_config["permission"] == {"external_directory": "deny"}
+
+    qwen_env = RUNTIME_MODULE.native_qwen_environment(args, tmp_path / "qwen")
+    qwen_config = json.loads(RUNTIME_MODULE.effective_config_path("qwen-code", qwen_env).read_text())
+    assert qwen_config == {
+        "privacy": {"usageStatisticsEnabled": False},
+        "telemetry": {"enabled": False},
+    }
+
+
+def test_native_boundary_is_neutral_and_short():
+    boundary = RUNTIME_MODULE.NATIVE_BOUNDARY.read_text()
+    assert len(boundary) < 250
+    for behavioral_word in ("plan", "test", "report", "promptly", "workflow"):
+        assert behavioral_word not in boundary.lower()
+
+
 def test_compare_preserves_routes_until_all_ten_identity_matched_pairs(tmp_path: Path, capsys):
     args = type("Args", (), {"manifest":ROOT / "manifest.json", "output":tmp_path, "left":"left", "right":"right"})()
     assert MODULE.command_compare(args) == 2
