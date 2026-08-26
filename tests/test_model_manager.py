@@ -74,6 +74,16 @@ def test_model_manager_is_idempotent_then_switches_exact_model(tmp_path):
     assert switched.returncode == 0, switched.stderr
     assert state.read_text(encoding="utf-8") == "Qwen/Qwen3-Coder-Next-FP8"
     assert "pkill" in calls.read_text(encoding="utf-8")
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--enable-auto-tool-choice" in docker_calls
+    assert "--tool-call-parser qwen3_coder" in docker_calls
+    assert "--max-model-len 212500" in docker_calls
+    assert "--gpu-memory-utilization 0.90" in docker_calls
+    assert "--load-format fastsafetensors" in docker_calls
+    assert "--attention-backend flashinfer" in docker_calls
+    assert "--enable-prefix-caching" in docker_calls
+    assert "--host 0.0.0.0" in docker_calls
+    assert "--port 8000" in docker_calls
 
 
 def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
@@ -96,6 +106,9 @@ def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
     assert "--language-model-only" in docker_calls
     assert "--attention-backend flashinfer" in docker_calls
     assert "--enable-prefix-caching" in docker_calls
+    assert "--load-format fastsafetensors" in docker_calls
+    assert "--host 0.0.0.0" in docker_calls
+    assert "--port 8000" in docker_calls
 
 
 def test_model_manager_fails_when_exact_model_never_becomes_ready(tmp_path):
@@ -110,3 +123,23 @@ def test_model_manager_rejects_unqualified_profile():
     completed = subprocess.run([str(MANAGER), "use", "arbitrary"], text=True, capture_output=True)
     assert completed.returncode == 2
     assert "usage:" in completed.stderr
+
+
+def test_model_manager_launches_qwen38_profile(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    assert state.read_text(encoding="utf-8") == "Qwen/Qwen3.8-27B-FP8"
+    assert "pkill" in calls.read_text(encoding="utf-8")
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--reasoning-parser qwen3" in docker_calls
+    assert "--enable-auto-tool-choice" in docker_calls
+    assert "--tool-call-parser qwen3_coder" in docker_calls
+    assert "--max-model-len 212500" in docker_calls
+    assert "--gpu-memory-utilization 0.90" in docker_calls
+    assert "--load-format fastsafetensors" in docker_calls
+    assert "--attention-backend flashinfer" in docker_calls
+    assert "--enable-prefix-caching" in docker_calls
+    assert "--host 0.0.0.0" in docker_calls
+    assert "--port 8000" in docker_calls
