@@ -120,7 +120,7 @@ def test_runtime_environments_are_isolated_and_disable_external_capabilities(tmp
 def test_native_runtime_environments_exclude_behavioral_agents(tmp_path: Path):
     args = type("Args", (), {
         "qwen_api_key": "not-needed", "qwen_base_url": "http://localhost:8000/v1",
-        "model": "vllm/Qwen/Test",
+        "model": "vllm/Qwen/Test", "reasoning_effort": None,
     })()
     open_env = RUNTIME_MODULE.native_opencode_environment(args, tmp_path / "open")
     open_config = json.loads(RUNTIME_MODULE.effective_config_path("opencode", open_env).read_text())
@@ -135,6 +135,18 @@ def test_native_runtime_environments_exclude_behavioral_agents(tmp_path: Path):
         "telemetry": {"enabled": False},
     }
 
+    args.reasoning_effort = "xhigh"
+    thinking_env = RUNTIME_MODULE.native_qwen_environment(args, tmp_path / "thinking")
+    thinking_config = json.loads(RUNTIME_MODULE.effective_config_path("qwen-code", thinking_env).read_text())
+    assert thinking_config["model"] == {
+        "generationConfig": {"extra_body": {
+            "chat_template_kwargs": {
+                "enable_thinking": True, "preserve_thinking": True,
+                "reasoning_effort": "xhigh",
+            },
+        }},
+    }
+
 
 def test_native_boundary_is_neutral_and_short():
     boundary = RUNTIME_MODULE.NATIVE_BOUNDARY.read_text()
@@ -146,18 +158,20 @@ def test_native_boundary_is_neutral_and_short():
 def test_resume_identity_rejects_mode_boundary_and_config_changes():
     args = type("Args", (), {
         "model": "vllm/Qwen/Test", "runtime": "opencode", "mode": "native",
-        "runtime_config_hash": "config-a",
+        "runtime_config_hash": "config-a", "timeout_multiplier": 1.0,
     })()
     ids = {"identity_hash": "fixture-a"}
     old = {
         "identity_hash": "fixture-a", "model": args.model, "runtime": args.runtime,
         "mode": args.mode, "boundary_hash": "boundary-a",
         "runtime_config_hash": args.runtime_config_hash, "terminal": True,
+        "timeout_multiplier": 1.0,
     }
     assert RUNTIME_MODULE.resume_matches(old, args, ids, "boundary-a")
     for key, value in (
         ("mode", "tailored"), ("boundary_hash", "boundary-b"),
         ("runtime_config_hash", "config-b"), ("terminal", False),
+        ("timeout_multiplier", 4.0),
     ):
         changed = dict(old)
         changed[key] = value

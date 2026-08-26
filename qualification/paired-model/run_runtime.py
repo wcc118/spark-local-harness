@@ -84,10 +84,23 @@ def native_qwen_environment(args: argparse.Namespace, attempt_dir: Path) -> dict
     runtime_home = attempt_dir / "runtime-home"
     config_dir = runtime_home / ".qwen"
     config_dir.mkdir(parents=True, mode=0o700)
-    (config_dir / "settings.json").write_text(json.dumps({
+    settings: dict[str, Any] = {
         "privacy": {"usageStatisticsEnabled": False},
         "telemetry": {"enabled": False},
-    }, separators=(",", ":")) + "\n", encoding="utf-8")
+    }
+    if getattr(args, "reasoning_effort", None):
+        settings["model"] = {
+            "generationConfig": {"extra_body": {
+                "chat_template_kwargs": {
+                    "enable_thinking": True,
+                    "preserve_thinking": True,
+                    "reasoning_effort": args.reasoning_effort,
+                },
+            }},
+        }
+    (config_dir / "settings.json").write_text(
+        json.dumps(settings, separators=(",", ":")) + "\n", encoding="utf-8",
+    )
     return {
         "HOME": str(runtime_home), "QWEN_CONFIG_DIR": str(config_dir),
         "OPENAI_API_KEY": args.qwen_api_key, "OPENAI_BASE_URL": args.qwen_base_url,
@@ -161,6 +174,7 @@ def resume_matches(old: dict[str, Any], args: argparse.Namespace, ids: dict[str,
         and old.get("mode") == args.mode
         and old.get("boundary_hash") == boundary_hash
         and old.get("runtime_config_hash") == args.runtime_config_hash
+        and old.get("timeout_multiplier", 1.0) == args.timeout_multiplier
         and old.get("terminal")
     )
 
@@ -169,7 +183,9 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     ids = BASE.identity(manifest_path, manifest, case)
     boundary = NATIVE_BOUNDARY if args.mode == "native" else TAILORED_POLICY
     boundary_hash = BASE.digest_file(boundary)
-    slug = hashlib.sha256(f"{args.runtime}:{args.mode}:{args.model}".encode()).hexdigest()[:12]
+    slug = hashlib.sha256(
+        f"{args.runtime}:{args.mode}:{args.model}:{args.reasoning_effort}:{args.timeout_multiplier}".encode()
+    ).hexdigest()[:12]
     attempt_dir = args.output / "attempts" / slug / case["id"]
     result_path = attempt_dir / "attempt.json"
     if args.resume and result_path.exists():
@@ -214,7 +230,8 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     began = time.monotonic()
     state, return_code, stderr = "completed", None, ""
     try:
-        completed = subprocess.run(command, text=True, capture_output=True, timeout=case["timeout"], env=allowed, cwd=cwd)
+        timeout_seconds = case["timeout"] * args.timeout_multiplier
+        completed = subprocess.run(command, text=True, capture_output=True, timeout=timeout_seconds, env=allowed, cwd=cwd)
         return_code = completed.returncode
         events_path.write_text(completed.stdout, encoding="utf-8")
         stderr = completed.stderr[-4096:]
@@ -236,7 +253,9 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
         "schema_version": 1, "attempt_id": run_id, "run_id": run_id, "case_id": case["id"],
         "fixture_id": case["id"], "category": case["category"], "role": case["role"],
         "model": args.model, "runtime": args.runtime, "runtime_version": args.runtime_version,
-        "mode": args.mode, "boundary_hash": boundary_hash,
+        "mode": args.mode, "reasoning_effort": args.reasoning_effort,
+        "timeout_multiplier": args.timeout_multiplier,
+        "boundary_hash": boundary_hash,
         "runtime_policy_hash": boundary_hash, "runtime_config_hash": runtime_config_hash,
         "route": args.route, "policy_variant": "baseline", **ids, "started_at": started,
         "observed_at": datetime.now(timezone.utc).isoformat(), "elapsed_seconds": elapsed,
@@ -257,6 +276,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runtime", choices=("opencode", "qwen-code"), required=True)
     parser.add_argument("--mode", choices=("tailored", "native"), default="tailored")
+    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high", "xhigh", "max"))
+    parser.add_argument("--timeout-multiplier", type=float, default=1.0)
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument("--model", required=True); parser.add_argument("--route", required=True)
     parser.add_argument("--opencode", default="opencode"); parser.add_argument("--qwen", default="qwen")
@@ -266,6 +287,8 @@ def main() -> int:
     parser.add_argument("--qwen-api-key", default="not-needed")
     parser.add_argument("--case"); parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.timeout_multiplier < 1:
+        parser.error("--timeout-multiplier must be at least 1")
     probe_dir = args.output / ".config-probe"
     if probe_dir.exists():
         shutil.rmtree(probe_dir)

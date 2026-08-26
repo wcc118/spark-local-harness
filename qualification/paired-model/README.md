@@ -46,6 +46,14 @@ For an untailored baseline, add `--mode native`. Native mode generates a fresh
 runtime configuration containing only the vLLM connection and non-behavioral
 isolation settings; it does not copy OpenCode agents or select the custom coder.
 Both runtimes receive the same neutral containment boundary.
+For Qwen3.8, `--reasoning-effort xhigh` explicitly sends the model's strongest
+supported reasoning depth together with `enable_thinking: true` and
+`preserve_thinking: true` through vLLM's `chat_template_kwargs`. Qwen3.8 also
+supports `medium` and `low`; these are reasoning-depth controls, not fixed
+token budgets.
+Use `--timeout-multiplier N` only for a separately identified long-reasoning
+condition; attempts record the multiplier so standard and extended bounds
+cannot be reported as the same cohort.
 
 ```bash
 python3 qualification/paired-model/run_runtime.py \
