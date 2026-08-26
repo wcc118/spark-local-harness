@@ -108,6 +108,7 @@ def test_runtime_environments_are_isolated_and_disable_external_capabilities(tmp
     assert rendered["mcp"]["github"]["enabled"] is False
     assert rendered["permission"]["external_directory"] == "deny"
     assert rendered["agent"]["coder"]["permission"]["task"] == "deny"
+    assert (Path(open_env["XDG_CONFIG_HOME"]) / "opencode/agents/coder.md").read_text() == "bounded coder"
 
     qwen_attempt = tmp_path / "qwen"
     qwen_env = RUNTIME_MODULE.qwen_environment(args, qwen_attempt)
@@ -140,6 +141,27 @@ def test_native_boundary_is_neutral_and_short():
     assert len(boundary) < 250
     for behavioral_word in ("plan", "test", "report", "promptly", "workflow"):
         assert behavioral_word not in boundary.lower()
+
+
+def test_resume_identity_rejects_mode_boundary_and_config_changes():
+    args = type("Args", (), {
+        "model": "vllm/Qwen/Test", "runtime": "opencode", "mode": "native",
+        "runtime_config_hash": "config-a",
+    })()
+    ids = {"identity_hash": "fixture-a"}
+    old = {
+        "identity_hash": "fixture-a", "model": args.model, "runtime": args.runtime,
+        "mode": args.mode, "boundary_hash": "boundary-a",
+        "runtime_config_hash": args.runtime_config_hash, "terminal": True,
+    }
+    assert RUNTIME_MODULE.resume_matches(old, args, ids, "boundary-a")
+    for key, value in (
+        ("mode", "tailored"), ("boundary_hash", "boundary-b"),
+        ("runtime_config_hash", "config-b"), ("terminal", False),
+    ):
+        changed = dict(old)
+        changed[key] = value
+        assert not RUNTIME_MODULE.resume_matches(changed, args, ids, "boundary-a")
 
 
 def test_native_review_prompt_and_digest_ignore_only_review_artifact(tmp_path: Path):

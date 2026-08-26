@@ -152,6 +152,19 @@ def effective_config_path(runtime: str, environment: dict[str, str]) -> Path:
     return Path(environment["QWEN_CONFIG_DIR"]) / "settings.json"
 
 
+def resume_matches(old: dict[str, Any], args: argparse.Namespace, ids: dict[str, str],
+                   boundary_hash: str) -> bool:
+    return bool(
+        old.get("identity_hash") == ids["identity_hash"]
+        and old.get("model") == args.model
+        and old.get("runtime") == args.runtime
+        and old.get("mode") == args.mode
+        and old.get("boundary_hash") == boundary_hash
+        and old.get("runtime_config_hash") == args.runtime_config_hash
+        and old.get("terminal")
+    )
+
+
 def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
     ids = BASE.identity(manifest_path, manifest, case)
     boundary = NATIVE_BOUNDARY if args.mode == "native" else TAILORED_POLICY
@@ -161,12 +174,7 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     result_path = attempt_dir / "attempt.json"
     if args.resume and result_path.exists():
         old = json.loads(result_path.read_text(encoding="utf-8"))
-        if (old.get("identity_hash") == ids["identity_hash"] and old.get("model") == args.model
-                and old.get("runtime") == args.runtime
-                and old.get("mode") == args.mode
-                and old.get("boundary_hash") == boundary_hash
-                and old.get("runtime_config_hash") == args.runtime_config_hash
-                and old.get("terminal")):
+        if resume_matches(old, args, ids, boundary_hash):
             return old
         raise RuntimeError(f"refusing mismatched resume for {case['id']}")
     if attempt_dir.exists():
