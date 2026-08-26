@@ -18,6 +18,10 @@ RUNTIME_SPEC = importlib.util.spec_from_file_location("runtime_benchmark", ROOT 
 RUNTIME_MODULE = importlib.util.module_from_spec(RUNTIME_SPEC)
 assert RUNTIME_SPEC.loader
 RUNTIME_SPEC.loader.exec_module(RUNTIME_MODULE)
+REVIEW_SPEC = importlib.util.spec_from_file_location("native_review", ROOT / "run_native_review.py")
+REVIEW_MODULE = importlib.util.module_from_spec(REVIEW_SPEC)
+assert REVIEW_SPEC.loader
+REVIEW_SPEC.loader.exec_module(REVIEW_MODULE)
 
 
 def test_manifest_has_ten_real_cases_and_identity_covers_task_check_policy_source():
@@ -136,6 +140,17 @@ def test_native_boundary_is_neutral_and_short():
     assert len(boundary) < 250
     for behavioral_word in ("plan", "test", "report", "promptly", "workflow"):
         assert behavioral_word not in boundary.lower()
+
+
+def test_native_review_prompt_and_digest_ignore_only_review_artifact(tmp_path: Path):
+    (tmp_path / "app.py").write_text("value = 1\n")
+    before = REVIEW_MODULE.implementation_digest(tmp_path)
+    (tmp_path / "REVIEW.json").write_text('{"verdict":"APPROVE"}\n')
+    assert REVIEW_MODULE.implementation_digest(tmp_path) == before
+    (tmp_path / "app.py").write_text("value = 2\n")
+    assert REVIEW_MODULE.implementation_digest(tmp_path) != before
+    prompt = REVIEW_MODULE.review_prompt("Fix the value")
+    assert "APPROVE" in prompt and "BLOCK" in prompt
 
 
 def test_compare_preserves_routes_until_all_ten_identity_matched_pairs(tmp_path: Path, capsys):

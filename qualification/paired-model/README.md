@@ -60,6 +60,17 @@ python3 qualification/paired-model/run_runtime.py \
   --model vllm/Qwen/Qwen3-Coder-Next-FP8 --route native/qwen-code
 ```
 
+After native coder attempts exist, run an independent native reviewer over a
+preserved cohort. The reviewer receives the task and workspace, not coder
+reasoning, and is scored on `APPROVE`/`BLOCK` accuracy without code changes:
+
+```bash
+python3 qualification/paired-model/run_native_review.py \
+  --coder-output ~/.local/share/codex-local-harness/native-coding-r1 \
+  --output ~/.local/share/codex-local-harness/native-review-r1 \
+  --coder-runtime qwen-code --reviewer-runtime opencode
+```
+
 Coder Next remains the default. To run a deliberate Qwen 3.8 experiment, use
 `CODEX_LOCAL_TIER=experimental-qwen38` with the appropriate stable worker entry
 point. This tier is retained for diagnosis and is not production-qualified.
