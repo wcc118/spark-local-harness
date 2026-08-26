@@ -84,10 +84,15 @@ def native_qwen_environment(args: argparse.Namespace, attempt_dir: Path) -> dict
     runtime_home = attempt_dir / "runtime-home"
     config_dir = runtime_home / ".qwen"
     config_dir.mkdir(parents=True, mode=0o700)
-    (config_dir / "settings.json").write_text(json.dumps({
+    settings: dict[str, Any] = {
         "privacy": {"usageStatisticsEnabled": False},
         "telemetry": {"enabled": False},
-    }, separators=(",", ":")) + "\n", encoding="utf-8")
+    }
+    if getattr(args, "reasoning_effort", None):
+        settings["model"] = {"reasoningEffort": args.reasoning_effort}
+    (config_dir / "settings.json").write_text(
+        json.dumps(settings, separators=(",", ":")) + "\n", encoding="utf-8",
+    )
     return {
         "HOME": str(runtime_home), "QWEN_CONFIG_DIR": str(config_dir),
         "OPENAI_API_KEY": args.qwen_api_key, "OPENAI_BASE_URL": args.qwen_base_url,
@@ -236,7 +241,8 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
         "schema_version": 1, "attempt_id": run_id, "run_id": run_id, "case_id": case["id"],
         "fixture_id": case["id"], "category": case["category"], "role": case["role"],
         "model": args.model, "runtime": args.runtime, "runtime_version": args.runtime_version,
-        "mode": args.mode, "boundary_hash": boundary_hash,
+        "mode": args.mode, "reasoning_effort": args.reasoning_effort,
+        "boundary_hash": boundary_hash,
         "runtime_policy_hash": boundary_hash, "runtime_config_hash": runtime_config_hash,
         "route": args.route, "policy_variant": "baseline", **ids, "started_at": started,
         "observed_at": datetime.now(timezone.utc).isoformat(), "elapsed_seconds": elapsed,
@@ -257,6 +263,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runtime", choices=("opencode", "qwen-code"), required=True)
     parser.add_argument("--mode", choices=("tailored", "native"), default="tailored")
+    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high", "xhigh", "max"))
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument("--model", required=True); parser.add_argument("--route", required=True)
     parser.add_argument("--opencode", default="opencode"); parser.add_argument("--qwen", default="qwen")

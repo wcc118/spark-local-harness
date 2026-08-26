@@ -120,7 +120,7 @@ def test_runtime_environments_are_isolated_and_disable_external_capabilities(tmp
 def test_native_runtime_environments_exclude_behavioral_agents(tmp_path: Path):
     args = type("Args", (), {
         "qwen_api_key": "not-needed", "qwen_base_url": "http://localhost:8000/v1",
-        "model": "vllm/Qwen/Test",
+        "model": "vllm/Qwen/Test", "reasoning_effort": None,
     })()
     open_env = RUNTIME_MODULE.native_opencode_environment(args, tmp_path / "open")
     open_config = json.loads(RUNTIME_MODULE.effective_config_path("opencode", open_env).read_text())
@@ -134,6 +134,11 @@ def test_native_runtime_environments_exclude_behavioral_agents(tmp_path: Path):
         "privacy": {"usageStatisticsEnabled": False},
         "telemetry": {"enabled": False},
     }
+
+    args.reasoning_effort = "max"
+    thinking_env = RUNTIME_MODULE.native_qwen_environment(args, tmp_path / "thinking")
+    thinking_config = json.loads(RUNTIME_MODULE.effective_config_path("qwen-code", thinking_env).read_text())
+    assert thinking_config["model"] == {"reasoningEffort": "max"}
 
 
 def test_native_boundary_is_neutral_and_short():
