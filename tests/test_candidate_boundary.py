@@ -27,6 +27,10 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "codex_local_harness.runtime.opencode" in content
     assert "CODEX_LOCAL_HEALTH_RECORDS" in content
     assert "CODEX_LOCAL_AGENT" in content
+    assert 'worker_runtime=$(jq -r' in content
+    assert "qwen-code is qualified only for native coder routes" in content
+    assert "qwen --auth-type openai --approval-mode yolo" in content
+    assert "qwen-code requires container confinement" in content
     assert "runtime.advisory_output" in content
     assert "select(.type == \"text\") | .part.text" in content
     assert "helper) default_worker_timeout=300" in content
@@ -70,6 +74,37 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "workflow_state=interrupted" in content
     assert 'workflow_identity_args+=(--pull-request "$worker_pr")' in content
     assert 'lifecycle_checkout_args=(--checkout-kind "$checkout_kind" --checkout-id "$checkout_id")' in content
+
+
+def test_default_routes_split_native_qwen_coder_and_native_opencode_reviewer():
+    routes = json.loads((ROOT / "config/workers-vllm.json").read_text(encoding="utf-8"))
+    assert routes["routes"]["coder/complex"]["runtime"] == "qwen-code"
+    assert routes["routes"]["coder/complex"]["mode"] == "native"
+    assert routes["routes"]["reviewer/standard"]["runtime"] == "opencode"
+    assert routes["routes"]["reviewer/standard"]["mode"] == "native"
+    assert routes["routes"]["coder/tailored"]["mode"] == "tailored"
+    assert routes["routes"]["reviewer/tailored"]["mode"] == "tailored"
+
+
+def test_worker_image_pins_native_qwen_code_runtime():
+    dockerfile = (ROOT / "docker/worker/Dockerfile").read_text(encoding="utf-8")
+    assert "FROM node:22-bookworm-slim" in dockerfile
+    assert "@qwen-code/qwen-code@0.22.0" in dockerfile
+
+
+def test_qwen_stream_health_parser_uses_result_usage(tmp_path):
+    from codex_local_harness.runtime.opencode import parse_log
+
+    log = tmp_path / "qwen.jsonl"
+    log.write_text(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use"}]}}\n'
+        '{"type":"result","duration_ms":1250,"num_turns":2,'
+        '"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3}}\n',
+        encoding="utf-8",
+    )
+    stats = parse_log(log, "qwen-code")
+    assert (stats.input_tokens, stats.output_tokens, stats.turns, stats.tool_calls) == (10, 4, 2, 1)
+    assert stats.wall_seconds == 1.25
 
 
 def test_candidate_advisory_agent_is_read_only_and_machine_readable():

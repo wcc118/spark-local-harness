@@ -18,6 +18,26 @@ def _routes(path: Path) -> Path:
     return path
 
 
+def test_qwen_runtime_rejects_non_coder_route(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    routes = tmp_path / "routes.json"
+    routes.write_text(json.dumps({
+        "defaults": {"helper": "standard"},
+        "routes": {"helper/standard": {
+            "agent": "helper", "model": "vllm/test",
+            "runtime": "qwen-code", "mode": "native",
+        }},
+    }), encoding="utf-8")
+    completed = subprocess.run(
+        [str(WORKER), "helper", str(repo), "inspect"],
+        env=os.environ | {"CODEX_LOCAL_WORKER_CONFIG": str(routes), "CODEX_LOCAL_DRY_RUN": "1"},
+        text=True, capture_output=True,
+    )
+    assert completed.returncode == 2
+    assert "qualified only for native coder routes" in completed.stderr
+
+
 def test_container_worker_cannot_write_outside_checkout(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
