@@ -46,10 +46,10 @@ For an untailored baseline, add `--mode native`. Native mode generates a fresh
 runtime configuration containing only the vLLM connection and non-behavioral
 isolation settings; it does not copy OpenCode agents or select the custom coder.
 Both runtimes receive the same neutral containment boundary.
-For a reasoning-capable Qwen model, `--reasoning-effort max` explicitly asks
-Qwen Code to enable the model's strongest supported thinking mode. On local
-Qwen hybrids this maps to `enable_thinking: true`; it does not guarantee a
-larger numeric token budget unless the serving model exposes one.
+For Qwen3.8, `--reasoning-effort xhigh` explicitly sends the model's strongest
+supported reasoning depth together with `enable_thinking: true` and
+`preserve_thinking: true`. Qwen3.8 also supports `medium` and `low`; these are
+reasoning-depth controls, not fixed token budgets.
 Use `--timeout-multiplier N` only for a separately identified long-reasoning
 condition; attempts record the multiplier so standard and extended bounds
 cannot be reported as the same cohort.

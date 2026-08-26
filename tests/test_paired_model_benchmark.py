@@ -135,10 +135,16 @@ def test_native_runtime_environments_exclude_behavioral_agents(tmp_path: Path):
         "telemetry": {"enabled": False},
     }
 
-    args.reasoning_effort = "max"
+    args.reasoning_effort = "xhigh"
     thinking_env = RUNTIME_MODULE.native_qwen_environment(args, tmp_path / "thinking")
     thinking_config = json.loads(RUNTIME_MODULE.effective_config_path("qwen-code", thinking_env).read_text())
-    assert thinking_config["model"] == {"reasoningEffort": "max"}
+    assert thinking_config["model"] == {
+        "reasoningEffort": "xhigh",
+        "generationConfig": {"extra_body": {
+            "reasoning_effort": "xhigh",
+            "chat_template_kwargs": {"enable_thinking": True, "preserve_thinking": True},
+        }},
+    }
 
 
 def test_native_boundary_is_neutral_and_short():

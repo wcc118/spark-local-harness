@@ -89,7 +89,16 @@ def native_qwen_environment(args: argparse.Namespace, attempt_dir: Path) -> dict
         "telemetry": {"enabled": False},
     }
     if getattr(args, "reasoning_effort", None):
-        settings["model"] = {"reasoningEffort": args.reasoning_effort}
+        settings["model"] = {
+            "reasoningEffort": args.reasoning_effort,
+            "generationConfig": {"extra_body": {
+                "reasoning_effort": args.reasoning_effort,
+                "chat_template_kwargs": {
+                    "enable_thinking": True,
+                    "preserve_thinking": True,
+                },
+            }},
+        }
     (config_dir / "settings.json").write_text(
         json.dumps(settings, separators=(",", ":")) + "\n", encoding="utf-8",
     )
