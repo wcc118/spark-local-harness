@@ -50,6 +50,9 @@ For a reasoning-capable Qwen model, `--reasoning-effort max` explicitly asks
 Qwen Code to enable the model's strongest supported thinking mode. On local
 Qwen hybrids this maps to `enable_thinking: true`; it does not guarantee a
 larger numeric token budget unless the serving model exposes one.
+Use `--timeout-multiplier N` only for a separately identified long-reasoning
+condition; attempts record the multiplier so standard and extended bounds
+cannot be reported as the same cohort.
 
 ```bash
 python3 qualification/paired-model/run_runtime.py \

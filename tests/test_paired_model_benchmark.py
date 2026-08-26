@@ -151,18 +151,20 @@ def test_native_boundary_is_neutral_and_short():
 def test_resume_identity_rejects_mode_boundary_and_config_changes():
     args = type("Args", (), {
         "model": "vllm/Qwen/Test", "runtime": "opencode", "mode": "native",
-        "runtime_config_hash": "config-a",
+        "runtime_config_hash": "config-a", "timeout_multiplier": 1.0,
     })()
     ids = {"identity_hash": "fixture-a"}
     old = {
         "identity_hash": "fixture-a", "model": args.model, "runtime": args.runtime,
         "mode": args.mode, "boundary_hash": "boundary-a",
         "runtime_config_hash": args.runtime_config_hash, "terminal": True,
+        "timeout_multiplier": 1.0,
     }
     assert RUNTIME_MODULE.resume_matches(old, args, ids, "boundary-a")
     for key, value in (
         ("mode", "tailored"), ("boundary_hash", "boundary-b"),
         ("runtime_config_hash", "config-b"), ("terminal", False),
+        ("timeout_multiplier", 4.0),
     ):
         changed = dict(old)
         changed[key] = value
