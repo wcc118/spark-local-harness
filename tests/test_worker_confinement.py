@@ -130,3 +130,23 @@ def test_interrupted_coder_mutates_only_disposable_clone(tmp_path):
     assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip() == before_head
     assert subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True) == ""
     assert isolation.is_dir() and list(isolation.iterdir()) == []
+
+
+def test_disposable_opencode_config_contains_qwen35_nvfp4_model():
+    content = WORKER.read_text(encoding="utf-8")
+    assert '.provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {' in content
+    assert '"context": 65536' in content
+    assert '"output": 8192' in content
+    assert '"name": "Qwen3.5 122B NVFP4 (Spark)"' in content
+
+
+def test_vllm_worker_allowlist_includes_qwen35_nvfp4():
+    content = WORKER.read_text(encoding="utf-8")
+    assert 'nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4' in content
+
+
+def test_native_qwen_code_caps_qwen35_output_tokens():
+    content = WORKER.read_text(encoding="utf-8")
+    assert "if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]" in content
+    assert "qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)" in content
+    assert '"${qwen_env[@]}"' in content

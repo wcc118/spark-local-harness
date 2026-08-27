@@ -189,16 +189,9 @@ def test_worker_v4_qwen35_nvfp4_model_allowlist():
     assert "nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4" in worker
 
 
-def test_worker_v4_qwen35_nvfp4_env_vars_for_opencode():
+def test_worker_v4_qwen35_output_cap_is_qwen_code_only():
     worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
-    assert '"$worker_model" != "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4" ]] || worker_env+=(QWEN_CODE_MAX_OUTPUT_TOKENS=8192' in worker
-
-
-def test_worker_v4_qwen35_nvfp4_env_vars_for_qwen_code():
-    worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
-    assert '"$qwen_model" != "nvidia/Qwen3.5-122B-A10B-NVFP4" ]] || qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192' in worker
-
-
-def test_worker_v4_qwen35_nvfp4_env_vars_for_container_opencode():
-    worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
-    assert '"$worker_model" != "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4" ]] || docker_args+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192' in worker
+    assert "if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]" in worker
+    assert "qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)" in worker
+    assert "worker_env+=(QWEN_CODE_MAX_OUTPUT_TOKENS=8192)" not in worker
+    assert "docker_args+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)" not in worker
