@@ -420,9 +420,14 @@ if [[ $worker_sandbox == container ]]; then
   for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
   if [[ $worker_runtime == qwen-code ]]; then
     qwen_model=${worker_model#vllm/}
+    qwen_env=()
+    if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]; then
+      qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)
+    fi
     timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
       docker "${docker_args[@]}" \
       --env OPENAI_API_KEY=not-needed --env OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+      "${qwen_env[@]}" \
       "$worker_container_image" qwen --auth-type openai --approval-mode yolo --model "$qwen_model" \
       --output-format stream-json --prompt "$worker_task" >"$worker_log"
   elif [[ $worker_mode == tailored && ${CODEX_LOCAL_SESSION_BRIDGE:-1} == 1 ]]; then

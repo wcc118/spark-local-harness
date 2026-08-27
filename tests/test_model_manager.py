@@ -98,8 +98,8 @@ def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
     assert "--quantization modelopt_fp4" in docker_calls
     assert "--kv-cache-dtype fp8" in docker_calls
     assert "--tensor-parallel-size 1" in docker_calls
-    assert "--max-model-len 131072" in docker_calls
-    assert "--gpu-memory-utilization 0.90" in docker_calls
+    assert "--max-model-len 65536" in docker_calls
+    assert "--gpu-memory-utilization 0.82" in docker_calls
     assert "--reasoning-parser qwen3" in docker_calls
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
@@ -112,8 +112,6 @@ def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
     assert "--enforce-eager" in docker_calls
     assert "--max-num-seqs 8" in docker_calls
     assert "--max-num-batched-tokens 8192" in docker_calls
-    assert "--max-model-len 65536" in docker_calls
-    assert "--gpu-memory-utilization 0.82" in docker_calls
 
 
 def test_model_manager_fails_when_exact_model_never_becomes_ready(tmp_path):
