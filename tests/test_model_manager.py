@@ -109,6 +109,11 @@ def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
     assert "--load-format fastsafetensors" in docker_calls
     assert "--host 0.0.0.0" in docker_calls
     assert "--port 8000" in docker_calls
+    assert "--enforce-eager" in docker_calls
+    assert "--max-num-seqs 8" in docker_calls
+    assert "--max-num-batched-tokens 8192" in docker_calls
+    assert "--max-model-len 65536" in docker_calls
+    assert "--gpu-memory-utilization 0.82" in docker_calls
 
 
 def test_model_manager_fails_when_exact_model_never_becomes_ready(tmp_path):

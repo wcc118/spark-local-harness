@@ -190,6 +190,7 @@ if [[ $worker_model == vllm/* && ${CODEX_LOCAL_MODEL_SWITCH:-1} == 1 ]]; then
   case "$vllm_model" in
     Qwen/Qwen3.8-27B-FP8) vllm_profile=qwen38 ;;
     Qwen/Qwen3-Coder-Next-FP8) vllm_profile=coder-next ;;
+    nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4 ;;
     *) echo "ERROR: unsupported vLLM worker model: $vllm_model" >&2; exit 69 ;;
   esac
   model_manager=${CODEX_LOCAL_MODEL_MANAGER:-/home/connellwc83/.local/bin/codex-local-model}
@@ -227,7 +228,11 @@ jq '.mcp.github.enabled = false
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
       })
     | .agent.reviewer.permission = {"*": "deny"}
-    | .agent.reviewer.steps = 4' /home/connellwc83/.config/opencode/opencode.json \
+    | .agent.reviewer.steps = 4
+    | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {
+        "name": "Qwen3.5 122B NVFP4 (Spark)",
+        "limit": { "context": 65536, "output": 8192 }
+      }' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
 cp -a /home/connellwc83/.config/opencode/agents/. \
   "$worker_runtime_home/.config/opencode/agents/"

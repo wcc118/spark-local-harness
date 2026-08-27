@@ -79,7 +79,7 @@ launch() {
       ;;
     qwen35-nvfp4)
       log=/root/.cache/vllm/qwen35-nvfp4-122b.log
-      extra='--trust-remote-code --quantization modelopt_fp4 --kv-cache-dtype fp8 --tensor-parallel-size 1 --max-model-len 131072 --gpu-memory-utilization 0.90 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --language-model-only --attention-backend flashinfer --enable-prefix-caching --load-format fastsafetensors --host 0.0.0.0 --port 8000'
+      extra='--trust-remote-code --quantization modelopt_fp4 --kv-cache-dtype fp8 --tensor-parallel-size 1 --max-model-len 65536 --gpu-memory-utilization 0.82 --enforce-eager --max-num-seqs 8 --max-num-batched-tokens 8192 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --language-model-only --attention-backend flashinfer --enable-prefix-caching --load-format fastsafetensors --host 0.0.0.0 --port 8000'
       ;;
   esac
   "$docker_bin" exec -d "$container" bash -lc \
