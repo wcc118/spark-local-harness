@@ -100,6 +100,9 @@ def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
     assert "--tensor-parallel-size 1" in docker_calls
     assert "--max-model-len 65536" in docker_calls
     assert "--gpu-memory-utilization 0.82" in docker_calls
+    assert "--enforce-eager" in docker_calls
+    assert "--max-num-seqs 8" in docker_calls
+    assert "--max-num-batched-tokens 8192" in docker_calls
     assert "--reasoning-parser qwen3" in docker_calls
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
@@ -109,9 +112,6 @@ def test_model_manager_switches_to_qwen35_nvfp4_profile(tmp_path):
     assert "--load-format fastsafetensors" in docker_calls
     assert "--host 0.0.0.0" in docker_calls
     assert "--port 8000" in docker_calls
-    assert "--enforce-eager" in docker_calls
-    assert "--max-num-seqs 8" in docker_calls
-    assert "--max-num-batched-tokens 8192" in docker_calls
 
 
 def test_model_manager_fails_when_exact_model_never_becomes_ready(tmp_path):
@@ -146,3 +146,20 @@ def test_model_manager_launches_qwen38_profile(tmp_path):
     assert "--enable-prefix-caching" in docker_calls
     assert "--host 0.0.0.0" in docker_calls
     assert "--port 8000" in docker_calls
+
+
+def test_model_manager_qwen35_nvfp4_safe_boundaries(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    first = subprocess.run([str(MANAGER), "use", "qwen35-nvfp4"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--max-model-len 65536" in docker_calls
+    assert "--gpu-memory-utilization 0.82" in docker_calls
+    assert "--enforce-eager" in docker_calls
+    assert "--max-num-seqs 8" in docker_calls
+    assert "--max-num-batched-tokens 8192" in docker_calls
+    assert "--reasoning-parser qwen3" in docker_calls
+    assert "--enable-auto-tool-choice" in docker_calls
+    assert "--tool-call-parser qwen3_coder" in docker_calls
+    assert "--language-model-only" in docker_calls
