@@ -12,6 +12,7 @@ RELEASE_MANIFEST = Path(__file__).resolve().parents[1] / "config" / "installed-r
 QUALIFIED_ROUTES = Path(__file__).resolve().parents[1] / "config" / "qualified-qwen38-routes.json"
 PROJECT_WORKER = PROJECT / "bin/codex-local-worker"
 INSTALLED_WORKER = Path("/home/connellwc83/.local/bin/codex-local-worker")
+PROJECT_WORKER_V4 = Path(__file__).resolve().parents[1] / "bin" / "codex-local-worker-v4"
 PROJECT_CRITIC = PROJECT / "bin/codex-local-critic"
 INSTALLED_CRITIC = Path("/home/connellwc83/.local/bin/codex-local-critic")
 OPENCODE_CONFIG = Path("/home/connellwc83/.config/opencode/opencode.json")
@@ -181,3 +182,23 @@ def test_state_transition_ownership_is_not_contradictory():
     assert "owned by the deterministic publisher" in prompt
     assert "owned by Reviewer" not in prompt
     assert "unsupported verdicts as invalid output" in prompt
+
+
+def test_worker_v4_qwen35_nvfp4_model_allowlist():
+    worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
+    assert "nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4" in worker
+
+
+def test_worker_v4_qwen35_nvfp4_env_vars_for_opencode():
+    worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
+    assert '"$worker_model" != "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4" ]] || worker_env+=(QWEN_CODE_MAX_OUTPUT_TOKENS=8192' in worker
+
+
+def test_worker_v4_qwen35_nvfp4_env_vars_for_qwen_code():
+    worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
+    assert '"$qwen_model" != "nvidia/Qwen3.5-122B-A10B-NVFP4" ]] || qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192' in worker
+
+
+def test_worker_v4_qwen35_nvfp4_env_vars_for_container_opencode():
+    worker = PROJECT_WORKER_V4.read_text(encoding="utf-8")
+    assert '"$worker_model" != "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4" ]] || docker_args+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192' in worker
