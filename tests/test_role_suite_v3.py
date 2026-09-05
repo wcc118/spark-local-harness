@@ -16,9 +16,8 @@ from qualification.role_suite.v3 import (
     POLICY_CATEGORIES,
     ROLE_PROMPTS,
     build_full_prompt,
-    aggregate,
-    run_case,
 )
+from qualification.role_suite.v3.runner import aggregate, run_case
 from qualification.role_suite.v2.cases import all_cases as v2_all_cases
 
 
@@ -293,9 +292,12 @@ class TestAggregation:
         agg = aggregate(records)
         # Two case/policy pairs, one consistent, one inconsistent
         assert agg["consistency"]["total_case_policy_pairs"] == 2
-        assert agg["consistency"]["total_repeat_pairs"] == 2
-        assert agg["consistency"]["consistent_pairs"] == 1
-        assert agg["consistency"]["consistency_rate"] == 0.5
+        assert agg["consistency"]["intended_repeats"] == 2
+        assert agg["consistency"]["complete_repeat_groups"] == 2
+        assert agg["consistency"]["outcome_stable_groups"] == 1
+        assert agg["consistency"]["outcome_stability_rate"] == 0.5
+        assert agg["consistency"]["all_correct_groups"] == 1
+        assert agg["consistency"]["all_correct_rate"] == 0.5
 
     def test_category_and_policy_stats(self):
         """Aggregation should include category and policy breakdowns."""
@@ -328,6 +330,22 @@ class TestAggregation:
         assert "investigator" in agg["category_stats"]
         assert "role-contract" in agg["policy_stats"]
         assert "role-contract-plus-verification" in agg["policy_stats"]
+
+    def test_false_positive_and_label_recall_are_observed_not_estimated(self):
+        records = [
+            {"case_id": "review-clean-02", "suite": "reviewer", "policy": "p",
+             "artifact_correct": False, "state": "completed",
+             "oracle": {"answers": ["RESOURCE_LEAK"], "expected": [], "expected_count": 0}},
+            {"case_id": "specification-01", "suite": "non-coding", "policy": "p",
+             "artifact_correct": False, "state": "completed",
+             "oracle": {"answers": ["TIMEZONE_CRITERION"],
+                        "expected": ["TIMEZONE_CRITERION", "ROW_LIMIT_CRITERION"],
+                        "expected_count": 2}},
+        ]
+        agg = aggregate(records)
+        assert agg["reviewer_fp_by_policy"]["p"] == {
+            "total_clean": 1, "false_positives": 1, "fp_rate": 1.0}
+        assert agg["label_level_recall"] == 0.5
 
 
 class TestRunnerIntegration:

@@ -91,20 +91,31 @@ POLICY_CATEGORIES: Final[dict[str, str]] = {
 # Role-specific prompts that should be prepended based on case category
 ROLE_PROMPTS: Final[dict[str, str]] = {
     "reviewer": (
-        "REVIEWER ROLE: You are a code reviewer. Your task is to identify defects, "
-        "concurrency issues, missing tests, and security vulnerabilities in code patches."
+        "REVIEWER ROLE: Act as a skeptical code reviewer. For each candidate finding, "
+        "identify the exact failing behavior, trace the input or state that triggers it, "
+        "and check whether the surrounding code already prevents it. Include a finding "
+        "only when all three are supported. A plausible concern is not a finding. Do not "
+        "report style preferences, hypothetical risks, or already-handled conditions. "
+        "Explicitly consider whether the patch is correct."
     ),
     "investigator": (
-        "INVESTIGATOR ROLE: You are a production incident investigator. Your task is to "
-        "analyze logs, error messages, and system behavior to identify root causes."
+        "INVESTIGATOR ROLE: Separate observations, hypotheses, and conclusions. Consider "
+        "at least two explanations, reject those contradicted by the evidence, and return "
+        "only the narrowest supported conclusion. If the evidence cannot distinguish the "
+        "alternatives, choose the allowed insufficient-evidence label rather than guessing."
     ),
     "test-strategy": (
-        "TEST STRATEGY ROLE: You are a test automation specialist. Your task is to "
-        "design comprehensive test strategies covering edge cases, regression, and integration."
+        "TEST STRATEGY ROLE: Derive tests from externally observable behavior. Check, in "
+        "order, changed behavior, failure/fallback branches, boundaries and invalid inputs, "
+        "producer-consumer compatibility, and the prior regression. Select every materially "
+        "required test and no merely related test. Each selected test must catch a distinct "
+        "incorrect implementation."
     ),
     "non-coding": (
-        "NON-CODING ANALYSIS ROLE: You are a systems analyst. Your task is to analyze "
-        "documentation, specifications, and operational context to draw conclusions."
+        "NON-CODING ANALYSIS ROLE: Treat stated hard constraints as gates, not preferences. "
+        "Eliminate conclusions that violate a stated constraint, reconcile all supplied "
+        "facts, and do not invent requirements. When the evidence cannot distinguish the "
+        "allowed conclusions, choose the allowed insufficient-evidence label."
     ),
     "end-to-end": (
         "WORKFLOW ORCHESTRATION ROLE: You are a workflow coordinator. Your task is to "
@@ -135,12 +146,13 @@ def build_full_prompt(policy: str, suite: str, evidence_path: str, result_path: 
     how ROLE_PROMPTS is keyed, ensuring the correct role-specific instructions
     are applied for each case type.
     """
-    role_prompt = get_role_prompt(suite)
+    # The control must remain byte-for-byte equivalent in substance to v2;
+    # role contracts are the experimental treatment.
+    role_prompt = "" if policy == "structured-v1" else get_role_prompt(suite)
     policy_prompt = get_policy_prompt(policy)
 
-    return f"""{role_prompt}
-
-{policy_prompt}
+    prefix = f"{role_prompt}\n\n" if role_prompt else ""
+    return f"""{prefix}{policy_prompt}
 
 Read {evidence_path}. This is a read-only analysis task: do not modify or create anything except {result_path}.
 

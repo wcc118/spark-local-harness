@@ -13,11 +13,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,7 +23,12 @@ from typing import Any
 from ..v2.cases import Case
 
 
-# Policy variants for ablation study (defined in main to avoid runpy warning)
+def digest(value: Any) -> str:
+    """Return a stable SHA-256 digest for JSON-compatible data."""
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def identity_hash(case: Case, policy: str) -> str:
     """Compute identity hash binding public case, private oracle, and complete effective prompt.
 
@@ -43,12 +46,8 @@ def identity_hash(case: Case, policy: str) -> str:
         "expected": case.expected,
         "forbidden": case.forbidden,
     }
-    # Build the complete effective prompt for identity binding
-    policy_prompt = POLICIES.get(policy, "")
-    # Use suite for role selection (ROLE_PROMPTS is keyed by suite)
-    from .policies import ROLE_PROMPTS, get_role_prompt, POLICIES as POLICIES_MODULE
-    role_prompt = get_role_prompt(case.suite)
-    complete_prompt = f"{role_prompt}\n\n{policy_prompt}"
+    from .policies import build_full_prompt
+    complete_prompt = build_full_prompt(policy, case.suite, "{evidence_path}", "{result_path}")
 
     return digest({"public": public, "oracle": private, "policy": complete_prompt})
 
@@ -96,6 +95,7 @@ def score(case: Case, workspace: Path, before: dict[str, str]) -> tuple[bool, di
 
     return correct, {
         "answers": sorted(got),
+        "expected": sorted(case.expected),
         "expected_count": len(case.expected),
         "workspace_mutated": mutated,
     }
@@ -110,7 +110,7 @@ def run_case(
     """Execute a single case through OpenCode worker."""
     # Import here to avoid runpy warning
     from .challenge_set import get_challenge_meta, get_challenge_cases
-    from .policies import POLICY_CATEGORIES
+    from .policies import POLICY_CATEGORIES, build_full_prompt
     ident = identity_hash(case, policy)
     slug = hashlib.sha256(
         f"{args.model}:{policy}:{case.case_id}:r{repeat}".encode()
@@ -179,10 +179,6 @@ def run_case(
 
     elapsed = time.monotonic() - started
     correct, oracle = score(case, workspace, before)
-
-    # Collision-safe naming: use case_id in filename, slug in directory
-    case_slug = hashlib.sha256(case.case_id.encode()).hexdigest()[:8]
-    events_file = attempt_dir / f"events_{case_slug}.jsonl"
 
     calls, errors, tokens = normalize_events(raw)
 
@@ -347,26 +343,24 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         if len(pairs) > 1 and len(set(p["artifact_correct"] for p in pairs)) == 1
     )
 
-    # Consistency rate: ratio of consistent pairs to total case-policy pairs
-    # Only pairs with >1 repeat are counted
-    total_repeat_pairs = sum(1 for pairs in case_policy_pairs.values() if len(pairs) > 1)
+    intended_repeats = max((len(pairs) for pairs in case_policy_pairs.values()), default=0)
+    repeated_pairs = [pairs for pairs in case_policy_pairs.values()
+                      if intended_repeats > 1 and len(pairs) == intended_repeats]
+    stable_pairs = sum(len({p.get("artifact_correct", False) for p in pairs}) == 1
+                       for pairs in repeated_pairs)
+    all_correct_pairs = sum(all(p.get("artifact_correct", False) for p in pairs)
+                            for pairs in repeated_pairs)
 
     # Per-policy reviewer false-positive rate on unambiguous clean controls
     # Clean controls that should have empty answers but got non-empty answers
-    reviewer_clean_controls = [r for r in records
-                                if r.get("suite") == "reviewer"
-                                and r.get("case_id") in AMBIGUOUS_CLEAN_CONTROLS
-                                and r.get("artifact_correct") is False
-                                and r.get("state") == "completed"]
-    # Actually, we need ALL clean controls (including ambiguous) that are unambiguous
-    # Unambiguous clean controls: review-clean-02, review-clean-03 (not in ambiguous set)
-    unambiguous_clean = {r for r in records if r.get("suite") == "reviewer" and r.get("case_id") in {"review-clean-02", "review-clean-03"}}
+    unambiguous_clean = [r for r in records if r.get("suite") == "reviewer"
+                         and r.get("case_id") in {"review-clean-02", "review-clean-03"}]
     reviewer_fp_by_policy = {}
     for pol in policies:
         pol_unambiguous_clean = [r for r in unambiguous_clean if r.get("policy") == pol]
         if pol_unambiguous_clean:
             # False positive: non-empty answers on a clean control
-            fps = sum(1 for r in pol_unambiguous_clean if r.get("artifact_correct") is False and r.get("state") == "completed")
+            fps = sum(bool(r.get("oracle", {}).get("answers")) for r in pol_unambiguous_clean)
             reviewer_fp_by_policy[pol] = {
                 "total_clean": len(pol_unambiguous_clean),
                 "false_positives": fps,
@@ -376,21 +370,18 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
             reviewer_fp_by_policy[pol] = {"total_clean": 0, "false_positives": 0, "fp_rate": None}
 
     # Multi-label label-level recall: for multi-label cases, what fraction of expected labels were predicted?
-    multi_label_cases = [r for r in records if isinstance(r.get("oracle", {}).get("expected_count"), int) and r["oracle"]["expected_count"] > 1]
-    label_level_recalls = []
+    multi_label_cases = [r for r in records
+                         if r.get("oracle", {}).get("expected_count", 0) > 1]
+    expected_labels = 0
+    recalled_labels = 0
     for r in multi_label_cases:
         oracle = r.get("oracle", {})
-        expected = set(oracle.get("answers", []))
-        # We need the actual predicted answers from the attempt record
-        # This requires looking at the attempt data - for now, we'll compute from artifact_correct
-        # A more accurate metric would track predicted vs expected labels per attempt
-        if r.get("artifact_correct") and expected:
-            # Perfect recall for correct predictions
-            label_level_recalls.append(1.0)
-        elif not r.get("artifact_correct") and expected:
-            # Partial recall - estimate as half for incorrect predictions
-            label_level_recalls.append(0.5)
-    label_level_recall = round(sum(label_level_recalls) / len(label_level_recalls), 3) if label_level_recalls else None
+        expected = set(oracle.get("expected", []))
+        predicted = set(oracle.get("answers", []))
+        expected_labels += len(expected)
+        recalled_labels += len(expected & predicted)
+    label_level_recall = (round(recalled_labels / expected_labels, 3)
+                          if expected_labels else None)
 
     return {
         "attempts": attempts,
@@ -424,9 +415,12 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "consistency": {
             "total_case_policy_pairs": len(case_policy_pairs),
-            "total_repeat_pairs": total_repeat_pairs,
-            "consistent_pairs": consistent_count,
-            "consistency_rate": round(consistent_count / total_repeat_pairs, 3) if total_repeat_pairs > 0 else None,
+            "intended_repeats": intended_repeats,
+            "complete_repeat_groups": len(repeated_pairs),
+            "outcome_stable_groups": stable_pairs,
+            "outcome_stability_rate": round(stable_pairs / len(repeated_pairs), 3) if repeated_pairs else None,
+            "all_correct_groups": all_correct_pairs,
+            "all_correct_rate": round(all_correct_pairs / len(repeated_pairs), 3) if repeated_pairs else None,
         },
         "reviewer_fp_by_policy": reviewer_fp_by_policy,
         "label_level_recall": label_level_recall,
