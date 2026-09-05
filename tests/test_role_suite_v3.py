@@ -17,7 +17,7 @@ from qualification.role_suite.v3 import (
     ROLE_PROMPTS,
     build_full_prompt,
 )
-from qualification.role_suite.v3.runner import aggregate, run_case
+from qualification.role_suite.v3.runner import aggregate, run_case, select_challenge_cases
 from qualification.role_suite.v2.cases import all_cases as v2_all_cases
 
 
@@ -350,6 +350,11 @@ class TestAggregation:
 
 class TestRunnerIntegration:
     """Integration tests for runner execution."""
+
+    def test_full_corpus_selection_preserves_v2(self):
+        args = Namespace(corpus="full", challenge_subset="all", suite=None, case=None)
+        selected = select_challenge_cases(args)
+        assert [c.case_id for c in selected] == [c.case_id for c in v2_all_cases()]
 
     def test_run_case_writes_artifacts(self, tmp_path: Path):
         """Run case should write evidence artifact without oracle and create attempt.json."""

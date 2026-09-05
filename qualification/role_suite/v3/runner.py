@@ -240,7 +240,9 @@ def select_challenge_cases(args: argparse.Namespace) -> list[Case]:
     from .challenge_set import get_challenge_cases, get_challenge_meta, DEEPSEEK_MISSES_STRUCTURED_V2
     from ..v2.cases import all_cases as v2_all_cases
 
-    if args.challenge_subset == "all":
+    if getattr(args, "corpus", "challenge") == "full":
+        cases = v2_all_cases()
+    elif args.challenge_subset == "all":
         cases = get_challenge_cases()
     elif args.challenge_subset == "deepseek_misses":
         v2_cases = {c.case_id: c for c in v2_all_cases()}
@@ -457,6 +459,10 @@ def main() -> int:
         choices=["structured-v1", "role-contract", "role-contract-plus-verification", "role-contract-plus-uncertainty"],
         action="append",
         help="Policy variant(s) to test (repeat for multiple)",
+    )
+    run_parser.add_argument(
+        "--corpus", choices=["challenge", "full"], default="challenge",
+        help="Use the frozen challenge subset or the complete v2 corpus",
     )
     run_parser.add_argument(
         "--challenge-subset",
