@@ -96,10 +96,10 @@ class TestPolicies:
         assert "uncertainty" in POLICY_CATEGORIES["role-contract-plus-uncertainty"]
 
     def test_role_prompts_coverage(self):
-        """Role prompts should cover all case categories."""
-        categories = {c.category for c in v2_all_cases()}
-        for cat in categories:
-            prompt = ROLE_PROMPTS.get(cat, ROLE_PROMPTS["non-coding"])
+        """Role prompts should cover all case suites."""
+        suites = {c.suite for c in v2_all_cases()}
+        for suite in suites:
+            prompt = ROLE_PROMPTS.get(suite, ROLE_PROMPTS["non-coding"])
             assert len(prompt) > 0
 
     def test_build_full_prompt_includes_role_and_policy(self):
@@ -114,6 +114,33 @@ class TestPolicies:
         assert "role contract" in prompt.lower()
         assert "evidence.json" in prompt
         assert "result.json" in prompt
+
+    def test_build_full_prompt_selects_correct_role_by_suite(self):
+        """Full prompt should use suite-based role, not category-based."""
+        # Test each suite gets its correct role prompt
+        from qualification.role_suite.v2.cases import all_cases
+
+        cases_by_suite = {}
+        for c in all_cases():
+            if c.suite not in cases_by_suite:
+                cases_by_suite[c.suite] = c
+
+        for suite, case in cases_by_suite.items():
+            prompt = build_full_prompt(
+                "role-contract",
+                suite,
+                "/workspace/evidence.json",
+                "/workspace/result.json",
+            )
+            # Verify the correct role prompt is included based on suite
+            expected_role_prefix = {
+                "reviewer": "REVIEWER ROLE",
+                "investigator": "INVESTIGATOR ROLE",
+                "test-strategy": "TEST STRATEGY ROLE",
+                "non-coding": "NON-CODING ANALYSIS ROLE",
+                "end-to-end": "WORKFLOW ORCHESTRATION ROLE",
+            }
+            assert expected_role_prefix[suite] in prompt, f"Suite {suite} should have correct role"
 
 
 class TestAggregation:
@@ -266,7 +293,9 @@ class TestAggregation:
         agg = aggregate(records)
         # Two case/policy pairs, one consistent, one inconsistent
         assert agg["consistency"]["total_case_policy_pairs"] == 2
+        assert agg["consistency"]["total_repeat_pairs"] == 2
         assert agg["consistency"]["consistent_pairs"] == 1
+        assert agg["consistency"]["consistency_rate"] == 0.5
 
     def test_category_and_policy_stats(self):
         """Aggregation should include category and policy breakdowns."""
@@ -366,3 +395,65 @@ class TestRunnerIntegration:
         assert "oracle" not in artifact
         assert artifact["case_id"] == "review-single-01"
         assert artifact["policy"] == "role-contract"
+
+    def test_run_case_executes_worker_and_scores_external_oracle(self, tmp_path: Path):
+        """Run case should execute fake worker and score against external oracle.
+
+        This test verifies the full runner integration including subprocess execution,
+        similar to v2's test_run_case_executes_worker_and_scores_external_oracle.
+
+        Note: This test may be skipped on systems where /tmp is mounted with noexec.
+        """
+        import stat
+        import subprocess
+
+        # Create fake opencode worker script in the test temp directory
+        # Note: We need to use a directory without noexec, so we use tmp_path
+        worker = tmp_path / "fake-opencode"
+        script_content = (
+            "#!/bin/sh\n"
+            "printf '%s\\n' '{\"answers\":[\"NULL_GUARD\"],\"evidence\":[\"missing null check\"]}' > result.json\n"
+            "printf '%s\\n' '{\"part\":{\"type\":\"tool\",\"callID\":\"one\",\"tokens\":{\"total\":7}}}'\n"
+        )
+        worker.write_text(script_content)
+        # Set executable permission
+        worker.chmod(0o755)
+
+        # Verify the worker is executable (may fail on noexec /tmp)
+        try:
+            subprocess.run([str(worker)], capture_output=True, text=True, timeout=1)
+            worker_executable = True
+        except (PermissionError, OSError):
+            worker_executable = False
+
+        if not worker_executable:
+            # Skip this test on systems with noexec /tmp
+            pytest.skip("Worker execution not supported (noexec /tmp)")
+
+        # Build args similar to runner
+        args = Namespace(
+            output=tmp_path / "output",
+            opencode=str(worker),
+            model="fake/model",
+            route="test",
+            policy="role-contract",
+            timeout=10,
+            resume=False,
+        )
+
+        # Get the review-single-01 case (NULL_GUARD defect)
+        from qualification.role_suite.v2.cases import all_cases as v2_all_cases
+        case = next(c for c in v2_all_cases() if c.case_id == "review-single-01")
+
+        # Run the case
+        record = run_case(case, args, repeat=1, policy="role-contract")
+
+        # Verify execution succeeded and scoring worked
+        assert record["state"] == "completed"
+        assert record["artifact_correct"] is True
+        assert record["completed_and_correct"] is True
+        assert record["tool_calls"] == 1
+        assert record["tokens_total"] == 7
+        assert record["case_id"] == "review-single-01"
+        assert record["policy"] == "role-contract"
+        assert record["suite"] == "reviewer"

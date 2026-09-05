@@ -5,6 +5,8 @@ import stat
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from qualification.role_suite.v2.cases import all_cases
 from qualification.role_suite.v2.run import aggregate, identity, run_case, score
 
@@ -56,13 +58,33 @@ def test_aggregate_separates_correctness_and_completion():
 
 
 def test_run_case_executes_worker_and_scores_external_oracle(tmp_path: Path):
+    """Run case should execute fake worker and score against external oracle.
+
+    This test verifies the full runner integration including subprocess execution.
+
+    Note: This test may be skipped on systems where /tmp is mounted with noexec.
+    """
+    import stat
+    import subprocess
+
     worker = tmp_path / "fake-opencode"
     worker.write_text(
         "#!/bin/sh\n"
         "printf '%s\\n' '{\"answers\":[\"NULL_GUARD\"],\"evidence\":[\"missing null check\"]}' > result.json\n"
         "printf '%s\\n' '{\"part\":{\"type\":\"tool\",\"callID\":\"one\",\"tokens\":{\"total\":7}}}'\n"
     )
-    worker.chmod(worker.stat().st_mode | stat.S_IXUSR)
+    worker.chmod(0o755)
+
+    # Verify the worker is executable (may fail on noexec /tmp)
+    try:
+        subprocess.run([str(worker)], capture_output=True, text=True, timeout=1)
+        worker_executable = True
+    except (PermissionError, OSError):
+        worker_executable = False
+
+    if not worker_executable:
+        pytest.skip("Worker execution not supported (noexec /tmp)")
+
     args = Namespace(
         output=tmp_path / "output",
         opencode=str(worker),

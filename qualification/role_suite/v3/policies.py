@@ -120,17 +120,22 @@ def get_policy_prompt(policy: str) -> str:
     return POLICIES[policy]
 
 
-def get_role_prompt(category: str) -> str:
-    """Return the role-specific prompt for a case category."""
-    if category not in ROLE_PROMPTS:
-        # Fallback to general analysis role
+def get_role_prompt(suite: str) -> str:
+    """Return the role-specific prompt for a case suite."""
+    if suite not in ROLE_PROMPTS:
+        # Fallback to non-coding analysis role for unknown suites
         return ROLE_PROMPTS["non-coding"]
-    return ROLE_PROMPTS[category]
+    return ROLE_PROMPTS[suite]
 
 
-def build_full_prompt(policy: str, category: str, evidence_path: str, result_path: str) -> str:
-    """Build the complete prompt with role context and policy instructions."""
-    role_prompt = get_role_prompt(category)
+def build_full_prompt(policy: str, suite: str, evidence_path: str, result_path: str) -> str:
+    """Build the complete prompt with role context and policy instructions.
+
+    The role prompt is selected based on suite (not category) to match
+    how ROLE_PROMPTS is keyed, ensuring the correct role-specific instructions
+    are applied for each case type.
+    """
+    role_prompt = get_role_prompt(suite)
     policy_prompt = get_policy_prompt(policy)
 
     return f"""{role_prompt}
