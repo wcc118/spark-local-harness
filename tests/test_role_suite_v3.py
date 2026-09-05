@@ -444,7 +444,9 @@ class TestRunnerIntegration:
 
         # Verify the worker is executable (may fail on noexec /tmp)
         try:
-            subprocess.run([str(worker)], capture_output=True, text=True, timeout=1)
+            subprocess.run(
+                [str(worker)], capture_output=True, text=True, timeout=1, cwd=tmp_path
+            )
             worker_executable = True
         except (PermissionError, OSError):
             worker_executable = False
