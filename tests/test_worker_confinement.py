@@ -145,6 +145,15 @@ def test_vllm_worker_allowlist_includes_qwen35_nvfp4():
     assert 'nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4' in content
 
 
+def test_worker_config_supports_deepseek_v4_reasoning():
+    content = WORKER.read_text(encoding="utf-8")
+    assert 'deepseek-v4-reasoning) vllm_profile=deepseek-v4-reasoning' in content
+    assert '.provider.vllm.models."deepseek-v4-reasoning" = {' in content
+    assert '"context": 1000000' in content
+    assert '"output": 100000' in content
+    assert '"name": "DeepSeek V4 Flash (Spark)"' in content
+
+
 def test_native_qwen_code_caps_qwen35_output_tokens():
     content = WORKER.read_text(encoding="utf-8")
     assert "if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]" in content

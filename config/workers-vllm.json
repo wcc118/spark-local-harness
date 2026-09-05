@@ -22,7 +22,7 @@
       "agent": "reviewer",
       "runtime": "opencode",
       "mode": "native",
-      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+      "model": "vllm/deepseek-v4-reasoning"
     },
     "coder/tailored": {
       "agent": "coder",
@@ -34,7 +34,7 @@
       "agent": "reviewer",
       "runtime": "opencode",
       "mode": "tailored",
-      "model": "vllm/Qwen/Qwen3-Coder-Next-FP8"
+      "model": "vllm/deepseek-v4-reasoning"
     },
     "coder/experimental-qwen38": {
       "agent": "coder",
@@ -71,6 +71,18 @@
       "runtime": "opencode",
       "mode": "tailored",
       "model": "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
+    },
+    "deepseek/standard": {
+      "agent": "reviewer",
+      "runtime": "opencode",
+      "mode": "native",
+      "model": "vllm/deepseek-v4-reasoning"
+    },
+    "deepseek/coder": {
+      "agent": "coder",
+      "runtime": "opencode",
+      "mode": "tailored",
+      "model": "vllm/deepseek-v4-reasoning"
     }
   },
   "defaults": {

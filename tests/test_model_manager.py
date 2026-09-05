@@ -24,7 +24,8 @@ def _fake_runtime(tmp_path: Path, *, updates_model: bool = True):
     update = (
         'case "$*" in *Qwen3.8-27B-FP8*) printf %s Qwen/Qwen3.8-27B-FP8 >"$FAKE_MODEL_STATE" ;; '
         '*Qwen3-Coder-Next-FP8*) printf %s Qwen/Qwen3-Coder-Next-FP8 >"$FAKE_MODEL_STATE" ;; '
-        '*Qwen3.5-122B-A10B-NVFP4*) printf %s nvidia/Qwen3.5-122B-A10B-NVFP4 >"$FAKE_MODEL_STATE" ;; esac\n'
+        '*Qwen3.5-122B-A10B-NVFP4*) printf %s nvidia/Qwen3.5-122B-A10B-NVFP4 >"$FAKE_MODEL_STATE" ;; '
+        '*deepseek-v4-reasoning*) printf %s deepseek-v4-reasoning >"$FAKE_MODEL_STATE" ;; esac\n'
         if updates_model else ""
     )
     docker.write_text(
@@ -54,11 +55,13 @@ def test_vllm_routes_assign_both_models_without_lm_studio():
     config = json.loads(ROUTES.read_text(encoding="utf-8"))
     assert config["routes"]["coder/complex"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
     assert config["routes"]["coder/standard"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
-    assert config["routes"]["reviewer/standard"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
+    assert config["routes"]["reviewer/standard"]["model"] == "vllm/deepseek-v4-reasoning"
     assert config["routes"]["coder/experimental-qwen38"]["model"] == "vllm/Qwen/Qwen3.8-27B-FP8"
     assert config["routes"]["coder/experimental-qwen35-nvfp4"]["model"] == "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
     assert config["routes"]["helper/experimental-qwen35-nvfp4"]["model"] == "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
     assert config["routes"]["reviewer/experimental-qwen35-nvfp4"]["model"] == "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
+    assert config["routes"]["deepseek/standard"]["model"] == "vllm/deepseek-v4-reasoning"
+    assert config["routes"]["deepseek/coder"]["model"] == "vllm/deepseek-v4-reasoning"
     assert all(not route["model"].startswith("lmstudio/") for route in config["routes"].values())
 
 
@@ -163,3 +166,42 @@ def test_model_manager_qwen35_nvfp4_safe_boundaries(tmp_path):
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
     assert "--language-model-only" in docker_calls
+
+
+def test_model_manager_launches_deepseek_v4_reasoning_profile(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    first = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    assert state.read_text(encoding="utf-8") == "deepseek-v4-reasoning"
+    assert "pkill" in calls.read_text(encoding="utf-8")
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--reasoning-parser deepseek_v4_flash" in docker_calls
+    assert "--enable-auto-tool-choice" in docker_calls
+    assert "--tool-call-parser deepseek_v4" in docker_calls
+    assert "--max-model-len 1000000" in docker_calls
+    assert "--gpu-memory-utilization 0.85" in docker_calls
+    assert "--trust-remote-code" in docker_calls
+    assert "--quantization exl3" in docker_calls
+    assert "--host 0.0.0.0" in docker_calls
+    assert "--port 8000" in docker_calls
+
+
+def test_model_manager_deepseek_v4_reasoning_safe_boundaries(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    first = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--max-model-len 1000000" in docker_calls
+    assert "--gpu-memory-utilization 0.85" in docker_calls
+    assert "--trust-remote-code" in docker_calls
+    assert "--quantization exl3" in docker_calls
+
+
+def test_model_manager_fails_when_deepseek_model_never_becomes_ready(tmp_path):
+    state, _, env = _fake_runtime(tmp_path, updates_model=False)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    completed = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, text=True, capture_output=True)
+    assert completed.returncode == 69
+    assert "exact model deepseek-v4-reasoning" in completed.stderr

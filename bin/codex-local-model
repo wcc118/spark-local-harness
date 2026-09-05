@@ -12,7 +12,7 @@ lock_path=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-h
 lock_timeout=${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-1800}
 
 usage() {
-  echo "usage: codex-local-model status | use {qwen38|coder-next|qwen35-nvfp4}" >&2
+  echo "usage: codex-local-model status | use {qwen38|coder-next|qwen35-nvfp4|deepseek-v4-reasoning}" >&2
   exit 2
 }
 
@@ -21,6 +21,7 @@ profile_model() {
     qwen38) printf '%s\n' 'Qwen/Qwen3.8-27B-FP8' ;;
     coder-next) printf '%s\n' 'Qwen/Qwen3-Coder-Next-FP8' ;;
     qwen35-nvfp4) printf '%s\n' 'nvidia/Qwen3.5-122B-A10B-NVFP4' ;;
+    deepseek-v4-reasoning) printf '%s\n' 'deepseek-v4-reasoning' ;;
     *) return 2 ;;
   esac
 }
@@ -80,6 +81,10 @@ launch() {
     qwen35-nvfp4)
       log=/root/.cache/vllm/qwen35-nvfp4-122b.log
       extra='--trust-remote-code --quantization modelopt_fp4 --kv-cache-dtype fp8 --tensor-parallel-size 1 --max-model-len 65536 --gpu-memory-utilization 0.82 --enforce-eager --max-num-seqs 8 --max-num-batched-tokens 8192 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --language-model-only --attention-backend flashinfer --enable-prefix-caching --load-format fastsafetensors --host 0.0.0.0 --port 8000'
+      ;;
+    deepseek-v4-reasoning)
+      log=/root/.cache/vllm/deepseek-v4-reasoning.log
+      extra='--reasoning-parser deepseek_v4_flash --enable-auto-tool-choice --tool-call-parser deepseek_v4 --max-model-len 1000000 --gpu-memory-utilization 0.85 --trust-remote-code --quantization exl3 --host 0.0.0.0 --port 8000'
       ;;
   esac
   "$docker_bin" exec -d "$container" bash -lc \
