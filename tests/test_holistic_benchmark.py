@@ -69,3 +69,22 @@ def test_scorecard_fails_closed_until_both_model_cohorts_exist(tmp_path: Path):
     card = build(tmp_path, plan)
     assert card["evidence_complete"] is False
     assert all(model["holistic_score"] == 0 for model in card["models"].values())
+
+
+def test_scorecard_counts_terminal_failure_as_zero_not_missing_evidence(tmp_path: Path):
+    plan = json.loads((ROOT / "qualification/holistic/plan.json").read_text())
+    for model_key in plan["models"]:
+        for track, count in (("coding-confirmation", 10),
+                             ("specialist-confirmation", 62),
+                             ("lifecycle", 5)):
+            for index in range(count):
+                path = tmp_path / track / model_key / "attempts" / str(index) / "case" / "attempt.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({
+                    "state": "timed-out" if index == 0 else "completed",
+                    "artifact_correct": False,
+                }))
+    card = build(tmp_path, plan)
+    assert card["evidence_complete"] is True
+    assert all(model["holistic_score"] == 0 for model in card["models"].values())
+    assert card["models"]["coder-next"]["tracks"]["coding-confirmation"]["timeouts"] == 1

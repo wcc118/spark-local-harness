@@ -18,7 +18,7 @@ Coding policy or confirmation run:
 ```bash
 python3 qualification/paired-model/run.py \
   --output OUTPUT run --model MODEL --route ROUTE \
-  --variant POLICY --instruction-prefix POLICY_FILE --repeat 1
+  --variant POLICY --instruction-prefix POLICY_FILE --repeat 1 --timeout 600
 ```
 
 Specialist development or confirmation run:

@@ -228,11 +228,12 @@ def run_case(
         allowed_environment = {
             key: os.environ[key] for key in (
                 "HOME", "PATH", "LANG", "LC_ALL", "TERM", "XDG_CONFIG_HOME",
-                "XDG_DATA_HOME", "XDG_CACHE_HOME",
+                "XDG_DATA_HOME", "XDG_CACHE_HOME", "OPENCODE_CONFIG",
             ) if key in os.environ
         }
         allowed_environment["CODEX_BENCHMARK_RUN_ID"] = run_id
-        completed = subprocess.run(command, text=True, capture_output=True, timeout=case["timeout"],
+        completed = subprocess.run(command, text=True, capture_output=True,
+                                   timeout=getattr(args, "timeout", None) or case["timeout"],
                                    env=allowed_environment)
         return_code = completed.returncode
         events_path.write_text(completed.stdout, encoding="utf-8")
@@ -429,6 +430,7 @@ def main() -> int:
     run.add_argument("--agent", default="coder"); run.add_argument("--opencode", default="opencode")
     run.add_argument("--case"); run.add_argument("--resume", action="store_true")
     run.add_argument("--repeat", type=int, default=1)
+    run.add_argument("--timeout", type=int, help="enforced wall-time override per case")
     run.add_argument("--variant", default="baseline"); run.add_argument("--instruction-prefix", type=Path)
     compare = sub.add_parser("compare"); compare.add_argument("--left", required=True); compare.add_argument("--right", required=True)
     select = sub.add_parser("select"); select.add_argument("--baseline", required=True); select.add_argument("--candidate", required=True); select.add_argument("--model", required=True)

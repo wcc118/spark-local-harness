@@ -43,7 +43,10 @@ def build(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             track_rows = rows(root / track / key)
             value = stats(track_rows)
             value["expected_attempts"] = expected[track]
-            value["cohort_complete"] = len(track_rows) == expected[track] and all(item.get("state") == "completed" for item in track_rows)
+            # A terminal worker failure or timeout is a scored zero, not absent
+            # evidence. Fail closed only when the expected attempt artifacts are
+            # missing; otherwise operational failures remain in the denominator.
+            value["cohort_complete"] = len(track_rows) == expected[track]
             complete = complete and value["cohort_complete"]
             tracks[track] = value
         rates = {

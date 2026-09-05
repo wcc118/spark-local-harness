@@ -27,6 +27,6 @@
     "lifecycle_completed_correct_tokens": 1500,
     "note": "Explicit planning estimate, not observed Codex billing. Report separately from correctness."
   },
-  "timeouts": {"enforced_by_subprocess": true, "correct_at_timeout_is_not_completed_correct": true},
+  "timeouts": {"enforced_by_subprocess": true, "coding_seconds": 600, "correct_at_timeout_is_not_completed_correct": true},
   "output_root": "~/.local/share/codex-local-harness/benchmark-165/holistic-v1"
 }
