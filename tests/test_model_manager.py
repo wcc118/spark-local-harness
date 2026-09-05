@@ -77,8 +77,8 @@ def test_model_manager_is_idempotent_then_switches_exact_model(tmp_path):
     docker_calls = calls.read_text(encoding="utf-8")
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
-    assert "--max-model-len 212500" in docker_calls
-    assert "--gpu-memory-utilization 0.90" in docker_calls
+    assert "--max-model-len 185000" in docker_calls
+    assert "--gpu-memory-utilization 0.87" in docker_calls
     assert "--load-format fastsafetensors" in docker_calls
     assert "--attention-backend flashinfer" in docker_calls
     assert "--enable-prefix-caching" in docker_calls
@@ -139,8 +139,8 @@ def test_model_manager_launches_qwen38_profile(tmp_path):
     assert "--reasoning-parser qwen3" in docker_calls
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
-    assert "--max-model-len 212500" in docker_calls
-    assert "--gpu-memory-utilization 0.90" in docker_calls
+    assert "--max-model-len 185000" in docker_calls
+    assert "--gpu-memory-utilization 0.87" in docker_calls
     assert "--load-format fastsafetensors" in docker_calls
     assert "--attention-backend flashinfer" in docker_calls
     assert "--enable-prefix-caching" in docker_calls
