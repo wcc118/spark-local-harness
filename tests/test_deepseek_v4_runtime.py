@@ -67,7 +67,8 @@ def test_start_uses_pinned_image_isolated_port_and_overlay(tmp_path: Path) -> No
     docker_calls = calls.read_text(encoding="utf-8")
     assert "sha256:86f99e42f2061322e7bc47691e09d9ebbef22951ec8aebd7662f3d1da1a535bc" in docker_calls
     assert "compose --project-name codex-deepseek-v4-candidate" in docker_calls
-    assert "compose.codex.yaml up -d" in docker_calls
+    assert "compose.codex.yaml -f " in docker_calls
+    assert "deepseek-v4-reasoning.yaml up -d" in docker_calls
 
 
 def test_managed_overlay_binds_localhost_candidate_port() -> None:

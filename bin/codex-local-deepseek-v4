@@ -17,9 +17,13 @@ usage() {
 }
 
 compose() {
+  local overlays=()
+  if [[ ${CODEX_LOCAL_DEEPSEEK_REASONING:-1} == 1 ]]; then
+    overlays=(-f "${CODEX_LOCAL_DEEPSEEK_OVERLAY:-$(dirname -- "$0")/../config/deepseek-v4-reasoning.yaml}")
+  fi
   RECIPE_IMAGE=$image PULL_POLICY=never HOST=127.0.0.1 PORT=8011 \
     "$docker_bin" compose --project-name "$project" \
-      -f "$recipe_dir/compose.yaml" -f "$recipe_dir/compose.codex.yaml" "$@"
+      -f "$recipe_dir/compose.yaml" -f "$recipe_dir/compose.codex.yaml" "${overlays[@]}" "$@"
 }
 
 available_kib() {

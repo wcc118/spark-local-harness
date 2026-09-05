@@ -15,6 +15,7 @@ def _fake_runtime(tmp_path: Path, *, updates_model: bool = True):
     curl = tmp_path / "curl"
     curl.write_text(
         "#!/bin/sh\n"
+        'case "$*" in *8011*) FAKE_MODEL_STATE="$FAKE_DEEPSEEK_STATE" ;; esac\n'
         'if [ -s "$FAKE_MODEL_STATE" ]; then '
         'jq -n --arg id "$(cat "$FAKE_MODEL_STATE")" \'{data:[{id:$id}]}\'; '
         "else echo '{\"data\":[]}'; fi\n",
@@ -24,19 +25,31 @@ def _fake_runtime(tmp_path: Path, *, updates_model: bool = True):
     update = (
         'case "$*" in *Qwen3.8-27B-FP8*) printf %s Qwen/Qwen3.8-27B-FP8 >"$FAKE_MODEL_STATE" ;; '
         '*Qwen3-Coder-Next-FP8*) printf %s Qwen/Qwen3-Coder-Next-FP8 >"$FAKE_MODEL_STATE" ;; '
-        '*Qwen3.5-122B-A10B-NVFP4*) printf %s nvidia/Qwen3.5-122B-A10B-NVFP4 >"$FAKE_MODEL_STATE" ;; '
-        '*deepseek-v4-reasoning*) printf %s deepseek-v4-reasoning >"$FAKE_MODEL_STATE" ;; esac\n'
+        '*Qwen3.5-122B-A10B-NVFP4*) printf %s nvidia/Qwen3.5-122B-A10B-NVFP4 >"$FAKE_MODEL_STATE" ;; esac\n'
         if updates_model else ""
     )
     docker.write_text(
         "#!/bin/sh\n"
         'printf "%s\\n" "$*" >>"$FAKE_DOCKER_CALLS"\n'
-        'case "$*" in *pkill*) : >"$FAKE_MODEL_STATE" ;; esac\n' + update,
+        'if [ "$*" = "inspect vllm_node" ] && [ "${FAKE_CONTAINER_MISSING:-0}" = 1 ]; then exit 1; fi\n'
+        'case "$*" in "inspect --format"*) printf "%s\\n" "${FAKE_DEEPSEEK_RUNNING:-false}" ;; esac\n'
+        'case "$*" in *pkill*|"stop vllm_node") : >"$FAKE_MODEL_STATE" ;; esac\n' + update,
         encoding="utf-8",
     )
     sleeper = tmp_path / "sleep"
+    deepseek = tmp_path / "deepseek"
+    recipe = tmp_path / "recipe"
+    recipe.write_text(
+        '#!/bin/sh\nprintf "recipe %s\\n" "$*" >>"$FAKE_DOCKER_CALLS"\n'
+        'printf %s Qwen/Qwen3-Coder-Next-FP8 >"$FAKE_MODEL_STATE"\n'
+    )
+    deepseek.write_text(
+        '#!/bin/sh\nprintf "deepseek %s\\n" "$*" >>"$FAKE_DOCKER_CALLS"\n'
+        'case "$1" in stop) : >"$FAKE_DEEPSEEK_STATE" ;; '
+        'start) ' + ('printf %s deepseek-v4-flash-0731-exl3-k2 >"$FAKE_DEEPSEEK_STATE"' if updates_model else ':') + ' ;; esac\n'
+    )
     sleeper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    for executable in (curl, docker, sleeper):
+    for executable in (curl, docker, sleeper, deepseek, recipe):
         executable.chmod(0o755)
     env = os.environ | {
         "CODEX_LOCAL_CURL": str(curl),
@@ -46,6 +59,9 @@ def _fake_runtime(tmp_path: Path, *, updates_model: bool = True):
         "CODEX_LOCAL_MODEL_READY_ATTEMPTS": "2",
         "CODEX_LOCAL_MODEL_STOP_ATTEMPTS": "2",
         "FAKE_MODEL_STATE": str(state),
+        "FAKE_DEEPSEEK_STATE": str(tmp_path / "deepseek-model"),
+        "CODEX_LOCAL_DEEPSEEK_LAUNCHER": str(deepseek),
+        "CODEX_LOCAL_RECIPE_LAUNCHER": str(recipe),
         "FAKE_DOCKER_CALLS": str(calls),
     }
     return state, calls, env
@@ -55,13 +71,13 @@ def test_vllm_routes_assign_both_models_without_lm_studio():
     config = json.loads(ROUTES.read_text(encoding="utf-8"))
     assert config["routes"]["coder/complex"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
     assert config["routes"]["coder/standard"]["model"] == "vllm/Qwen/Qwen3-Coder-Next-FP8"
-    assert config["routes"]["reviewer/standard"]["model"] == "vllm/deepseek-v4-reasoning"
+    assert config["routes"]["reviewer/standard"]["model"] == "deepseek/deepseek-v4-flash-0731-exl3-k2"
     assert config["routes"]["coder/experimental-qwen38"]["model"] == "vllm/Qwen/Qwen3.8-27B-FP8"
     assert config["routes"]["coder/experimental-qwen35-nvfp4"]["model"] == "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
     assert config["routes"]["helper/experimental-qwen35-nvfp4"]["model"] == "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
     assert config["routes"]["reviewer/experimental-qwen35-nvfp4"]["model"] == "vllm/nvidia/Qwen3.5-122B-A10B-NVFP4"
-    assert config["routes"]["deepseek/standard"]["model"] == "vllm/deepseek-v4-reasoning"
-    assert config["routes"]["deepseek/coder"]["model"] == "vllm/deepseek-v4-reasoning"
+    assert config["routes"]["helper/investigator"]["model"] == "deepseek/deepseek-v4-flash-0731-exl3-k2"
+    assert config["routes"]["coder/deepseek"]["model"] == "deepseek/deepseek-v4-flash-0731-exl3-k2"
     assert all(not route["model"].startswith("lmstudio/") for route in config["routes"].values())
 
 
@@ -173,30 +189,28 @@ def test_model_manager_launches_deepseek_v4_reasoning_profile(tmp_path):
     state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
     first = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, text=True, capture_output=True)
     assert first.returncode == 0, first.stderr
-    assert state.read_text(encoding="utf-8") == "deepseek-v4-reasoning"
-    assert "pkill" in calls.read_text(encoding="utf-8")
+    assert not state.read_text()
+    assert Path(env["FAKE_DEEPSEEK_STATE"]).read_text() == "deepseek-v4-flash-0731-exl3-k2"
     docker_calls = calls.read_text(encoding="utf-8")
-    assert "--reasoning-parser deepseek_v4_flash" in docker_calls
-    assert "--enable-auto-tool-choice" in docker_calls
-    assert "--tool-call-parser deepseek_v4" in docker_calls
-    assert "--max-model-len 1000000" in docker_calls
-    assert "--gpu-memory-utilization 0.85" in docker_calls
-    assert "--trust-remote-code" in docker_calls
-    assert "--quantization exl3" in docker_calls
-    assert "--host 0.0.0.0" in docker_calls
-    assert "--port 8000" in docker_calls
+    assert docker_calls.index("stop vllm_node") < docker_calls.index("deepseek start")
+    again = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, capture_output=True)
+    assert again.returncode == 0
+    assert calls.read_text() == docker_calls
+    back = subprocess.run([str(MANAGER), "use", "coder-next"], env=env, capture_output=True)
+    assert back.returncode == 0
+    assert state.read_text() == "Qwen/Qwen3-Coder-Next-FP8"
+    assert not Path(env["FAKE_DEEPSEEK_STATE"]).read_text()
+    assert calls.read_text().index("deepseek stop") < calls.read_text().index("start vllm_node")
 
 
 def test_model_manager_deepseek_v4_reasoning_safe_boundaries(tmp_path):
     state, calls, env = _fake_runtime(tmp_path)
     state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    Path(env["FAKE_DEEPSEEK_STATE"]).write_text("deepseek-v4-flash-0731-exl3-k2")
     first = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, text=True, capture_output=True)
-    assert first.returncode == 0, first.stderr
-    docker_calls = calls.read_text(encoding="utf-8")
-    assert "--max-model-len 1000000" in docker_calls
-    assert "--gpu-memory-utilization 0.85" in docker_calls
-    assert "--trust-remote-code" in docker_calls
-    assert "--quantization exl3" in docker_calls
+    assert first.returncode == 69
+    assert "both model endpoints" in first.stderr
+    assert not calls.exists()
 
 
 def test_model_manager_fails_when_deepseek_model_never_becomes_ready(tmp_path):
@@ -204,4 +218,28 @@ def test_model_manager_fails_when_deepseek_model_never_becomes_ready(tmp_path):
     state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
     completed = subprocess.run([str(MANAGER), "use", "deepseek-v4-reasoning"], env=env, text=True, capture_output=True)
     assert completed.returncode == 69
-    assert "exact model deepseek-v4-reasoning" in completed.stderr
+    assert "exact model deepseek-v4-flash-0731-exl3-k2" in completed.stderr
+
+
+def test_switch_stops_deepseek_with_dead_api_before_starting_coder(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    env["FAKE_DEEPSEEK_RUNNING"] = "true"
+    result = subprocess.run([str(MANAGER), "use", "coder-next"], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert state.read_text() == "Qwen/Qwen3-Coder-Next-FP8"
+    commands = calls.read_text()
+    assert commands.index("deepseek stop") < commands.index("start vllm_node")
+
+
+def test_return_to_coder_recreates_auto_removed_container_via_recipe(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    env["FAKE_CONTAINER_MISSING"] = "1"
+    Path(env["FAKE_DEEPSEEK_STATE"]).write_text("deepseek-v4-flash-0731-exl3-k2")
+    result = subprocess.run([str(MANAGER), "use", "coder-next"], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert state.read_text() == "Qwen/Qwen3-Coder-Next-FP8"
+    commands = calls.read_text()
+    assert commands.index("deepseek stop") < commands.index("recipe qwen3-coder-next-fp8")
+    assert "--gpu-mem 0.87 --max-model-len 185000 --daemon" in commands

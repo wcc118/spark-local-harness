@@ -1,161 +1,75 @@
-# DeepSeek V4 Flash Rotation
+# Local model routing
 
-## Overview
+Coder-Next remains the default coder. DeepSeek reasoning is the default reviewer
+and the model used by `codex-local-investigator`. DeepSeek coding is opt-in:
 
-DeepSeek V4 Flash serves as the default reviewer and read-only investigator in the Codex Local Harness. It is configured as the default model for reviewer routes and is never automatically selected for coding tasks.
+```bash
+codex-local-coder /path/to/repository --task-file issue.md
+codex-local-investigator /path/to/repository --task-file investigation.md
+CODEX_LOCAL_TIER=deepseek codex-local-coder /path/to/repository --task-file issue.md
+```
 
-## Operating Behavior
+For a review, supply the normal durable issue/PR identifiers:
 
-### Model Configuration
+```bash
+CODEX_LOCAL_REPOSITORY=OWNER/REPO CODEX_LOCAL_ISSUE=123 CODEX_LOCAL_PR=124 \
+  codex-local-reviewer /path/to/repository --task-file review.md
+```
 
-| Profile | Model Name | Role | Auto-Select | Configuration |
-|---------|-----------|------|-------------|---------------|
-| `coder-next` | `Qwen/Qwen3-Coder-Next-FP8` | Coder-Next (standard) | **Yes** (default) | `0.87` GPU mem, `185000` max len |
-| `deepseek-v4-reasoning` | `deepseek-v4-reasoning` | Reviewer/Investigator | **Never** | `0.85` GPU mem, `1000000` max len |
+Investigation uses the existing helper permissions and read-only repository mount.
+The ordinary helper route is preserved. Coder and reviewer run sequentially on
+an issue, and Codex retains orchestration and final judgment.
 
-### Default Routing
+The worker prepends an execution contract to DeepSeek tasks. Coding uses the
+four-phase inspect/edit/verify/report approach. Review and investigation use
+the role and uncertainty guidance from the qualification experiment, adapted
+to production output schemas. Benchmark-only labels and `result.json` rules
+are not injected into real tasks. Issue facts and acceptance criteria remain
+authoritative. Both native execution and the session bridge receive the final
+packet, including any prepared reviewer evidence.
 
-The `config/workers-vllm.json` routes are configured as follows:
-
-- **Coder routes** (helper, coder, reviewer) → `vllm/Qwen/Qwen3-Coder-Next-FP8`
-- **Reviewer routes** → `vllm/deepseek-v4-reasoning` (default)
-- **DeepSeek routes** → Explicit opt-in only
-
-### DeepSeek Contract
-
-The reviewer uses the `role-contract-plus-uncertainty` contract which:
-- Accepts immutable issue, PR, commit, and evidence in the task
-- Returns structured JSON verdict (`APPROVE`, `REQUEST_CHANGES`, `ESCALATE`)
-- Never edits, publishes, approves, merges, or changes GitHub state
-- Identifies evidence as `harness-observed`, `reviewer-observed`, or `task-reported`
-
-## Manual Invocation
-
-### Switching to DeepSeek
-
-To explicitly switch the model manager to DeepSeek V4 Flash:
+The existing model lock is held throughout each worker run. The manager leaves
+the selected model loaded until a later worker requests another profile:
 
 ```bash
 codex-local-model use deepseek-v4-reasoning
-```
-
-This will:
-1. Acquire the model lock
-2. Stop any currently active vLLM server
-3. Launch DeepSeek V4 Flash with optimized Spark settings
-4. Wait for model readiness
-5. Verify exact model identity
-
-### Returning to Coder-Next
-
-To switch back to Coder-Next:
-
-```bash
 codex-local-model use coder-next
-```
-
-The model manager:
-1. Stops DeepSeek first
-2. Then launches Coder-Next
-3. Is idempotent (no-op if already active)
-
-### DeepSeek Explicit Coder Route
-
-To use DeepSeek for coding (opt-in only, never auto-selected):
-
-```bash
-CODEX_LOCAL_TIER=standard CODEX_LOCAL_MODEL=vllm/deepseek-v4-reasoning \
-codex-local-worker coder /path/to/repo "task description"
-```
-
-Or using the explicit route:
-
-```bash
-CODEX_LOCAL_TIER=standard \
-codex-local-worker coder /path/to/repo "task description"
-```
-
-With `config/workers-vllm.json` route:
-```json
-{
-  "deepseek/standard": {
-    "agent": "reviewer",
-    "runtime": "opencode",
-    "mode": "native",
-    "model": "vllm/deepseek-v4-reasoning"
-  },
-  "deepseek/coder": {
-    "agent": "coder",
-    "runtime": "opencode",
-    "mode": "tailored",
-    "model": "vllm/deepseek-v4-reasoning"
-  }
-}
-```
-
-## Safety Features
-
-1. **Exclusive Lock**: The model manager uses a file lock to prevent concurrent model switches
-2. **Fail Closed**: If the exact model doesn't become ready, the command exits with code 69
-3. **Stop Before Start**: DeepSeek is stopped before Coder-Next (and vice versa)
-4. **Idempotent**: Repeated calls with the same profile are no-ops
-5. **Read-Only Reviewer**: The reviewer never modifies the checkout
-
-## DeepSeek Runtime Wrapper
-
-The `bin/codex-local-deepseek-v4` wrapper provides additional safety:
-
-```bash
-# Pull the pinned image
-codex-local-deepseek-v4 pull
-
-# Check preflight conditions
-codex-local-deepseek-v4 preflight
-
-# Start the candidate
-codex-local-deepseek-v4 start
-
-# Check status
-codex-local-deepseek-v4 status
-
-# Stop the candidate
-codex-local-deepseek-v4 stop
-```
-
-**Important**: This wrapper is for external use only. The model manager handles DeepSeek internally.
-
-## Verification
-
-### Check Active Model
-
-```bash
 codex-local-model status
 ```
 
-Expected response:
-```json
-{"status":"ready","model":"deepseek-v4-reasoning"}
-```
+Coder-Next runs in `vllm_node` on port 8000 with context 185000 and GPU utilization
+0.87. DeepSeek runs in its pinned EXL3 Compose image on port 8011, with exact
+served identity `deepseek-v4-flash-0731-exl3-k2`, context 1000000, GPU utilization
+0.85, and thinking enabled at high reasoning effort. It cannot be launched by
+adding EXL3 flags to the Coder-Next image. The manager stops the current container
+before starting the other runtime, waits for exact model readiness, and returns
+an infrastructure error on failure. It does not restore or retry automatically.
+When `vllm_node` was automatically removed on stop, the manager recreates it
+using the existing `qwen3-coder-next-fp8` recipe before checking readiness.
 
-### Verify Routing Configuration
+DeepSeek startup requires the cached pinned image and recipe. The reasoning
+overlay is `config/deepseek-v4-reasoning.yaml`; the launcher also accepts
+`CODEX_LOCAL_DEEPSEEK_OVERLAY` for an explicit installed location.
 
-```bash
-jq '.routes["reviewer/standard"]' config/workers-vllm.json
-```
+Installation must update the worker, manager, DeepSeek launcher, investigator
+entry point, routing JSON, and reasoning overlay together. Preserve a backup of
+the installed files. Deploying the routes alone is insufficient.
 
-Expected:
-```json
-{
-  "agent": "reviewer",
-  "runtime": "opencode",
-  "mode": "native",
-  "model": "vllm/deepseek-v4-reasoning"
-}
-```
+## Issue 167 validation
 
-## Known Limitations
+Codex completed implementation and final review directly. Focused switching,
+routing, confinement, and prompt-delivery tests: 26 passed. Full harness suite:
+547 passed, one existing v0.6 historical freeze-checksum failure. The separate
+benchmark fixture suite passed all five tests.
 
-1. **No Automatic Switching**: DeepSeek is never automatically selected for coding tasks
-2. **Manual Opt-in Required**: DeepSeek coding requires explicit route configuration
-3. **Read-Only Reviewer**: The reviewer cannot modify files or execute commands
-4. **DeepSeek Model Name**: Uses `deepseek-v4-reasoning` as a placeholder name; the actual vLLM model is identified by its trained weights
+Live checks verified Coder-Next to DeepSeek startup, exact DeepSeek identity,
+thinking/high configuration, a successful completion, and idempotent reuse.
+The return switch verified recreation of the auto-removed Coder-Next container
+through the production recipe, exact identity, context 185000, GPU utilization
+0.87, and a successful completion. The initial return-switch failure exposed
+the auto-removal behavior; it was corrected and covered by a regression test.
+
+The installed worker hash is recorded in `config/installed-release.json`.
+The previous installed worker, v4 worker, manager, and routing configuration are
+backed up at
+`~/.local/share/codex-local-harness/issue-167-backup.XyGhox/`.

@@ -147,11 +147,11 @@ def test_vllm_worker_allowlist_includes_qwen35_nvfp4():
 
 def test_worker_config_supports_deepseek_v4_reasoning():
     content = WORKER.read_text(encoding="utf-8")
-    assert 'deepseek-v4-reasoning) vllm_profile=deepseek-v4-reasoning' in content
-    assert '.provider.vllm.models."deepseek-v4-reasoning" = {' in content
+    assert 'deepseek/deepseek-v4-flash-0731-exl3-k2) vllm_profile=deepseek-v4-reasoning' in content
+    assert '.provider.deepseek = {' in content
     assert '"context": 1000000' in content
-    assert '"output": 100000' in content
-    assert '"name": "DeepSeek V4 Flash (Spark)"' in content
+    assert '"output": 32768' in content
+    assert '"baseURL": "http://127.0.0.1:8011/v1"' in content
 
 
 def test_native_qwen_code_caps_qwen35_output_tokens():
@@ -159,3 +159,58 @@ def test_native_qwen_code_caps_qwen35_output_tokens():
     assert "if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]" in content
     assert "qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)" in content
     assert '"${qwen_env[@]}"' in content
+
+
+def test_deepseek_routes_resolve_through_real_worker_and_investigator(tmp_path):
+    env = os.environ | {
+        "CODEX_LOCAL_WORKER_CONFIG": str(ROOT / "config/workers-vllm.json"),
+        "CODEX_LOCAL_DRY_RUN": "1",
+        "CODEX_LOCAL_WORKER": str(WORKER),
+    }
+    env.pop("CODEX_LOCAL_MODEL", None)
+    env.pop("CODEX_LOCAL_TIER", None)
+    for role, tier, expected in (
+        ("coder", None, "vllm/Qwen/Qwen3-Coder-Next-FP8"),
+        ("reviewer", None, "deepseek/deepseek-v4-flash-0731-exl3-k2"),
+        ("coder", "deepseek", "deepseek/deepseek-v4-flash-0731-exl3-k2"),
+    ):
+        case_env = env | ({"CODEX_LOCAL_TIER": tier} if tier else {})
+        result = subprocess.run([str(WORKER), role, str(tmp_path), "inspect"],
+                                env=case_env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert f"model={expected}" in result.stdout
+    result = subprocess.run([str(ROOT / "bin/codex-local-investigator"), str(tmp_path), "inspect"],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "role=helper" in result.stdout
+    assert "tier=investigator" in result.stdout
+    assert "model=deepseek/deepseek-v4-flash-0731-exl3-k2" in result.stdout
+
+
+def test_investigator_receives_contract_issue_and_correct_endpoint(tmp_path):
+    fake = tmp_path / "fake-opencode"
+    fake.write_text(
+        '#!/usr/bin/env python3\nimport json, os, pathlib, sys\n'
+        'config=json.loads((pathlib.Path(os.environ["XDG_CONFIG_HOME"])/"opencode/opencode.json").read_text())\n'
+        'assert config["provider"]["deepseek"]["options"]["baseURL"] == "http://127.0.0.1:8011/v1"\n'
+        'packet=sys.argv[-1]\n'
+        'assert "Separate observations, hypotheses, and conclusions" in packet\n'
+        'assert "## Objective\\nInspect the serializer" in packet\n'
+        'assert (pathlib.Path(os.environ["HOME"])/"structured-task.txt").read_text().strip() == packet.strip()\n'
+        'print(json.dumps({"type":"text","part":{"text":"PACKET_OK"}}))\n'
+    )
+    fake.chmod(0o755)
+    env = os.environ | {
+        "CODEX_LOCAL_WORKER_CONFIG": str(ROOT / "config/workers-vllm.json"),
+        "CODEX_LOCAL_WORKER": str(WORKER), "CODEX_LOCAL_OPENCODE": str(fake),
+        "CODEX_LOCAL_MODEL_SWITCH": "0", "CODEX_LOCAL_SESSION_BRIDGE": "0",
+        "CODEX_LOCAL_SANDBOX": "disabled", "CODEX_LOCAL_ALLOW_UNSANDBOXED": "1",
+        "CODEX_LOCAL_RECORD_RUN": "0",
+    }
+    env.pop("CODEX_LOCAL_MODEL", None)
+    env.pop("CODEX_LOCAL_DRY_RUN", None)
+    result = subprocess.run([str(ROOT / "bin/codex-local-investigator"), str(tmp_path),
+                             "## Objective\nInspect the serializer"],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "PACKET_OK" in result.stdout
