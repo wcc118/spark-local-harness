@@ -1,0 +1,1 @@
+CODER ROLE CONTRACT — VERIFY AND ESCALATE: Execute the bounded issue, then verify the changed behavior and its principal failure or boundary path. Distinguish observed facts from inference. If requirements conflict or evidence cannot establish a safe implementation, stop with a precise escalation instead of guessing.

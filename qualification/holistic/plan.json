@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "structured-issue-holistic-v1",
+  "models": {
+    "coder-next": "vllm/Qwen/Qwen3-Coder-Next-FP8",
+    "deepseek": "shadow/deepseek-v4-flash-0731-exl3-k2"
+  },
+  "coding": {
+    "cases": 10,
+    "development_repeats": 1,
+    "confirmation_repeats": 1,
+    "policies": ["baseline-production", "structured-phased", "acceptance-test", "verification-uncertainty"]
+  },
+  "specialist": {
+    "development_cases": 28,
+    "development_repeats": 3,
+    "confirmation_cases": 62,
+    "confirmation_repeats": 1,
+    "policies": ["structured-v1", "role-contract", "role-contract-plus-verification", "role-contract-plus-uncertainty"]
+  },
+  "lifecycle": {"cases": 5, "repeats": 1, "policy": "managed-lifecycle-v1"},
+  "selection_rule": "maximize completed correctness; break ties by fewer timeouts, then elapsed time; select before confirmation",
+  "holistic_weights": {"coding": 0.5, "specialist": 0.35, "lifecycle": 0.15},
+  "codex_displacement_assumptions": {
+    "coding_completed_correct_tokens": 12000,
+    "specialist_completed_correct_tokens": 3000,
+    "lifecycle_completed_correct_tokens": 1500,
+    "note": "Explicit planning estimate, not observed Codex billing. Report separately from correctness."
+  },
+  "timeouts": {"enforced_by_subprocess": true, "correct_at_timeout_is_not_completed_correct": true},
+  "output_root": "~/.local/share/codex-local-harness/benchmark-165/holistic-v1"
+}

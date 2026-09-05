@@ -56,15 +56,71 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def identity(manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any]) -> dict[str, str]:
+def structured_issue(case: dict[str, Any], task: str) -> str:
+    """Render the public task as the GitHub-style packet used in production."""
+    deliverable = "a read-only report" if case["id"] in {"investigation", "review"} else "the minimal verified repository change"
+    return f"""# Structured issue: {case['id']}
+
+## Objective
+
+{task.strip()}
+
+## Context
+
+Work only in the supplied isolated fixture. The issue has already been bounded for the `{case['category']}` operation.
+
+## Scope
+
+Implement or investigate only the objective above. Inspect the smallest relevant file set and preserve unrelated behavior.
+
+## Acceptance criteria
+
+- The public behavior stated in the objective is satisfied.
+- No unrelated behavior or files are changed.
+- Claims in the final response are supported by observed evidence.
+
+## Constraints and exclusions
+
+- Do not access benchmark evaluators, hidden tests, repository history, external services, or GitHub.
+- Do not weaken tests or invent requirements.
+
+## Required verification
+
+Run the smallest focused verification available from the public fixture and report only what actually ran.
+
+## Durable deliverable
+
+Produce {deliverable} in the supplied workspace.
+
+## Escalation conditions
+
+Stop and report evidence if requirements conflict, required evidence is absent, or a safe bounded change cannot be established.
+"""
+
+
+def effective_prompt(case: dict[str, Any], task: str, contract: str) -> str:
+    prefix = contract.strip()
+    packet = structured_issue(case, task)
+    return f"{prefix}\n\n{packet}" if prefix else packet
+
+
+def identity(
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    case: dict[str, Any],
+    contract: str = "",
+) -> dict[str, str]:
     source = (manifest_path.parent / manifest["source"]).resolve()
     task = (manifest_path.parent / case["task"]).resolve()
     check_hash = hashlib.sha256(json.dumps(case["check"], separators=(",", ":")).encode()).hexdigest()
+    task_text = task.read_text(encoding="utf-8")
+    prompt_hash = hashlib.sha256(effective_prompt(case, task_text, contract).encode()).hexdigest()
     values = {
         "source_hash": digest_tree(source),
         "task_hash": digest_file(task),
         "check_hash": check_hash,
         "policy_hash": hashlib.sha256(manifest["permission_profile"].encode()).hexdigest(),
+        "prompt_hash": prompt_hash,
     }
     values["identity_hash"] = hashlib.sha256(
         json.dumps({"case": case["id"], **values}, sort_keys=True).encode()
@@ -131,10 +187,17 @@ def atomic_write(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
-    ids = identity(manifest_path, manifest, case)
+def run_case(
+    args: argparse.Namespace,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    case: dict[str, Any],
+    repeat: int = 1,
+) -> dict[str, Any]:
+    contract = args.instruction_prefix.read_text(encoding="utf-8") if args.instruction_prefix else ""
+    ids = identity(manifest_path, manifest, case, contract)
     variant = args.variant
-    model_slug = hashlib.sha256(f"{args.model}:{variant}".encode()).hexdigest()[:12]
+    model_slug = hashlib.sha256(f"{args.model}:{variant}:r{repeat}".encode()).hexdigest()[:12]
     attempt_dir = args.output / "attempts" / model_slug / case["id"]
     result_path = attempt_dir / "attempt.json"
     if args.resume and result_path.exists():
@@ -148,10 +211,8 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     workspace = attempt_dir / "workspace"
     shutil.copytree((manifest_path.parent / manifest["source"]).resolve(), workspace)
     before = digest_tree((manifest_path.parent / manifest["source"]).resolve())
-    task = (manifest_path.parent / case["task"]).read_text(encoding="utf-8")
-    if args.instruction_prefix:
-        prefix = args.instruction_prefix.read_text(encoding="utf-8").strip()
-        task = prefix + "\n\n" + task
+    public_task = (manifest_path.parent / case["task"]).read_text(encoding="utf-8")
+    task = effective_prompt(case, public_task, contract)
     run_id = f"bench-{case['id']}-{model_slug}-{uuid.uuid4().hex[:8]}"
     events_path = attempt_dir / "events.jsonl"
     command = [
@@ -192,7 +253,8 @@ def run_case(args: argparse.Namespace, manifest_path: Path, manifest: dict[str, 
     result = {
         "schema_version": 1, "attempt_id": run_id, "run_id": run_id, "case_id": case["id"],
         "fixture_id": case["id"], "category": case["category"], "role": case["role"],
-        "model": args.model, "route": args.route, "policy_variant": variant, **ids, "started_at": started,
+        "model": args.model, "route": args.route, "policy_variant": variant, "repeat": repeat,
+        **ids, "started_at": started,
         "observed_at": datetime.now(timezone.utc).isoformat(), "elapsed_seconds": elapsed,
         "state": state, "terminal": True, "worker_exit_code": return_code,
         "deterministic_correct": correct, "check": {"command": check_command, "exit_code": check.returncode,
@@ -209,7 +271,10 @@ def command_run(args: argparse.Namespace) -> int:
     manifest = load_manifest(manifest_path)
     selected = [case for case in manifest["cases"] if not args.case or case["id"] == args.case]
     if not selected: raise ValueError("unknown benchmark case")
-    results = [run_case(args, manifest_path, manifest, case) for case in selected]
+    results = [
+        run_case(args, manifest_path, manifest, case, repeat)
+        for case in selected for repeat in range(1, getattr(args, "repeat", 1) + 1)
+    ]
     print(json.dumps({"model": args.model, "attempts": len(results), "correct": sum(r["deterministic_correct"] for r in results)}, sort_keys=True))
     return 0 if all(result["terminal"] for result in results) else 1
 
@@ -363,6 +428,7 @@ def main() -> int:
     run.add_argument("--model", required=True); run.add_argument("--route", required=True)
     run.add_argument("--agent", default="coder"); run.add_argument("--opencode", default="opencode")
     run.add_argument("--case"); run.add_argument("--resume", action="store_true")
+    run.add_argument("--repeat", type=int, default=1)
     run.add_argument("--variant", default="baseline"); run.add_argument("--instruction-prefix", type=Path)
     compare = sub.add_parser("compare"); compare.add_argument("--left", required=True); compare.add_argument("--right", required=True)
     select = sub.add_parser("select"); select.add_argument("--baseline", required=True); select.add_argument("--candidate", required=True); select.add_argument("--model", required=True)
