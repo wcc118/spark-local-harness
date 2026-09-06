@@ -1,0 +1,32 @@
+{
+  "name": "context-compaction-candidate",
+  "promotion_state": "disabled-qualification-failed",
+  "primary_codex": {
+    "managed_compaction": false,
+    "candidate_enabled_value": true,
+    "pressure_threshold": 0.62,
+    "advisory_threshold": 0.50,
+    "minimum_turns_since_compaction": 2
+  },
+  "qualification": {
+    "minimum_net_input_improvement": 0.15,
+    "require_no_uncached_input_increase": true,
+    "require_state_retention": true,
+    "require_no_task_outcome_regression": true,
+    "require_no_tool_loop_increase": true
+  },
+  "last_qualification": {
+    "evidence": "issue:169#issuecomment-5560460503",
+    "measured_head_sha": "824b540ed78d39a6f74dcb2151fc99cc322fe492",
+    "input_improvement": 0.013293142968741956,
+    "net_uncached_input_change": 99575,
+    "state_retained": true,
+    "task_outcome_regressed": false,
+    "tool_loop_increase": 0,
+    "reasons": [
+      "input-improvement-below-threshold",
+      "uncached-input-increased"
+    ]
+  },
+  "rollback_profile": "context-compaction-auto-only"
+}

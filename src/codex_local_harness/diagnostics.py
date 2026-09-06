@@ -174,9 +174,15 @@ Record = TypeVar("Record", Adjudication, LifecycleEvent, PublicationFailure)
 def append_record(path: Path, record: Any) -> bool:
     """Append one canonical fact; exact replay is a no-op and conflicts fail."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(record.as_dict(), sort_keys=True, separators=(",", ":")) + "\n"
+    payload = json.loads(json.dumps(record.as_dict()))
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     identity_name = next(
-        (name for name in ("adjudication_id", "event_id", "status_id", "failure_id", "record_id") if hasattr(record, name)),
+        (
+            name for name in (
+                "adjudication_id", "event_id", "status_id", "failure_id",
+                "record_id", "checkpoint_id",
+            ) if hasattr(record, name)
+        ),
         None,
     )
     if identity_name is None:
@@ -193,7 +199,7 @@ def append_record(path: Path, record: Any) -> bool:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"invalid diagnostic record at line {line_number}: {exc}") from exc
             if existing.get(identity_name) == identity:
-                if existing != record.as_dict():
+                if existing != payload:
                     raise ValueError(f"conflicting diagnostic record for {identity_name} {identity}")
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
                 return False
