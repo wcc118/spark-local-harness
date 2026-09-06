@@ -31,10 +31,11 @@ class FakeOpenCode(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, {"error": "unauthorized"})
         elif self.path == "/global/health":
-            self._json(200, {"healthy": True, "version": "test"})
+            self._json(200, {"healthy": True, "version": "1.18.21"})
         elif self.path == "/config":
             self._json(200, {
                 "permission": {"bash": "ask"},
+                "compaction": {"auto": True, "prune": True, "reserved": 16000},
                 "agent": {"coder": {"permission": {"edit": "allow"}}},
                 "provider": {"secret": "must-not-be-retained"},
             })
@@ -63,6 +64,15 @@ class FakeOpenCode(BaseHTTPRequestHandler):
                 }},
                 {"type": "question.asked", "properties": {
                     "id": "que-1", "sessionID": "session-123", "questions": [],
+                }},
+                {"id": "compact-start", "type": "session.next.compaction.started", "properties": {
+                    "timestamp": 1, "sessionID": "session-123", "reason": "auto",
+                }},
+                {"id": "compact-delta", "type": "session.next.compaction.delta", "properties": {
+                    "timestamp": 2, "sessionID": "session-123", "text": "PRIVATE COMPACTION SUMMARY",
+                }},
+                {"id": "compact-end", "type": "session.next.compaction.ended", "properties": {
+                    "timestamp": 3, "sessionID": "session-123", "text": "PRIVATE COMPACTION SUMMARY",
                 }},
                 {"type": "session.status", "properties": {
                     "sessionID": "session-123", "status": {"type": "idle"},
@@ -144,6 +154,70 @@ def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, 
         "agent": "coder", "model": {"providerID": "vllm", "modelID": "model-name"},
         "parts": [{"type": "text", "text": "Do work"}],
     }
+
+
+def test_bridge_normalizes_compaction_lifecycle_events():
+    from codex_local_harness.context_controller import OpenCodeCompactionTracker
+
+    tracker = OpenCodeCompactionTracker(
+        run_id="run-1", session_id="session-123", repository="owner/repo", issue=169,
+    )
+    result = tracker.observe({
+        "id": "event-compact",
+        "type": "session.next.compaction.started",
+        "properties": {
+            "timestamp": 1, "sessionID": "session-123", "reason": "auto",
+        },
+    }, observed_at="2026-09-06T12:00:00Z")
+
+    assert result is not None
+    assert result.state == "started"
+    assert result.trigger == "automatic"
+    assert result.surface == "local-opencode"
+
+    assert tracker.observe({
+        "id": "event-delta",
+        "type": "session.next.compaction.delta",
+        "properties": {
+            "timestamp": 2, "sessionID": "session-123",
+            "text": "PRIVATE GENERATED SUMMARY",
+        },
+    }, observed_at="2026-09-06T12:00:01Z") is None
+    completed = tracker.observe({
+        "id": "event-ended",
+        "type": "session.next.compaction.ended",
+        "properties": {
+            "timestamp": 3, "sessionID": "session-123",
+            "text": "PRIVATE GENERATED SUMMARY", "include": "PRIVATE CONTEXT",
+        },
+    }, observed_at="2026-09-06T12:00:02Z")
+
+    assert completed is not None
+    assert completed.state == "completed"
+    assert completed.trigger == "automatic"
+    assert "PRIVATE" not in json.dumps(completed.as_dict())
+
+
+def test_bridge_retains_only_content_free_opencode_compaction_records(
+    tmp_path: Path, fake_server: str,
+):
+    from codex_local_harness.context_controller import read_compaction_records
+
+    records = tmp_path / "compaction.jsonl"
+    status = run_bridge(
+        base_url=fake_server, password=PASSWORD, run_id="run-169", task="Do work",
+        agent="coder", model="vllm/model-name", repository="owner/repo", issue=169,
+        compaction_records=records, log=tmp_path / "run.jsonl",
+        control=tmp_path / "control.json", secret=tmp_path / "secret", timeout=3,
+    )
+    assert status == 0
+    observed = read_compaction_records(records)
+    assert [(item.state, item.trigger, item.surface) for item in observed] == [
+        ("started", "automatic", "local-opencode"),
+        ("completed", "automatic", "local-opencode"),
+    ]
+    assert all(item.run_id == "run-169" and item.session_id == "session-123" for item in observed)
+    assert "PRIVATE COMPACTION SUMMARY" not in records.read_text()
 
 
 def test_bridge_rejects_unhealthy_endpoint(tmp_path: Path):

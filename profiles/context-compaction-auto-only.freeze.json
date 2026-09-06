@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "context-compaction-auto-only",
+  "frozen": true,
+  "opencode_version": "1.18.21",
+  "local_opencode": {
+    "automatic": true,
+    "prune": true,
+    "reserved_tokens": 16000,
+    "manual": false
+  },
+  "primary_codex": {
+    "managed_compaction": false
+  }
+}
