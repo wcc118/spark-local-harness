@@ -11,6 +11,7 @@ import pytest
 
 from codex_local_harness.dashboard import DashboardSource, _render_benchmark, make_handler, render_dashboard
 from codex_local_harness.control_plane import ControlBroker
+from codex_local_harness.context_controller import CompactionLifecycleEvent
 from codex_local_harness.diagnostics import Adjudication, LifecycleEvent, PublicationFailure, append_record
 from codex_local_harness.health import RunHealth, TokenUsage, append_jsonl
 from codex_local_harness.frontier import FrontierStatus
@@ -1196,3 +1197,45 @@ def test_repository_session_identity_and_spark_pulse_are_prominent(tmp_path):
     assert "GB10 unified system memory—not dedicated VRAM" in page
     assert "GPU utilization" in page and "72%" in page
     assert "<title>codex-local-harness · Issue 146 · Coder · Agent Brain</title>" in page
+
+
+def test_context_efficiency_separates_primary_and_local_surfaces(tmp_path):
+    base = fixture_source(tmp_path)
+    usage = tmp_path / "usage.jsonl"
+    common = dict(
+        session_id="thread-a", repository="owner/repo", issue=169,
+        operation_id="issue-169", source="codex-rollout-token-count",
+        context_window=258_400,
+    )
+    append_record(usage, OperationUsageSnapshot(
+        "usage-start", "2026-09-06T12:00:00Z", "start",
+        input_tokens=10, cached_input_tokens=5, cache_write_input_tokens=0,
+        output_tokens=1, reasoning_output_tokens=0, total_tokens=11, **common,
+    ))
+    append_record(usage, OperationUsageSnapshot(
+        "usage-finish", "2026-09-06T12:10:00Z", "finish",
+        input_tokens=100, cached_input_tokens=60, cache_write_input_tokens=0,
+        output_tokens=10, reasoning_output_tokens=2, total_tokens=112,
+        last_input_tokens=170_000, **common,
+    ))
+    records = tmp_path / "compaction.jsonl"
+    for surface, run_id in (("primary-codex", "run-primary"), ("local-opencode", "run-local")):
+        append_record(records, CompactionLifecycleEvent(
+            record_id=f"{run_id}:completed", compaction_id=f"compact:{run_id}",
+            observed_at="2026-09-06T12:11:00Z", state="completed",
+            trigger="manual" if surface == "primary-codex" else "automatic",
+            surface=surface, run_id=run_id, session_id="thread-a",
+            repository="owner/repo", issue=169,
+        ))
+    snapshot = DashboardSource(
+        base.runs, base.adjudications, base.lifecycle,
+        operation_usage=usage, compaction_records=records,
+    ).snapshot()
+    page = render_dashboard(snapshot)
+    assert "Primary context pressure · Codex" in page
+    assert "65.8%" in page
+    assert "Primary Codex compactions" in page
+    assert "Local OpenCode compactions" in page
+    assert snapshot["compaction"]["summary"]["by_surface"] == {
+        "primary-codex": 1, "local-opencode": 1,
+    }
