@@ -222,21 +222,16 @@ install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
 install -d -m 700 "$worker_runtime_home/.config/opencode/agents" "$worker_runtime_home/.qwen" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
-# Compaction configuration: default-off via environment variables
-compaction_auto=${CODEX_LOCAL_COMPACTION_AUTO:-false}
-compaction_prune=${CODEX_LOCAL_COMPACTION_PRUNE:-false}
-compaction_reserved=${CODEX_LOCAL_COMPACTION_RESERVED:-16000}
-jq --argjson auto "$compaction_auto" \
-   --argjson prune "$compaction_prune" \
-   --argjson reserved "$compaction_reserved" \
-   '.mcp.github.enabled = false
+# Automatic OpenCode compaction is the installed auto-only baseline. Manual
+# compaction is a separate controller capability and remains disabled.
+jq '.mcp.github.enabled = false
     | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
       })
     | .agent.reviewer.permission = {"*": "deny"}
     | .agent.reviewer.steps = 4
-    | .compaction = { "auto": $auto, "prune": $prune, "reserved": $reserved }
+    | .compaction = { "auto": true, "prune": true, "reserved": 16000 }
     | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {
         "name": "Qwen3.5 122B NVFP4 (Spark)",
         "limit": { "context": 65536, "output": 8192 }
@@ -326,7 +321,12 @@ candidate_source=${CODEX_LOCAL_SOURCE:-/home/connellwc83/.local/share/codex-loca
 lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/lifecycle.jsonl}
 workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/workflow.jsonl}
 publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/publication-failures.jsonl}
+compaction_records=${CODEX_LOCAL_COMPACTION_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/compaction.jsonl}
 worker_operation_id=${CODEX_LOCAL_OPERATION_ID:-issue-$worker_issue}
+bridge_compaction_args=()
+if [[ $record_run == 1 ]]; then
+  bridge_compaction_args=(--issue "$worker_issue" --compaction-records "$compaction_records")
+fi
 workflow_identity_args=()
 [[ -z $worker_pr ]] || workflow_identity_args+=(--pull-request "$worker_pr")
 # Session identity (CODEX_LOCAL_SESSION_ID with fallback to CODEX_THREAD_ID, then None)
@@ -458,6 +458,7 @@ if [[ $worker_sandbox == container ]]; then
       --password-file "$worker_control_secret" --run-id "$worker_run_id" \
       --task-file "$worker_task_file" --agent "$worker_agent" --model "$worker_model" \
       --repository "$worker_repository_display" \
+      "${bridge_compaction_args[@]}" \
       --log "$worker_log" --control "$worker_control" --secret "$worker_control_secret" \
       --timeout "$worker_timeout"
     bridge_status=$?

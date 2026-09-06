@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
-
 from .context_controller import (
     CompactionLifecycleEvent,
     append_compaction_record,
@@ -78,13 +76,15 @@ def main(argv: list[str] | None = None) -> int:
             states: dict[str, int] = {}
             for r in records:
                 states[r.state] = states.get(r.state, 0) + 1
+            compaction_ids = {r.compaction_id for r in records}
             result = {
-                "total": len(records),
+                "total": len(compaction_ids),
+                "lifecycle_records": len(records),
                 "by_state": states,
-                "automatic_count": sum(1 for r in records if r.trigger == "automatic"),
-                "manual_count": sum(1 for r in records if r.trigger == "manual"),
-                "primary_codex_count": sum(1 for r in records if r.surface == "primary-codex"),
-                "local_opencode_count": sum(1 for r in records if r.surface == "local-opencode"),
+                "automatic_count": len({r.compaction_id for r in records if r.trigger == "automatic"}),
+                "manual_count": len({r.compaction_id for r in records if r.trigger == "manual"}),
+                "primary_codex_count": len({r.compaction_id for r in records if r.surface == "primary-codex"}),
+                "local_opencode_count": len({r.compaction_id for r in records if r.surface == "local-opencode"}),
             }
             print(json.dumps(result, indent=2))
     except (OSError, ValueError, json.JSONDecodeError) as exc:

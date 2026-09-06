@@ -18,6 +18,7 @@ COUNTER_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
     "output_tokens", "reasoning_output_tokens", "total_tokens",
 )
+LAST_COUNTER_FIELDS = tuple(f"last_{field}" for field in COUNTER_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,11 @@ class OperationUsageSnapshot:
     total_tokens: int
     context_window: int
     last_input_tokens: int | None = None
+    last_cached_input_tokens: int | None = None
+    last_cache_write_input_tokens: int | None = None
+    last_output_tokens: int | None = None
+    last_reasoning_output_tokens: int | None = None
+    last_total_tokens: int | None = None
     schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -54,8 +60,12 @@ class OperationUsageSnapshot:
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
-        if self.last_input_tokens is not None and (not isinstance(self.last_input_tokens, int) or isinstance(self.last_input_tokens, bool) or self.last_input_tokens < 0):
-            raise ValueError("last_input_tokens must be a non-negative integer or unavailable")
+        for name in LAST_COUNTER_FIELDS:
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative integer or unavailable")
         if self.schema_version != DIAGNOSTIC_SCHEMA_VERSION:
             raise ValueError("unsupported operation usage schema version")
 
@@ -105,16 +115,17 @@ def read_latest_token_count(path: Path) -> tuple[str, dict[str, int | None]]:
             if not isinstance(context_window, int) or isinstance(context_window, bool) or context_window <= 0:
                 raise ValueError("invalid model_context_window in token_count event")
             values["context_window"] = context_window
-            # Extract last token usage separately (available from tokenUsage/updated events)
-            last = info.get("last") if isinstance(info, dict) else None
-            if isinstance(last, dict):
-                last_input = last.get("inputTokens")
-                if isinstance(last_input, int) and not isinstance(last_input, bool) and last_input >= 0:
-                    values["last_input_tokens"] = last_input
-                else:
-                    values["last_input_tokens"] = None
-            else:
-                values["last_input_tokens"] = None
+            # Rollout token_count uses snake_case `last_token_usage`. Keep each
+            # scalar unavailable unless it is present and valid; never infer it
+            # from cumulative counters.
+            last = info.get("last_token_usage") if isinstance(info, dict) else None
+            for field, last_field in zip(COUNTER_FIELDS, LAST_COUNTER_FIELDS):
+                value = last.get(field) if isinstance(last, dict) else None
+                if value is not None and (
+                    not isinstance(value, int) or isinstance(value, bool) or value < 0
+                ):
+                    raise ValueError(f"invalid {field} in last_token_usage")
+                values[last_field] = value
             observed_at = event.get("timestamp")
             if not isinstance(observed_at, str):
                 raise ValueError("token_count timestamp is missing")
@@ -134,15 +145,16 @@ def capture_snapshot(
         record_id=record_id, observed_at=observed_at, phase=phase,
         session_id=thread_id, repository=repository, issue=issue,
         operation_id=operation_id, source="codex-rollout-token-count",
-        **{k: v for k, v in values.items() if k != "last_input_tokens"},
-        last_input_tokens=values.get("last_input_tokens"),
+        **values,
     )
 
 
 def derive_usage(snapshots: Iterable[OperationUsageSnapshot]) -> tuple[dict[str, Any], ...]:
-    grouped: dict[tuple[str, str, int, str], list[OperationUsageSnapshot]] = {}
+    grouped: dict[tuple[str, str, int, str, str], list[OperationUsageSnapshot]] = {}
     for item in snapshots:
-        grouped.setdefault((item.session_id, item.repository, item.issue, item.operation_id), []).append(item)
+        grouped.setdefault(
+            (item.session_id, item.repository, item.issue, item.operation_id, item.source), [],
+        ).append(item)
     results: list[dict[str, Any]] = []
     for key, items in grouped.items():
         starts = [item for item in items if item.phase == "start"]
@@ -151,7 +163,8 @@ def derive_usage(snapshots: Iterable[OperationUsageSnapshot]) -> tuple[dict[str,
         finish = max(finishes, key=lambda item: (item.observed_at, item.record_id)) if finishes else None
         result: dict[str, Any] = {
             "session_id": key[0], "repository": key[1], "issue": key[2],
-            "operation_id": key[3], "status": "unavailable", "provenance": "observed",
+            "operation_id": key[3], "source": key[4],
+            "status": "unavailable", "provenance": "observed",
             "observed_at": finish.observed_at if finish else (start.observed_at if start else None),
         }
         if start is None or finish is None:
@@ -180,6 +193,8 @@ def derive_usage(snapshots: Iterable[OperationUsageSnapshot]) -> tuple[dict[str,
                         result["last_input_tokens"] = None
                         result["context_pressure"] = None
                         result["context_headroom"] = None
+                    for field in LAST_COUNTER_FIELDS[1:]:
+                        result[field] = getattr(finish, field)
         results.append(result)
     return tuple(sorted(results, key=lambda item: (item["observed_at"] or "", item["operation_id"]), reverse=True))
 

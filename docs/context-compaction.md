@@ -7,7 +7,8 @@ of truth.
 ## Boundaries
 
 - Primary Codex control is permitted only for threads created by the harness on
-  its private app-server transport. An observed external thread is advisory-only.
+  its private stdio app-server transport. The controller never discovers or
+  attaches to an existing socket. An observed external thread is advisory-only.
 - `thread/compact/start` is an acknowledgement, not completion. Completion is
   the matching `contextCompaction` item lifecycle and a successful enclosing
   turn. The first later ordinary token-usage event supplies the after size.
@@ -34,9 +35,17 @@ issue-scoped thread and has a stable SHA-256 digest.
 ## Measurement
 
 Capture cumulative and last-request counters separately. Context pressure is
-`last.input_tokens / model_context_window`; unavailable inputs stay unavailable.
+`last_token_usage.input_tokens / model_context_window` in Codex rollouts (and
+the equivalent app-server `last.inputTokens` counter); unavailable inputs stay unavailable.
 Compaction records contain identifiers, scalar counters, lifecycle state, and
 error class only. Local OpenCode and primary Codex use different surfaces.
+
+The local auto-only contract is pinned to OpenCode 1.18.21 and is verified from
+the server health/config endpoints before compaction telemetry is accepted. Each
+disposable worker config explicitly sets `auto=true`, `prune=true`, and
+`reserved=16000`. `session.next.compaction.delta` and the `text`/`include`
+members on completion are ignored at the privacy boundary. Manual local
+compaction has no enabled call path.
 
 Qualification compares a default-off candidate with a frozen auto-only
 baseline. Net input includes the compaction pass and bounded resume packet.
@@ -48,3 +57,12 @@ The first candidate threshold is 0.62 of the authoritative model window, with a
 two-turn cooldown. Promotion requires a predeclared material net-input
 improvement, no state-retention failures, no task-quality regression, and a
 tested rollback profile.
+
+`profiles/context-compaction-auto-only.freeze.json` is the rollback profile.
+`profiles/context-compaction-candidate.json` remains disabled until paired
+qualification demonstrates at least 15% net-input improvement after including
+the compaction pass and resume packet. The installed release boundary is not
+changed by this candidate.
+
+The historical `bin/codex-local-worker` baseline remains byte-for-byte frozen;
+the explicit disposable configuration is applied in the maintained v4 worker.

@@ -96,16 +96,8 @@ install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
 install -d -m 700 "$worker_runtime_home/.config/opencode/agents" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
-# Compaction configuration: default-off via environment variables
-compaction_auto=${CODEX_LOCAL_COMPACTION_AUTO:-false}
-compaction_prune=${CODEX_LOCAL_COMPACTION_PRUNE:-false}
-compaction_reserved=${CODEX_LOCAL_COMPACTION_RESERVED:-16000}
-jq --argjson auto "$compaction_auto" \
-   --argjson prune "$compaction_prune" \
-   --argjson reserved "$compaction_reserved" \
-   '.permission.bash as $global_bash
+jq '.permission.bash as $global_bash
     | .mcp.github.enabled = false
-    | .compaction = { "auto": $auto, "prune": $prune, "reserved": $reserved }
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny",
         "bash": ($global_bash + {

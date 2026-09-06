@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from .execution_diagnostics import ExecutionDiagnostics, load_stage_budgets
-from .context_controller import CompactionTracker
+from .context_controller import (
+    OpenCodeCompactionTracker,
+    append_compaction_record,
+    verify_opencode_compaction_contract,
+)
 
 
 def _iso_timestamp() -> str:
@@ -117,14 +121,16 @@ def _events(base_url: str, password: str, timeout: float):
 
 def run_bridge(
     *, base_url: str, password: str, run_id: str, task: str, agent: str,
-    model: str, repository: str | None = None, log: Path, control: Path, secret: Path, timeout: float,
+    model: str, repository: str | None = None, issue: int | None = None,
+    compaction_records: Path | None = None, log: Path, control: Path,
+    secret: Path, timeout: float,
 ) -> int:
     deadline = time.monotonic() + timeout
     diagnostics = ExecutionDiagnostics(agent, load_stage_budgets(os.environ.get("CODEX_LOCAL_STAGE_BUDGETS")))
-    # Initialize compaction tracker for OpenCode surface
-    compaction_tracker = CompactionTracker(
-        run_id=run_id, session_id="opencode-session", repository=repository or "unknown/unknown", issue=0,
-    )
+    if (issue is None) != (compaction_records is None):
+        raise BridgeError("issue and compaction records must be configured together")
+    if issue is not None and repository is None:
+        raise BridgeError("compaction recording requires a repository")
     while True:
         try:
             health = _request(base_url, password, "GET", "/global/health")
@@ -140,6 +146,11 @@ def run_bridge(
     session_id = session.get("id") if isinstance(session, dict) else None
     if not isinstance(session_id, str) or not session_id:
         raise BridgeError("OpenCode did not return a session id")
+    compaction_tracker = None
+    if issue is not None and compaction_records is not None and repository is not None:
+        compaction_tracker = OpenCodeCompactionTracker(
+            run_id=run_id, session_id=session_id, repository=repository, issue=issue,
+        )
     try:
         resolved_config = _request(base_url, password, "GET", "/config")
     except BridgeError:
@@ -154,6 +165,16 @@ def run_bridge(
         "global": global_policy if isinstance(global_policy, dict) else {},
         "role": role_policy if isinstance(role_policy, dict) else {},
     }
+    if compaction_records is not None:
+        version = health.get("version") if isinstance(health, dict) else None
+        compaction = resolved_config.get("compaction") if isinstance(resolved_config, dict) else None
+        try:
+            verify_opencode_compaction_contract(
+                version=version if isinstance(version, str) else "",
+                compaction=compaction if isinstance(compaction, dict) else {},
+            )
+        except ValueError as exc:
+            raise BridgeError(str(exc)) from exc
     if len(json.dumps(effective_policy)) > 65536:
         effective_policy = {"source": "oversized", "evaluation_order": [], "global": {}, "role": {}}
     secret.write_text(password + "\n", encoding="utf-8")
@@ -191,8 +212,10 @@ def run_bridge(
                 _append_event(log, normalized)
                 for diagnostic in diagnostics.observe(normalized):
                     _append_event(log, diagnostic)
-            # Observe OpenCode compaction lifecycle events
-            compaction_tracker.observe(raw, observed_at=_iso_timestamp())
+            if compaction_tracker is not None:
+                compaction = compaction_tracker.observe(raw, observed_at=_iso_timestamp())
+                if compaction is not None:
+                    append_compaction_record(compaction_records, compaction)
             if raw.get("type") == "session.error":
                 terminal_error = True
             if raw.get("type") == "session.status":
@@ -228,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agent", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--repository")
+    parser.add_argument("--issue", type=int)
+    parser.add_argument("--compaction-records", type=Path)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--control", type=Path, required=True)
     parser.add_argument("--secret", type=Path, required=True)
@@ -240,8 +265,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_bridge(
             base_url=args.base_url, password=password, run_id=args.run_id,
             task=args.task_file.read_text(encoding="utf-8"), agent=args.agent,
-            model=args.model, repository=args.repository, log=args.log, control=args.control, secret=args.secret,
-            timeout=args.timeout,
+            model=args.model, repository=args.repository, issue=args.issue,
+            compaction_records=args.compaction_records, log=args.log,
+            control=args.control, secret=args.secret, timeout=args.timeout,
         )
     except (BridgeError, OSError, ValueError) as exc:
         parser.error(str(exc))

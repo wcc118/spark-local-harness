@@ -5,8 +5,10 @@ from codex_local_harness.context_controller import (
     CompactionReadiness,
     CompactionRejected,
     CompactionTracker,
+    OPENCODE_COMPACTION_EVENTS,
     authorize_compaction,
     evaluate_compaction,
+    verify_opencode_compaction_contract,
 )
 
 
@@ -88,6 +90,12 @@ def test_manual_lifecycle_uses_next_ordinary_turn_for_after_size():
             "item": {"type": "contextCompaction", "id": "item-compact"},
         },
     }, observed_at="2026-09-06T12:00:02Z")
+    tracker.observe({
+        "method": "turn/completed", "params": {
+            "threadId": "thread-169",
+            "turn": {"id": "turn-compact", "status": "completed"},
+        },
+    }, observed_at="2026-09-06T12:00:02Z")
     during = tracker.observe({
         "method": "thread/tokenUsage/updated", "params": {
             "threadId": "thread-169", "turnId": "turn-compact",
@@ -151,3 +159,21 @@ def test_failed_compaction_turn_is_recorded_without_error_content():
     assert failed.state == "failed"
     assert failed.error_class == "compaction-turn-failed"
     assert "PRIVATE" not in repr(failed)
+
+
+def test_opencode_11821_auto_only_contract_is_explicit_and_pinned():
+    verify_opencode_compaction_contract(
+        version="1.18.21",
+        compaction={"auto": True, "prune": True, "reserved": 16000},
+    )
+    assert "session.next.compaction.delta" in OPENCODE_COMPACTION_EVENTS
+    with pytest.raises(ValueError, match="unsupported OpenCode"):
+        verify_opencode_compaction_contract(
+            version="1.18.22",
+            compaction={"auto": True, "prune": True, "reserved": 16000},
+        )
+    with pytest.raises(ValueError, match="auto-only baseline"):
+        verify_opencode_compaction_contract(
+            version="1.18.21",
+            compaction={"auto": False, "prune": True, "reserved": 16000},
+        )

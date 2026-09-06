@@ -291,12 +291,19 @@ class DashboardSource:
             workflow = tuple(item for item in workflow if item.repository == repository)
             plan_events = tuple(item for item in plan_events if item.repository == repository)
             usage_snapshots = tuple(item for item in usage_snapshots if item.repository == repository)
+            compaction_records = tuple(
+                item for item in compaction_records if item.repository == repository
+            )
         if observed_since is not None:
             recent_ids = {run_id for run_id, stamp in run_times.items() if stamp >= observed_since}
             scoped_ids = recent_ids if scoped_ids is None else scoped_ids & recent_ids
             workflow = tuple(item for item in workflow if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since)
             plan_events = tuple(item for item in plan_events if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since)
             usage_snapshots = tuple(item for item in usage_snapshots if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since)
+            compaction_records = tuple(
+                item for item in compaction_records
+                if datetime.fromisoformat(item.observed_at.replace("Z", "+00:00")) >= observed_since
+            )
         if scoped_ids is not None:
             runs = tuple(item for item in runs if item.run_id in scoped_ids)
             adjudications = tuple(item for item in adjudications if item.run_id in scoped_ids)
@@ -321,6 +328,9 @@ class DashboardSource:
             views = tuple(view for view in views if view.run_id in selected_run_ids)
             runs = tuple(item for item in runs if item.run_id in selected_run_ids)
             plans = tuple(item for item in plans if (item["session_id"] or "legacy") == selected)
+            compaction_records = tuple(
+                item for item in compaction_records if item.session_id == selected
+            )
         operation_usage = derive_usage(usage_snapshots)
         if selected is not None:
             operation_usage = tuple(item for item in operation_usage if item["session_id"] == selected)
@@ -627,6 +637,7 @@ class DashboardSource:
             self.benchmark_manifest,
             self.benchmark_attempts,
             self.benchmark_summaries,
+            self.compaction_records,
         ) if path is not None)
 
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
@@ -1765,6 +1776,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         snapshot.get("strategy", {}), views, snapshot.get("selected_session"),
     )
     benchmark_html = _render_benchmark(snapshot)
+    context_efficiency_html = _context_efficiency_html(snapshot)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -1893,6 +1905,7 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 <details class="diagnostic-secondary"><summary>Operational verdict · {html.escape(str(verdict.get('headline', 'unknown')))}</summary>{verdict_html}</details>
 <div class="cards">{card_html}</div>
 <div class="telemetry">{telemetry_html}</div>
+{context_efficiency_html}
 <h2>Division of labor</h2>{accounting_html}
 <h2>Current operations</h2>{operations}
 <h2>Run history</h2>
@@ -2105,21 +2118,78 @@ def _compaction_summary(records: tuple[CompactionLifecycleEvent, ...]) -> dict[s
         states[r.state] = states.get(r.state, 0) + 1
         triggers[r.trigger] = triggers.get(r.trigger, 0) + 1
         surfaces[r.surface] = surfaces.get(r.surface, 0) + 1
-    before_tokens = [r.before_input_tokens for r in records if r.before_input_tokens is not None]
-    after_tokens = [r.after_input_tokens for r in records if r.after_input_tokens is not None]
+    latest: dict[str, CompactionLifecycleEvent] = {}
+    for record in records:
+        current = latest.get(record.compaction_id)
+        if current is None or (record.observed_at, record.record_id) > (
+            current.observed_at, current.record_id,
+        ):
+            latest[record.compaction_id] = record
+    outcomes: dict[str, int] = {}
+    surface_compactions: dict[str, int] = {}
+    for record in latest.values():
+        outcomes[record.state] = outcomes.get(record.state, 0) + 1
+        surface_compactions[record.surface] = surface_compactions.get(record.surface, 0) + 1
+    before_tokens = [r.before_input_tokens for r in latest.values() if r.before_input_tokens is not None]
+    after_tokens = [r.after_input_tokens for r in latest.values() if r.after_input_tokens is not None]
     before_total = sum(before_tokens) if before_tokens else None
     after_total = sum(after_tokens) if after_tokens else None
     return {
-        "total": len(records),
+        "total": len(latest),
+        "lifecycle_records": len(records),
         "by_state": states,
+        "by_outcome": outcomes,
         "by_trigger": triggers,
-        "by_surface": surfaces,
+        "by_surface_records": surfaces,
+        "by_surface": surface_compactions,
         "before_total_input_tokens": before_total,
         "after_total_input_tokens": after_total,
         "estimated_savings_tokens": (
             (before_total - after_total) if before_total is not None and after_total is not None else None
         ),
     }
+
+
+def _context_efficiency_html(snapshot: dict[str, Any]) -> str:
+    usage = [
+        item for item in snapshot.get("operation_usage", ())
+        if item.get("source") == "codex-rollout-token-count"
+    ]
+    latest_usage = usage[0] if usage else None
+    pressure = latest_usage.get("context_pressure") if latest_usage else None
+    context = "Unavailable"
+    if pressure is not None:
+        context = f"{pressure * 100:.1f}%"
+    summary = snapshot.get("compaction", {}).get("summary", {})
+    surfaces = summary.get("by_surface", {})
+    records = snapshot.get("compaction", {}).get("records", ())
+
+    def latest_size(surface: str) -> str:
+        matching = [item for item in records if item.get("surface") == surface]
+        if not matching:
+            return "Unavailable"
+        newest = max(matching, key=lambda item: (item.get("observed_at", ""), item.get("record_id", "")))
+        before = newest.get("before_input_tokens")
+        after = newest.get("after_input_tokens")
+        if before is None and after is None:
+            return "Unavailable"
+        return f'{before if before is not None else "?"} → {after if after is not None else "?"}'
+
+    cards = (
+        ("Primary context pressure · Codex", context, "Observed last_token_usage / context window"),
+        ("Primary Codex compactions", str(surfaces.get("primary-codex", 0)), latest_size("primary-codex")),
+        ("Local OpenCode compactions", str(surfaces.get("local-opencode", 0)), latest_size("local-opencode")),
+    )
+    rendered = "".join(
+        f'<section class="card"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong>'
+        f'<small>{html.escape(note)}</small></section>'
+        for label, value, note in cards
+    )
+    return (
+        '<section aria-labelledby="context-efficiency-title"><h2 id="context-efficiency-title">'
+        'Context efficiency</h2><div class="telemetry">'
+        f'{rendered}</div></section>'
+    )
 
 
 def _session_label(session_id: str, sample: dict[str, Any]) -> str:
@@ -2320,6 +2390,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark-manifest", type=Path)
     parser.add_argument("--benchmark-attempts", type=Path)
     parser.add_argument("--benchmark-summaries", type=Path)
+    parser.add_argument("--compaction-records", type=Path)
     parser.add_argument("--control-token-file", type=Path)
     parser.add_argument("--control-audit-file", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
@@ -2347,6 +2418,7 @@ def main(argv: list[str] | None = None) -> int:
         benchmark_manifest=args.benchmark_manifest,
         benchmark_attempts=args.benchmark_attempts,
         benchmark_summaries=args.benchmark_summaries,
+        compaction_records=args.compaction_records,
     )
     if bool(args.control_token_file) != bool(args.control_audit_file):
         parser.error("control token and audit files must be configured together")

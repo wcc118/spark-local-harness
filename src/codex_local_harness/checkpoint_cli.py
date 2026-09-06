@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
-
 from .context_checkpoint import (
     ContextCheckpointEvent,
     append_checkpoint,
@@ -41,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     append_parser.add_argument("--pull-request", type=int, default=None)
     append_parser.add_argument("--blocker-ref", action="append", default=[])
     append_parser.add_argument("--evidence-ref", action="append", default=[])
+    append_parser.add_argument("--terminal", action="store_true")
 
     # read: read all checkpoint records
     read_parser = subparsers.add_parser("read", help="Read all checkpoint records")
@@ -74,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
                 pull_request=args.pull_request,
                 blocker_refs=tuple(args.blocker_ref),
                 evidence_refs=tuple(args.evidence_ref),
+                terminal=args.terminal,
             )
             success = append_checkpoint(args.records, record)
             print(json.dumps({"success": success, "checkpoint_id": record.checkpoint_id}))

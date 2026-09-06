@@ -14,6 +14,7 @@ THREAD = "01a002fc-d275-7a92-b3da-840ebb61a002"
 
 
 def token_event(timestamp: str, **changes):
+    last = changes.pop("last_token_usage", None)
     usage = {
         "input_tokens": 100, "cached_input_tokens": 60,
         "cache_write_input_tokens": 0, "output_tokens": 20,
@@ -24,6 +25,7 @@ def token_event(timestamp: str, **changes):
         "timestamp": timestamp, "type": "event_msg",
         "payload": {"type": "token_count", "info": {
             "total_token_usage": usage, "model_context_window": 258400,
+            **({"last_token_usage": last} if last is not None else {}),
         }},
     }
 
@@ -151,7 +153,14 @@ def test_last_token_usage_availability_and_malformed_fields(tmp_path):
                             "total_tokens": 260,
                         },
                         "model_context_window": 258400,
-                        "last": {"inputTokens": 22000},
+                        "last_token_usage": {
+                            "input_tokens": 22000,
+                            "cached_input_tokens": 18000,
+                            "cache_write_input_tokens": 0,
+                            "output_tokens": 500,
+                            "reasoning_output_tokens": 200,
+                            "total_tokens": 22700,
+                        },
                     },
                 },
             },
@@ -163,6 +172,7 @@ def test_last_token_usage_availability_and_malformed_fields(tmp_path):
     observed_at, values = read_latest_token_count(path)
     assert observed_at == "2026-09-06T12:01:00Z"
     assert values["last_input_tokens"] == 22000
+    assert values["last_cached_input_tokens"] == 18000
     assert values["context_window"] == 258400
     # last_input_tokens absent in first event should be None
     first_path = tmp_path / f"rollout-earlier-{THREAD}.jsonl"

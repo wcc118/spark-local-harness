@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -14,6 +15,25 @@ COMPACTION_STATES = {
 }
 COMPACTION_TRIGGERS = {"automatic", "manual", "advisory"}
 SURFACES = {"primary-codex", "local-opencode"}
+SUPPORTED_OPENCODE_VERSION = "1.18.21"
+OPENCODE_COMPACTION_EVENTS = frozenset({
+    "session.compacted",
+    "session.next.compaction.started",
+    "session.next.compaction.delta",
+    "session.next.compaction.ended",
+})
+
+
+def verify_opencode_compaction_contract(
+    *, version: str, compaction: dict[str, Any],
+) -> None:
+    if version != SUPPORTED_OPENCODE_VERSION:
+        raise ValueError(
+            f"unsupported OpenCode compaction contract version: {version or 'unavailable'}"
+        )
+    expected = {"auto": True, "prune": True, "reserved": 16000}
+    if compaction != expected:
+        raise ValueError("resolved OpenCode compaction policy does not match the auto-only baseline")
 
 
 class CompactionRejected(ValueError):
@@ -183,6 +203,7 @@ class CompactionTracker:
         self.state: str | None = None
         self.before_input_tokens: int | None = None
         self.context_window: int | None = None
+        self.awaiting_turn_completion = False
 
     def requested(
         self, *, compaction_id: str, observed_at: str,
@@ -197,6 +218,14 @@ class CompactionTracker:
         self.before_input_tokens = before_input_tokens
         self.context_window = context_window
         return self._record(observed_at=observed_at, state="requested")
+
+    def failed(self, *, observed_at: str, error_class: str) -> CompactionLifecycleEvent:
+        if self.state not in {"requested", "started", "completed"}:
+            raise CompactionRejected("no-compaction-in-flight")
+        self.state = "failed"
+        return self._record(
+            observed_at=observed_at, state="failed", error_class=error_class,
+        )
 
     def observe(self, notification: dict[str, Any], *, observed_at: str) -> CompactionLifecycleEvent | None:
         method = notification.get("method")
@@ -222,17 +251,25 @@ class CompactionTracker:
             if state == "completed" and self.state not in {"started", "requested"}:
                 raise ValueError("compaction completed without a request or start")
             self.state = state
+            if state == "completed":
+                self.awaiting_turn_completion = True
             return self._record(observed_at=observed_at, state=state)
-        if method == "turn/completed" and self.state in {"requested", "started"}:
+        if method == "turn/completed" and self.state in {"requested", "started", "completed"}:
             turn = params.get("turn")
             if not isinstance(turn, dict) or turn.get("id") != self.turn_id:
                 return None
             if turn.get("status") != "completed":
                 self.state = "failed"
+                self.awaiting_turn_completion = False
                 return self._record(
                     observed_at=observed_at, state="failed", error_class="compaction-turn-failed",
                 )
-        if method == "thread/tokenUsage/updated" and self.state == "completed":
+            self.awaiting_turn_completion = False
+        if (
+            method == "thread/tokenUsage/updated"
+            and self.state == "completed"
+            and not self.awaiting_turn_completion
+        ):
             turn_id = params.get("turnId")
             if not isinstance(turn_id, str) or turn_id == self.turn_id:
                 return None
@@ -270,6 +307,88 @@ class CompactionTracker:
             before_input_tokens=self.before_input_tokens,
             after_input_tokens=after_input_tokens,
             context_window=context_window if context_window is not None else self.context_window,
+            error_class=error_class,
+        )
+
+
+class OpenCodeCompactionTracker:
+    """Normalize the OpenCode 1.18.21 lifecycle without retaining text.
+
+    The `delta` and `ended.text` fields can contain generated summary content,
+    so this adapter deliberately reads only event identity, session identity,
+    timestamp, and the automatic/manual reason.
+    """
+
+    def __init__(
+        self, *, run_id: str, session_id: str, repository: str, issue: int,
+    ) -> None:
+        self.run_id = run_id
+        self.session_id = session_id
+        self.repository = repository
+        self.issue = issue
+        self.compaction_id: str | None = None
+        self.trigger: str | None = None
+        self.state: str | None = None
+        self._sequence = 0
+
+    def observe(
+        self, event: dict[str, Any], *, observed_at: str,
+    ) -> CompactionLifecycleEvent | None:
+        event_type = event.get("type")
+        properties = event.get("properties")
+        if not isinstance(properties, dict) or properties.get("sessionID") != self.session_id:
+            return None
+        if event_type == "session.next.compaction.delta":
+            return None
+        if event_type == "session.next.compaction.started":
+            reason = properties.get("reason")
+            if reason not in {"auto", "manual"}:
+                raise ValueError("OpenCode compaction start lacks a valid reason")
+            event_id = event.get("id")
+            if event_id is not None and not isinstance(event_id, str):
+                raise ValueError("OpenCode compaction event id must be a string")
+            self._sequence += 1
+            identity = f"{self.run_id}:{self.session_id}:{event_id or self._sequence}"
+            suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+            self.compaction_id = f"opencode:{suffix}"
+            self.trigger = "automatic" if reason == "auto" else "manual"
+            self.state = "started"
+            return self._record(observed_at, "started")
+        if event_type in {"session.next.compaction.ended", "session.compacted"}:
+            if self.state == "completed":
+                return None
+            if self.compaction_id is None:
+                # The legacy compacted event carries no event or trigger identity.
+                # It is still an observed automatic lifecycle fact for the exact
+                # bridge-owned session; manual calls are disabled by default.
+                self._sequence += 1
+                identity = f"{self.run_id}:{self.session_id}:legacy:{self._sequence}"
+                suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+                self.compaction_id = f"opencode:{suffix}"
+                self.trigger = "automatic"
+            self.state = "completed"
+            return self._record(observed_at, "completed")
+        if event_type == "session.error" and self.state == "started":
+            self.state = "failed"
+            return self._record(observed_at, "failed", error_class="opencode-session-error")
+        return None
+
+    def _record(
+        self, observed_at: str, state: str, *, error_class: str | None = None,
+    ) -> CompactionLifecycleEvent:
+        if self.compaction_id is None or self.trigger is None:
+            raise ValueError("OpenCode compaction identity is unavailable")
+        return CompactionLifecycleEvent(
+            record_id=f"{self.compaction_id}:{state}",
+            compaction_id=self.compaction_id,
+            observed_at=observed_at,
+            state=state,
+            trigger=self.trigger,
+            surface="local-opencode",
+            run_id=self.run_id,
+            session_id=self.session_id,
+            repository=self.repository,
+            issue=self.issue,
             error_class=error_class,
         )
 
