@@ -55,8 +55,8 @@ not authorize promotion.
 
 The first candidate threshold is 0.62 of the authoritative model window, with a
 two-turn cooldown. Promotion requires a predeclared material net-input
-improvement, no state-retention failures, no task-quality regression, and a
-tested rollback profile.
+improvement, no increase in uncached input, no state-retention failures, no
+task-quality regression, and a tested rollback profile.
 
 `profiles/context-compaction-auto-only.freeze.json` is the rollback profile.
 `profiles/context-compaction-candidate.json` remains disabled until paired

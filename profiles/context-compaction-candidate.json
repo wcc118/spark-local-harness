@@ -10,6 +10,7 @@
   },
   "qualification": {
     "minimum_net_input_improvement": 0.15,
+    "require_no_uncached_input_increase": true,
     "require_state_retention": true,
     "require_no_task_outcome_regression": true,
     "require_no_tool_loop_increase": true

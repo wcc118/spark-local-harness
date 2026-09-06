@@ -98,6 +98,8 @@ def evaluate_qualification(
             reasons.append("input-improvement-below-threshold")
     else:
         reasons.append("baseline-input-unavailable")
+    if candidate.net_uncached_input_tokens > baseline.net_uncached_input_tokens:
+        reasons.append("uncached-input-increased")
     if not candidate.state_retained:
         reasons.append("state-retention-failed")
     if not candidate.task_completed:

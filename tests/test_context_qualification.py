@@ -34,12 +34,26 @@ def test_qualification_accounts_for_compaction_and_resume_input():
     candidate = attempt(
         "candidate", primary_input_tokens=65_000,
         primary_cached_input_tokens=45_000,
-        compaction_pass_input_tokens=8_000, resume_input_tokens=5_000,
+        compaction_pass_input_tokens=8_000, compaction_pass_cached_input_tokens=7_000,
+        resume_input_tokens=5_000, resume_cached_input_tokens=4_000,
     )
     decision = evaluate_qualification(baseline, candidate)
     assert candidate.net_input_tokens == 78_000
     assert decision.promote is True
     assert decision.input_improvement == pytest.approx(0.22)
+
+
+def test_uncached_input_regression_blocks_promotion_despite_total_savings():
+    decision = evaluate_qualification(
+        attempt("baseline", primary_cached_input_tokens=80_000),
+        attempt(
+            "candidate", primary_input_tokens=70_000,
+            primary_cached_input_tokens=40_000,
+        ),
+    )
+    assert decision.input_improvement == pytest.approx(0.30)
+    assert decision.promote is False
+    assert decision.reasons == ("uncached-input-increased",)
 
 
 def test_state_or_outcome_regression_blocks_promotion_despite_token_savings():
@@ -71,4 +85,5 @@ def test_candidate_is_disabled_and_names_frozen_auto_only_rollback():
     }
     assert candidate["promotion_state"] == "disabled-pending-qualification"
     assert candidate["primary_codex"]["managed_compaction"] is False
+    assert candidate["qualification"]["require_no_uncached_input_increase"] is True
     assert candidate["rollback_profile"] == baseline["name"]
