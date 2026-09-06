@@ -198,3 +198,22 @@ def test_usage_delta_computes_last_input_pressure_and_headroom():
     assert usage["last_input_tokens"] == 22000
     assert usage["context_pressure"] == pytest.approx(22000 / 258400)
     assert usage["context_headroom"] == pytest.approx(1.0 - (22000 / 258400))
+
+
+@pytest.mark.parametrize("invalid", [True, -1, "22000"])
+def test_malformed_last_token_usage_is_rejected(tmp_path, invalid):
+    path = tmp_path / f"rollout-invalid-{THREAD}.jsonl"
+    event = token_event(
+        "2026-09-06T12:00:00Z",
+        last_token_usage={
+            "input_tokens": invalid,
+            "cached_input_tokens": 10,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 1,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 11,
+        },
+    )
+    path.write_text(json.dumps(event, separators=(",", ":")) + "\n")
+    with pytest.raises(ValueError, match="invalid input_tokens in last_token_usage"):
+        read_latest_token_count(path)
