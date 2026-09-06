@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from codex_local_harness.context_controller import (
@@ -177,3 +179,37 @@ def test_opencode_11821_auto_only_contract_is_explicit_and_pinned():
             version="1.18.21",
             compaction={"auto": False, "prune": True, "reserved": 16000},
         )
+
+
+def test_multiple_automatic_codex_compactions_get_distinct_identities():
+    tracker = CompactionTracker(
+        run_id="run-169", session_id="thread-169", repository="owner/repo", issue=169,
+    )
+
+    def notification(method, turn, item):
+        return {
+            "method": method,
+            "params": {
+                "threadId": "thread-169", "turnId": turn,
+                "item": {"type": "contextCompaction", "id": item},
+            },
+        }
+
+    first = tracker.observe(notification("item/started", "turn-1", "item-1"), observed_at=NOW)
+    tracker.observe(notification("item/completed", "turn-1", "item-1"), observed_at=NOW)
+    tracker.observe({
+        "method": "turn/completed", "params": {
+            "threadId": "thread-169", "turn": {"id": "turn-1", "status": "completed"},
+        },
+    }, observed_at=NOW)
+    second = tracker.observe(notification("item/started", "turn-2", "item-2"), observed_at=NOW)
+    assert first.compaction_id != second.compaction_id
+
+
+def test_v4_worker_writes_explicit_auto_only_config_without_manual_call_path():
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "bin/codex-local-worker-v4").read_text()
+    bridge = (root / "src/codex_local_harness/opencode_bridge.py").read_text()
+    assert '.compaction = { "auto": true, "prune": true, "reserved": 16000 }' in worker
+    assert "/compact" not in bridge
+    assert "/summarize" not in bridge

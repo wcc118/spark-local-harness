@@ -88,6 +88,10 @@ def evaluate_qualification(
         raise ValueError("minimum_input_improvement must be between zero and one")
     reasons: list[str] = []
     improvement = None
+    if not baseline.state_retained:
+        reasons.append("baseline-state-retention-failed")
+    if not baseline.task_completed:
+        reasons.append("baseline-incomplete")
     if baseline.net_input_tokens > 0:
         improvement = 1 - candidate.net_input_tokens / baseline.net_input_tokens
         if improvement < minimum_input_improvement:

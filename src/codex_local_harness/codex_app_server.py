@@ -102,7 +102,10 @@ class StdioAppServer:
         if process is None:
             return
         if process.stdin is not None:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -163,7 +166,7 @@ class StdioAppServer:
                 if not isinstance(value, dict):
                     raise AppServerError("app-server emitted a non-object message")
                 self._messages.put(value)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, AppServerError):
             self._messages.put(AppServerError("app-server emitted malformed JSON"))
         finally:
             self._messages.put(AppServerError("app-server connection closed"))
@@ -304,6 +307,12 @@ class ManagedCodexController:
             record = self.tracker.observe(notification, observed_at=_now())
             if record is not None:
                 append_compaction_record(self.records, record)
+
+    def receive_once(self, *, timeout: float) -> dict[str, Any]:
+        """Receive and normalize one notification from the owned connection."""
+        notification = self.transport.receive(timeout=timeout)
+        self.observe(notification)
+        return notification
 
     def request_compaction(
         self, checkpoint: ContextCheckpointEvent, current: CurrentCheckpointState,

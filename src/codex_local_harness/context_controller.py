@@ -240,8 +240,24 @@ class CompactionTracker:
             turn_id = params.get("turnId")
             if not isinstance(item_id, str) or not isinstance(turn_id, str):
                 raise ValueError("compaction notification lacks bounded item identity")
+            if (
+                method == "item/started"
+                and self.state in {"completed", "post-context-observed", "failed"}
+                and not self.awaiting_turn_completion
+                and self.item_id != item_id
+            ):
+                identity = f"{self.run_id}:{self.session_id}:{item_id}"
+                suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+                self.compaction_id = f"auto:{suffix}"
+                self.trigger = "automatic"
+                self.item_id = None
+                self.turn_id = None
+                self.before_input_tokens = None
+                self.context_window = None
             if self.compaction_id is None:
-                self.compaction_id = f"auto:{self.session_id}:{item_id}"
+                identity = f"{self.run_id}:{self.session_id}:{item_id}"
+                suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+                self.compaction_id = f"auto:{suffix}"
                 self.trigger = "automatic"
             if self.item_id is not None and self.item_id != item_id:
                 raise ValueError("conflicting compaction item identity")
