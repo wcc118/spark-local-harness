@@ -62,6 +62,21 @@ def valid_result(**changes):
     return result
 
 
+def test_prompt_documents_exact_test_provenance_contract(tmp_path):
+    prompt = prepare_prompt(envelope(tmp_path), "Review the exact patch")
+    assert "Put explanations in a separate outcome field" in prompt
+    assert "integer exit_code from 0 through 255" in prompt
+    assert "A test you cannot run is not reviewer-observed" in prompt
+    result = valid_result(tests=[{
+        "command": "pytest", "provenance": "task-reported",
+        "outcome": "Reported passing; not independently executed",
+    }])
+    assert validate_result(result, envelope(tmp_path)) == result
+    result["tests"][0]["provenance"] = "harness-observed (re-run independently, exit 0)"
+    with pytest.raises(ReviewError, match="provenance"):
+        validate_result(result, envelope(tmp_path))
+
+
 @pytest.mark.parametrize(
     ("remote", "expected"),
     [
@@ -462,7 +477,7 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert RESULT_PREFIX in prompt
     assert "Inspect the harness-observed exact-head diff" in prompt
     assert "evidence boundary is intentionally tool-free" in prompt
-    assert "harness-observed, reviewer-observed, or task-reported" in prompt
+    assert '\"harness-observed\", \"reviewer-observed\", or \"task-reported\"' in prompt
     assert '"reviewed_head_sha":"40-char SHA"' in prompt
     assert "Copy every field exactly once" in prompt
     assert prompt.endswith("REPORTED_TASK_CLAIMS:\nReview the change")

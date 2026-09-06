@@ -24,6 +24,15 @@ adds the role contract and switches models through its existing worker lock.
    content.
 8. Change production behavior only through a measured candidate and preserve a
    tested rollback profile.
+9. Own each local worker until the harness exits and its result is consumed.
+   Set `CODEX_LOCAL_RECORD_RUN=1` and preserve the calling Codex session identity.
+   Retain the execution session ID and poll with `write_stdin` until exit; resume
+   yielded `functions.exec` cells with `functions.wait` first. Keep waits bounded
+   to 30 seconds and do not end the turn while a worker is pending. Inspect exit,
+   result, and GitHub state; acknowledge the run with `codex-local-completion ack`
+   and record the next action. If the handle is lost, use
+   `codex-local-completion status --wait 30`. Never treat quiet inference as
+   completion or a terminal failure as success. See `docs/worker-completion.md`.
 
 ## Merge policy
 
