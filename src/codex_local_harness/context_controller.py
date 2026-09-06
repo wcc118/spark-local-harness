@@ -272,3 +272,15 @@ class CompactionTracker:
             context_window=context_window if context_window is not None else self.context_window,
             error_class=error_class,
         )
+
+
+def append_compaction_record(path: Path, record: CompactionLifecycleEvent) -> bool:
+    """Append a compaction record; exact replay is a no-op and conflicts fail."""
+    from .diagnostics import append_record
+    return append_record(path, record)
+
+
+def read_compaction_records(path: Path) -> tuple[CompactionLifecycleEvent, ...]:
+    """Read all compaction records from a JSONL file."""
+    from .diagnostics import read_records
+    return read_records(path, CompactionLifecycleEvent)

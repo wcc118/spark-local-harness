@@ -33,7 +33,7 @@ def snapshot(identifier: str, phase: str, observed: str, **changes):
         "input_tokens": 100, "cached_input_tokens": 60,
         "cache_write_input_tokens": 0, "output_tokens": 20,
         "reasoning_output_tokens": 5, "total_tokens": 120,
-        "context_window": 258400,
+        "context_window": 258400, "last_input_tokens": None,
     }
     values.update(changes)
     return OperationUsageSnapshot(
@@ -108,3 +108,83 @@ def test_duplicate_or_unsafe_rollout_identity_is_rejected(tmp_path):
         find_rollout(tmp_path, THREAD)
     with pytest.raises(ValueError, match="UUID"):
         find_rollout(tmp_path, "../../unsafe")
+
+
+def test_last_token_usage_availability_and_malformed_fields(tmp_path):
+    path = tmp_path / f"rollout-later-{THREAD}.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-06T12:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 200,
+                            "cached_input_tokens": 120,
+                            "cache_write_input_tokens": 10,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 10,
+                            "total_tokens": 240,
+                        },
+                        "model_context_window": 258400,
+                    },
+                },
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2026-09-06T12:01:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 220,
+                            "cached_input_tokens": 130,
+                            "cache_write_input_tokens": 15,
+                            "output_tokens": 35,
+                            "reasoning_output_tokens": 12,
+                            "total_tokens": 260,
+                        },
+                        "model_context_window": 258400,
+                        "last": {"inputTokens": 22000},
+                    },
+                },
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    observed_at, values = read_latest_token_count(path)
+    assert observed_at == "2026-09-06T12:01:00Z"
+    assert values["last_input_tokens"] == 22000
+    assert values["context_window"] == 258400
+    # last_input_tokens absent in first event should be None
+    first_path = tmp_path / f"rollout-earlier-{THREAD}.jsonl"
+    first_path.write_text(
+        json.dumps(token_event("2026-09-06T11:00:00Z"), separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    first_at, first_vals = read_latest_token_count(first_path)
+    assert first_at == "2026-09-06T11:00:00Z"
+    assert first_vals["last_input_tokens"] is None
+
+
+def test_usage_delta_computes_last_input_pressure_and_headroom():
+    start = snapshot("start", "start", "2026-08-16T01:00:00Z")
+    finish = snapshot(
+        "finish", "finish", "2026-08-16T01:10:00Z", input_tokens=120000,
+        cached_input_tokens=72000, cache_write_input_tokens=5000,
+        output_tokens=15000, reasoning_output_tokens=5000, total_tokens=130000,
+        last_input_tokens=22000,
+    )
+    usage = derive_usage([start, finish])[0]
+    assert usage["status"] == "observed"
+    assert usage["last_input_tokens"] == 22000
+    assert usage["context_pressure"] == pytest.approx(22000 / 258400)
+    assert usage["context_headroom"] == pytest.approx(1.0 - (22000 / 258400))

@@ -37,6 +37,7 @@ class OperationUsageSnapshot:
     reasoning_output_tokens: int
     total_tokens: int
     context_window: int
+    last_input_tokens: int | None = None
     schema_version: int = DIAGNOSTIC_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -53,6 +54,8 @@ class OperationUsageSnapshot:
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
+        if self.last_input_tokens is not None and (not isinstance(self.last_input_tokens, int) or isinstance(self.last_input_tokens, bool) or self.last_input_tokens < 0):
+            raise ValueError("last_input_tokens must be a non-negative integer or unavailable")
         if self.schema_version != DIAGNOSTIC_SCHEMA_VERSION:
             raise ValueError("unsupported operation usage schema version")
 
@@ -77,8 +80,8 @@ def find_rollout(session_root: Path, thread_id: str) -> Path:
     return matches[0]
 
 
-def read_latest_token_count(path: Path) -> tuple[str, dict[str, int]]:
-    latest: tuple[str, dict[str, int]] | None = None
+def read_latest_token_count(path: Path) -> tuple[str, dict[str, int | None]]:
+    latest: tuple[str, dict[str, int | None]] | None = None
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             # Privacy boundary: do not decode unrelated event lines.
@@ -92,7 +95,7 @@ def read_latest_token_count(path: Path) -> tuple[str, dict[str, int]]:
             usage = info.get("total_token_usage") if isinstance(info, dict) else None
             if not isinstance(usage, dict):
                 continue
-            values: dict[str, int] = {}
+            values: dict[str, int | None] = {}
             for field in COUNTER_FIELDS:
                 value = usage.get(field)
                 if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -102,6 +105,16 @@ def read_latest_token_count(path: Path) -> tuple[str, dict[str, int]]:
             if not isinstance(context_window, int) or isinstance(context_window, bool) or context_window <= 0:
                 raise ValueError("invalid model_context_window in token_count event")
             values["context_window"] = context_window
+            # Extract last token usage separately (available from tokenUsage/updated events)
+            last = info.get("last") if isinstance(info, dict) else None
+            if isinstance(last, dict):
+                last_input = last.get("inputTokens")
+                if isinstance(last_input, int) and not isinstance(last_input, bool) and last_input >= 0:
+                    values["last_input_tokens"] = last_input
+                else:
+                    values["last_input_tokens"] = None
+            else:
+                values["last_input_tokens"] = None
             observed_at = event.get("timestamp")
             if not isinstance(observed_at, str):
                 raise ValueError("token_count timestamp is missing")
@@ -120,7 +133,9 @@ def capture_snapshot(
     return OperationUsageSnapshot(
         record_id=record_id, observed_at=observed_at, phase=phase,
         session_id=thread_id, repository=repository, issue=issue,
-        operation_id=operation_id, source="codex-rollout-token-count", **values,
+        operation_id=operation_id, source="codex-rollout-token-count",
+        **{k: v for k, v in values.items() if k != "last_input_tokens"},
+        last_input_tokens=values.get("last_input_tokens"),
     )
 
 
@@ -156,6 +171,15 @@ def derive_usage(snapshots: Iterable[OperationUsageSnapshot]) -> tuple[dict[str,
                     result["uncached_input_tokens"] = uncached
                     result["context_window"] = finish.context_window
                     result["status"] = "observed"
+                    # Compute pressure metrics using last input tokens
+                    if finish.last_input_tokens is not None and finish.context_window > 0:
+                        result["last_input_tokens"] = finish.last_input_tokens
+                        result["context_pressure"] = finish.last_input_tokens / finish.context_window
+                        result["context_headroom"] = 1.0 - result["context_pressure"]
+                    else:
+                        result["last_input_tokens"] = None
+                        result["context_pressure"] = None
+                        result["context_headroom"] = None
         results.append(result)
     return tuple(sorted(results, key=lambda item: (item["observed_at"] or "", item["operation_id"]), reverse=True))
 

@@ -222,13 +222,21 @@ install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
 install -d -m 700 "$worker_runtime_home/.config/opencode/agents" "$worker_runtime_home/.qwen" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
-jq '.mcp.github.enabled = false
+# Compaction configuration: default-off via environment variables
+compaction_auto=${CODEX_LOCAL_COMPACTION_AUTO:-false}
+compaction_prune=${CODEX_LOCAL_COMPACTION_PRUNE:-false}
+compaction_reserved=${CODEX_LOCAL_COMPACTION_RESERVED:-16000}
+jq --argjson auto "$compaction_auto" \
+   --argjson prune "$compaction_prune" \
+   --argjson reserved "$compaction_reserved" \
+   '.mcp.github.enabled = false
     | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
       })
     | .agent.reviewer.permission = {"*": "deny"}
     | .agent.reviewer.steps = 4
+    | .compaction = { "auto": $auto, "prune": $prune, "reserved": $reserved }
     | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {
         "name": "Qwen3.5 122B NVFP4 (Spark)",
         "limit": { "context": 65536, "output": 8192 }

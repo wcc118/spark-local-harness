@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from .execution_diagnostics import ExecutionDiagnostics, load_stage_budgets
+from .context_controller import CompactionTracker
+
+
+def _iso_timestamp() -> str:
+    """Return current UTC timestamp in ISO-8601 format."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class BridgeError(RuntimeError):
@@ -114,6 +121,10 @@ def run_bridge(
 ) -> int:
     deadline = time.monotonic() + timeout
     diagnostics = ExecutionDiagnostics(agent, load_stage_budgets(os.environ.get("CODEX_LOCAL_STAGE_BUDGETS")))
+    # Initialize compaction tracker for OpenCode surface
+    compaction_tracker = CompactionTracker(
+        run_id=run_id, session_id="opencode-session", repository=repository or "unknown/unknown", issue=0,
+    )
     while True:
         try:
             health = _request(base_url, password, "GET", "/global/health")
@@ -180,6 +191,8 @@ def run_bridge(
                 _append_event(log, normalized)
                 for diagnostic in diagnostics.observe(normalized):
                     _append_event(log, diagnostic)
+            # Observe OpenCode compaction lifecycle events
+            compaction_tracker.observe(raw, observed_at=_iso_timestamp())
             if raw.get("type") == "session.error":
                 terminal_error = True
             if raw.get("type") == "session.status":

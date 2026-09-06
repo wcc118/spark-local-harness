@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from .benchmark import BenchmarkAttempt, BenchmarkManifest, PairedSummary, BenchmarkMetrics
 from .control_plane import ControlBroker, ControlError
+from .context_controller import CompactionLifecycleEvent, read_compaction_records
 from .diagnostics import Adjudication, LifecycleEvent, PublicationFailure, read_records
 from .frontier import FrontierStatus, latest_status
 from .health import TokenUsage, read_jsonl
@@ -234,6 +235,7 @@ class DashboardSource:
     benchmark_manifest: Path | None = None
     benchmark_attempts: Path | None = None
     benchmark_summaries: Path | None = None
+    compaction_records: Path | None = None
 
     def _current_time(self) -> datetime:
         return self.now if self.now is not None else datetime.now(timezone.utc)
@@ -262,6 +264,10 @@ class DashboardSource:
         annotations = self._load(
             self.annotations, "annotations", read_annotations, statuses,
         ) if self.annotations and self.annotations.exists() else ()
+        compaction_records = self._load(
+            self.compaction_records, "compaction",
+            lambda path: read_records(path, CompactionLifecycleEvent), statuses,
+        ) if self.compaction_records else ()
         benchmark_manifest = self._load_benchmark_manifest(statuses) if self.benchmark_manifest else None
         benchmark_attempts = self._load_benchmark_attempts(statuses) if self.benchmark_attempts else ()
         benchmark_summaries = self._load_benchmark_summaries(statuses) if self.benchmark_summaries else ()
@@ -532,6 +538,10 @@ class DashboardSource:
             "benchmark_manifest": benchmark_manifest.as_dict() if benchmark_manifest else None,
             "benchmark_attempts": [a.as_dict() for a in benchmark_attempts],
             "benchmark_summaries": [s.as_dict() for s in benchmark_summaries],
+            "compaction": {
+                "records": [r.as_dict() for r in compaction_records],
+                "summary": _compaction_summary(compaction_records),
+            },
         }
 
     @staticmethod
@@ -2084,6 +2094,32 @@ def _milestone_activities_html(activities: list[dict[str, Any]]) -> str:
         for item in activities
     )
     return f'<div class="milestone-activities">{activity_html}</div>'
+
+
+def _compaction_summary(records: tuple[CompactionLifecycleEvent, ...]) -> dict[str, Any]:
+    """Derive privacy-minimal compaction summary without retaining content."""
+    states: dict[str, int] = {}
+    triggers: dict[str, int] = {}
+    surfaces: dict[str, int] = {}
+    for r in records:
+        states[r.state] = states.get(r.state, 0) + 1
+        triggers[r.trigger] = triggers.get(r.trigger, 0) + 1
+        surfaces[r.surface] = surfaces.get(r.surface, 0) + 1
+    before_tokens = [r.before_input_tokens for r in records if r.before_input_tokens is not None]
+    after_tokens = [r.after_input_tokens for r in records if r.after_input_tokens is not None]
+    before_total = sum(before_tokens) if before_tokens else None
+    after_total = sum(after_tokens) if after_tokens else None
+    return {
+        "total": len(records),
+        "by_state": states,
+        "by_trigger": triggers,
+        "by_surface": surfaces,
+        "before_total_input_tokens": before_total,
+        "after_total_input_tokens": after_total,
+        "estimated_savings_tokens": (
+            (before_total - after_total) if before_total is not None and after_total is not None else None
+        ),
+    }
 
 
 def _session_label(session_id: str, sample: dict[str, Any]) -> str:

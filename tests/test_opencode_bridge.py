@@ -146,6 +146,60 @@ def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, 
     }
 
 
+def test_bridge_normalizes_compaction_lifecycle_events():
+    """Test that compaction tracker is integrated in opencode_bridge."""
+    from codex_local_harness.context_controller import CompactionTracker
+
+    tracker = CompactionTracker(
+        run_id="run-1", session_id="opencode-session", repository="owner/repo", issue=169,
+    )
+
+    # Simulate automatic compaction start (OpenCode item/started event)
+    result = tracker.observe({
+        "method": "item/started",
+        "params": {
+            "threadId": "opencode-session",
+            "turnId": "turn-compact",
+            "item": {"type": "contextCompaction", "id": "item-compact"},
+        },
+    }, observed_at="2026-09-06T12:00:00Z")
+
+    assert result is not None
+    assert result.state == "started"
+    assert result.trigger == "automatic"  # Auto-triggered when item observed first
+    assert result.surface == "primary-codex"
+
+    # Simulate completion
+    completed = tracker.observe({
+        "method": "item/completed",
+        "params": {
+            "threadId": "opencode-session",
+            "turnId": "turn-compact",
+            "item": {"type": "contextCompaction", "id": "item-compact"},
+        },
+    }, observed_at="2026-09-06T12:00:01Z")
+
+    assert completed is not None
+    assert completed.state == "completed"
+    assert completed.trigger == "automatic"
+
+    # Simulate post-compaction token usage update
+    after = tracker.observe({
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": "opencode-session",
+            "turnId": "turn-next",
+            "tokenUsage": {"last": {"inputTokens": 15000}, "modelContextWindow": 258400},
+        },
+    }, observed_at="2026-09-06T12:00:02Z")
+
+    assert after is not None
+    assert after.state == "post-context-observed"
+    assert after.after_input_tokens == 15000
+    # before_input_tokens is only set when explicitly provided via requested()
+    assert after.before_input_tokens is None
+
+
 def test_bridge_rejects_unhealthy_endpoint(tmp_path: Path):
     with pytest.raises(BridgeError, match="did not become healthy"):
         run_bridge(
