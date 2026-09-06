@@ -59,10 +59,13 @@ improvement, no increase in uncached input, no state-retention failures, no
 task-quality regression, and a tested rollback profile.
 
 `profiles/context-compaction-auto-only.freeze.json` is the rollback profile.
-`profiles/context-compaction-candidate.json` remains disabled until paired
-qualification demonstrates at least 15% net-input improvement after including
-the compaction pass and resume packet. The installed release boundary is not
-changed by this candidate.
+`profiles/context-compaction-candidate.json` remains disabled. The first
+measured shared-prefix paired replay retained state and task outcome with equal
+tool loops, but improved net input by only 1.329% and increased uncached input
+by 99,575 tokens after including the compaction pass and resume request. That
+fails both promotion gates. Privacy-minimal evidence is retained in issue 169;
+a later candidate must be requalified against the frozen baseline. The
+installed release boundary is not changed by this candidate.
 
 The historical `bin/codex-local-worker` baseline remains byte-for-byte frozen;
 the explicit disposable configuration is applied in the maintained v4 worker.

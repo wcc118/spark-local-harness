@@ -83,7 +83,20 @@ def test_candidate_is_disabled_and_names_frozen_auto_only_rollback():
         "automatic": True, "prune": True, "reserved_tokens": 16000,
         "manual": False,
     }
-    assert candidate["promotion_state"] == "disabled-pending-qualification"
+    assert candidate["promotion_state"] == "disabled-qualification-failed"
     assert candidate["primary_codex"]["managed_compaction"] is False
     assert candidate["qualification"]["require_no_uncached_input_increase"] is True
+    assert candidate["last_qualification"] == {
+        "evidence": "issue:169#issuecomment-5560460503",
+        "measured_head_sha": "824b540ed78d39a6f74dcb2151fc99cc322fe492",
+        "input_improvement": 0.013293142968741956,
+        "net_uncached_input_change": 99575,
+        "state_retained": True,
+        "task_outcome_regressed": False,
+        "tool_loop_increase": 0,
+        "reasons": [
+            "input-improvement-below-threshold",
+            "uncached-input-increased",
+        ],
+    }
     assert candidate["rollback_profile"] == baseline["name"]
