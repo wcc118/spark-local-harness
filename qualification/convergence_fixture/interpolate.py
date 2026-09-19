@@ -15,7 +15,7 @@ def interpolate(points, queries):
 
     Raises:
         ValueError: If points has fewer than 2 points, duplicate/decreasing times,
-                    or non-finite values.
+                    non-finite point times/values, or non-finite queries.
     """
     # Validate at least 2 points
     if len(points) < 2:
@@ -45,8 +45,7 @@ def interpolate(points, queries):
     for q in queries:
         # Check finite query
         if not math.isfinite(q):
-            results.append(None)
-            continue
+            raise ValueError("Query values must be finite")
 
         # Handle queries within tolerance of endpoints
         if q <= t_min:
