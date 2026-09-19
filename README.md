@@ -1,23 +1,18 @@
 # Codex Local Harness
 
-The project is building toward the first diagnostic scaffold release,
-`v0.1.0`. Codex remains the primary orchestrator. Local workers perform one
-bounded task. See [the tracked release plan](docs/v0.1.0-plan.md).
+The installed convergence release is `harness-convergence-2026-09-19`.
+Use the [portable installation guide](docs/portable-installation.md) to reproduce
+it on another Linux workstation, verify its manifest, and roll back. The release
+includes the open implementation stack; `main` alone does not yet reproduce it.
 
-## Getting started
+Codex remains the primary orchestrator. Local coding and review have no default
+whole-task deadline, retain unpublished work, and report progress through
+inference-free supervision. GitHub holds durable project state.
 
-New users should read the [MVP quickstart guide](docs/mvp-quickstart.md) for a
-concise setup and usage overview, including routing guidance, escalation
-boundaries, dashboard URL/checks, rollback reference, and known limitations.
-
-The quickstart covers:
-
-- **Installation**: Basic setup and worker configuration
-- **Routing**: Helper vs complex coder routes and model selection
-- **Escalation**: What the harness does (and doesn't) do
-- **Dashboard**: Accessing the read-only diagnostic UI at `http://127.0.0.1:8765`
-- **Rollback**: Worker and health data recovery procedures
-- **Known limitations**: Including reviewer tempfile detection
+The [comparison report](qualification/convergence-184/REPORT.md) records the
+limited smoke test and its limitations. The earlier
+[MVP quickstart](docs/mvp-quickstart.md) describes the predecessor setup; use the
+portable guide for this release's installation and runtime behavior.
 
 ## Reviewer transaction
 

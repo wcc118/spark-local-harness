@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-recipe_dir=${CODEX_LOCAL_DEEPSEEK_RECIPE_DIR:-/home/connellwc83/deepseek-v4-flash-0731-exl3-k2-spark}
+recipe_dir=${CODEX_LOCAL_DEEPSEEK_RECIPE_DIR:-${HOME}/deepseek-v4-flash-0731-exl3-k2-spark}
 docker_bin=${CODEX_LOCAL_DOCKER:-docker}
 curl_bin=${CODEX_LOCAL_CURL:-curl}
 meminfo=${CODEX_LOCAL_MEMINFO:-/proc/meminfo}

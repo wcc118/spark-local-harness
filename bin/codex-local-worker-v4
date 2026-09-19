@@ -23,10 +23,10 @@ worker_server_container=
 worker_control=
 worker_control_secret=
 worker_model_lock_fd=
-isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-/home/connellwc83/.local/share/opencode-orchestration/isolated-checkouts}
+isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-${HOME}/.local/share/opencode-orchestration/isolated-checkouts}
 supervision_admitted=0
 convergence=${CODEX_LOCAL_CONVERGENCE:-0}
-health_dir=${CODEX_LOCAL_HEALTH_DIR:-/home/connellwc83/.local/share/codex-local-harness/health}
+health_dir=${CODEX_LOCAL_HEALTH_DIR:-${HOME}/.local/share/codex-local-harness/health}
 diagnostic_started=0
 diagnostic_finalized=0
 worker_started_epoch=
@@ -141,7 +141,7 @@ case "$worker_role" in
 esac
 [[ -d "$worker_repo_path" ]] || { echo "ERROR: repository path is not a directory: $worker_repo_path" >&2; exit 2; }
 
-worker_config=${CODEX_LOCAL_WORKER_CONFIG:-/home/connellwc83/.config/codex-local/workers.json}
+worker_config=${CODEX_LOCAL_WORKER_CONFIG:-${HOME}/.config/codex-local/workers.json}
 [[ -r "$worker_config" ]] || { echo "ERROR: worker routing config is not readable: $worker_config" >&2; exit 2; }
 jq -e '.routes and .defaults' "$worker_config" >/dev/null || { echo "ERROR: invalid worker routing config" >&2; exit 2; }
 
@@ -206,8 +206,8 @@ if [[ ( $worker_model == vllm/* || $worker_model == deepseek/deepseek-v4-flash-0
     deepseek/deepseek-v4-flash-0731-exl3-k2) vllm_profile=deepseek-v4-reasoning ;;
     *) echo "ERROR: unsupported vLLM worker model: $vllm_model" >&2; exit 69 ;;
   esac
-  model_manager=${CODEX_LOCAL_MODEL_MANAGER:-/home/connellwc83/.local/bin/codex-local-model}
-  model_lock=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-harness/model.lock}
+  model_manager=${CODEX_LOCAL_MODEL_MANAGER:-${HOME}/.local/bin/codex-local-model}
+  model_lock=${CODEX_LOCAL_MODEL_LOCK:-${HOME}/.local/share/codex-local-harness/model.lock}
   [[ -x $model_manager ]] || { echo "ERROR: model manager is unavailable: $model_manager" >&2; exit 69; }
   install -d -m 700 "$(dirname -- "$model_lock")"
   exec {worker_model_lock_fd}>"$model_lock"
@@ -218,7 +218,7 @@ if [[ ( $worker_model == vllm/* || $worker_model == deepseek/deepseek-v4-flash-0
 fi
 
 worker_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-worker_log_dir=${CODEX_LOCAL_LOG_DIR:-/home/connellwc83/.local/share/opencode-orchestration/runs}
+worker_log_dir=${CODEX_LOCAL_LOG_DIR:-${HOME}/.local/share/opencode-orchestration/runs}
 install -d -m 700 "$worker_log_dir"
 worker_log="$worker_log_dir/$worker_run_id.jsonl"
 worker_envelope="$worker_log_dir/$worker_run_id.envelope.json"
@@ -230,14 +230,14 @@ umask 077
 # Inference must never inherit the operator's authenticated home or ambient
 # credentials.  Build a disposable OpenCode home containing only the runtime
 # configuration and agent prompts, then launch with an explicit environment.
-worker_runtime_parent=/home/connellwc83/.local/share/opencode-orchestration/worker-homes
+worker_runtime_parent=${HOME}/.local/share/opencode-orchestration/worker-homes
 install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
 install -d -m 700 "$worker_runtime_home/.config/opencode/agents" "$worker_runtime_home/.qwen" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
 # Automatic OpenCode compaction is the installed auto-only baseline. Manual
 # compaction is a separate controller capability and remains disabled.
-jq '.mcp.github.enabled = false
+jq --arg vllm_url "${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" --arg deepseek_url "${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}/v1" '.mcp = ((.mcp // {}) | with_entries(.value.enabled = false))
     | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
@@ -245,6 +245,7 @@ jq '.mcp.github.enabled = false
     | .agent.reviewer.permission = {"*": "deny"}
     | .agent.reviewer.steps = 4
     | .compaction = { "auto": true, "prune": true, "reserved": 16000 }
+    | .provider.vllm.options.baseURL = $vllm_url
     | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {
         "name": "Qwen3.5 122B NVFP4 (Spark)",
         "limit": { "context": 65536, "output": 8192 }
@@ -252,19 +253,15 @@ jq '.mcp.github.enabled = false
     | .provider.deepseek = {
         "npm": "@ai-sdk/openai-compatible",
         "name": "DeepSeek V4 Flash reasoning (Spark)",
-        "options": {"baseURL": "http://127.0.0.1:8011/v1"},
+        "options": {"baseURL": $deepseek_url},
         "models": {"deepseek-v4-flash-0731-exl3-k2": {
           "name": "DeepSeek V4 Flash reasoning",
           "limit": {"context": 1000000, "output": 32768}
         }}
-      }' /home/connellwc83/.config/opencode/opencode.json \
+      }' "${CODEX_LOCAL_OPENCODE_CONFIG:-${HOME}/.config/opencode/opencode.json}" \
   >"$worker_runtime_home/.config/opencode/opencode.json"
-cp -a /home/connellwc83/.config/opencode/agents/. \
-  "$worker_runtime_home/.config/opencode/agents/"
-if [[ -d /home/connellwc83/projects/codex-local-harness/agents ]]; then
-  cp -a /home/connellwc83/projects/codex-local-harness/agents/. \
-    "$worker_runtime_home/.config/opencode/agents/"
-fi
+worker_agents=${CODEX_LOCAL_AGENTS:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../agents" && pwd)}
+cp -a "$worker_agents/." "$worker_runtime_home/.config/opencode/agents/"
 printf '%s\n' '{"tools":{"approvalMode":"yolo","core":["read_file","grep_search","glob","edit","write_file","run_shell_command"],"disabled":["record_artifact","agent","list_agents","task_stop","send_message","skill","tool_search","read_mcp_resource","web_fetch","computer_use__bring_to_front","computer_use__check_for_update","computer_use__check_permissions","computer_use__click","computer_use__double_click","computer_use__drag","computer_use__end_session","computer_use__get_accessibility_tree","computer_use__get_agent_cursor_state","computer_use__get_config","computer_use__get_cursor_position","computer_use__get_recording_state","computer_use__get_screen_size","computer_use__get_window_state","computer_use__hotkey","computer_use__kill_app","computer_use__launch_app","computer_use__list_apps","computer_use__list_windows","computer_use__move_cursor","computer_use__page","computer_use__press_key","computer_use__replay_trajectory","computer_use__right_click","computer_use__scroll","computer_use__set_agent_cursor_enabled","computer_use__set_agent_cursor_motion","computer_use__set_agent_cursor_style","computer_use__set_config","computer_use__set_value","computer_use__start_recording","computer_use__start_session","computer_use__stop_recording","computer_use__type_text","computer_use__zoom","create_sub_session","enter_worktree","exit_worktree","get_goal","update_goal","monitor","loop_wakeup","cron_create","cron_list","cron_delete"]},"telemetry":{"enabled":false}}' \
   >"$worker_runtime_home/.qwen/settings.json"
 if [[ $convergence == 1 && $worker_role == reviewer ]]; then
@@ -280,7 +277,7 @@ if [[ $worker_runtime == opencode ]]; then
   worker_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
   [[ -x $worker_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $worker_opencode" >&2; exit 2; }
 fi
-worker_path=/home/connellwc83/.local/bin:/home/connellwc83/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+worker_path=${HOME}/.local/bin:${HOME}/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 worker_sandbox=${CODEX_LOCAL_SANDBOX:-container}
 worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.2.0}
 case "$worker_sandbox" in
@@ -364,7 +361,7 @@ if [[ $worker_role == coder ]]; then
   git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
 fi
 
-candidate_source=${CODEX_LOCAL_SOURCE:-/home/connellwc83/.local/share/codex-local-harness/runtime/current/src}
+candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
 [[ -d $candidate_source/codex_local_harness ]] || {
   echo "ERROR: installed harness runtime is missing: $candidate_source" >&2
   exit 69
@@ -372,7 +369,7 @@ candidate_source=${CODEX_LOCAL_SOURCE:-/home/connellwc83/.local/share/codex-loca
 lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-$health_dir/lifecycle.jsonl}
 workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-$health_dir/workflow.jsonl}
 publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-$health_dir/publication-failures.jsonl}
-compaction_records=${CODEX_LOCAL_COMPACTION_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/compaction.jsonl}
+compaction_records=${CODEX_LOCAL_COMPACTION_RECORDS:-${HOME}/.local/share/codex-local-harness/health/compaction.jsonl}
 worker_operation_id=${CODEX_LOCAL_OPERATION_ID:-issue-$worker_issue}
 if [[ $convergence == 1 && -z ${CODEX_LOCAL_OPERATION_ID:-} ]]; then
   worker_operation_id=issue-$worker_issue-$worker_run_id
@@ -425,7 +422,7 @@ if [[ $worker_role == reviewer ]]; then
     echo "ERROR: reviewer requires CODEX_LOCAL_REPOSITORY, CODEX_LOCAL_ISSUE, and CODEX_LOCAL_PR" >&2
     exit 2
   }
-  review_scratch_parent=/home/connellwc83/.local/share/opencode-orchestration/reviewer-scratch
+  review_scratch_parent=${HOME}/.local/share/opencode-orchestration/reviewer-scratch
   install -d -m 700 "$review_scratch_parent"
   review_runtime_tmp=$(mktemp -d --tmpdir="$review_scratch_parent")
   if [[ $convergence == 1 ]]; then
@@ -541,7 +538,7 @@ if [[ $worker_sandbox == container ]]; then
     [[ $convergence != 1 ]] || { worker_server_container="codex-worker-$worker_run_id"; docker_args+=(--name "$worker_server_container"); }
     timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
       docker "${docker_args[@]}" \
-      --env OPENAI_API_KEY=not-needed --env OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+      --env OPENAI_API_KEY=not-needed --env "OPENAI_BASE_URL=${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" \
       "${qwen_env[@]}" \
       "$worker_container_image" qwen --auth-type openai --approval-mode yolo --model "$qwen_model" \
       --output-format stream-json --prompt "$worker_task" >"$worker_log"
@@ -668,7 +665,7 @@ if [[ $record_run == 1 ]]; then
       --log "$worker_log" --runtime "$worker_runtime" --exit-status "$inference_status" \
       --records "$health_dir/usage.jsonl" --run-id "$worker_run_id"
   fi
-  legacy_ledger=${CODEX_LOCAL_LEGACY_LEDGER:-/home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh}
+  legacy_ledger=${CODEX_LOCAL_LEGACY_LEDGER:-${HOME}/.config/opencode/opencode-infra/ledger-record-run.sh}
   if [[ $convergence != 1 ]] && ! "$legacy_ledger" \
     "$worker_repository" "$worker_issue" "$worker_role" "$worker_model" "$worker_log" \
     "run_id=$worker_run_id runtime=$worker_runtime mode=$worker_mode inference_status=$inference_status workflow_status=$workflow_status"; then

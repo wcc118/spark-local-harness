@@ -8,11 +8,11 @@ curl_bin=${CODEX_LOCAL_CURL:-curl}
 sleep_bin=${CODEX_LOCAL_SLEEP:-sleep}
 ready_attempts=${CODEX_LOCAL_MODEL_READY_ATTEMPTS:-36}
 stop_attempts=${CODEX_LOCAL_MODEL_STOP_ATTEMPTS:-60}
-lock_path=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-harness/model.lock}
+lock_path=${CODEX_LOCAL_MODEL_LOCK:-${HOME}/.local/share/codex-local-harness/model.lock}
 lock_timeout=${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-1800}
 deepseek_endpoint=${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}
 deepseek_launcher=${CODEX_LOCAL_DEEPSEEK_LAUNCHER:-$(dirname -- "$0")/codex-local-deepseek-v4}
-recipe_launcher=${CODEX_LOCAL_RECIPE_LAUNCHER:-/home/connellwc83/spark-vllm-docker/run-recipe.sh}
+recipe_launcher=${CODEX_LOCAL_RECIPE_LAUNCHER:-${HOME}/spark-vllm-docker/run-recipe.sh}
 
 usage() {
   echo "usage: codex-local-model status | use {qwen38|coder-next|qwen35-nvfp4|deepseek-v4-reasoning}" >&2

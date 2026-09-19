@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Install a verified, complete harness release without a source checkout dependency."""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = 'config/portable-release.json'
+COMMANDS = {
+    'codex-local-worker': ('codex-local-worker-candidate', []),
+    'codex-local-coder': ('codex-local-worker-candidate', ['coder']),
+    'codex-local-reviewer': ('codex-local-worker-candidate', ['reviewer']),
+    'codex-local-helper': ('codex-local-worker-candidate', ['helper']),
+    'codex-local-investigator': ('codex-local-worker-candidate', ['helper']),
+    'codex-local-supervise': ('codex-local-supervise', []),
+    'codex-local-completion': ('codex-local-completion', []),
+    'codex-local-model': ('codex-local-model', []),
+    'codex-local-deepseek-v4': ('codex-local-deepseek-v4', []),
+}
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify(root):
+    manifest = json.loads((root / MANIFEST).read_text())
+    for name, expected in manifest['files'].items():
+        path = root / name
+        if path.is_symlink() or not path.is_file() or digest(path) != expected:
+            raise ValueError(f'release integrity mismatch: {name}')
+    return manifest
+
+
+def atomic(path, data, mode=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(data)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def snapshot(path, backup, index):
+    result = {'path': str(path)}
+    if path.is_symlink():
+        result['symlink'] = os.readlink(path)
+    elif path.exists():
+        if not path.is_file():
+            raise ValueError(f'refusing to replace non-file: {path}')
+        saved = backup / str(index)
+        shutil.copy2(path, saved)
+        result['saved'] = str(saved)
+    return result
+
+
+def restore(entries):
+    for item in reversed(entries):
+        path = Path(item['path'])
+        if path.is_symlink() or path.exists():
+            path.unlink()
+        if 'symlink' in item:
+            path.symlink_to(item['symlink'])
+        elif 'saved' in item:
+            shutil.copy2(item['saved'], path)
+
+
+def wrapper(release, config, command):
+    executable, args = COMMANDS[command]
+    q = shlex.quote
+    lines = ['#!/usr/bin/env bash', 'set -euo pipefail',
+             f'source {q(str(config / "workstation.env"))}',
+             f'export CODEX_LOCAL_SOURCE={q(str(release / "src"))}',
+             f'export CODEX_LOCAL_WORKER_CONFIG="${{CODEX_LOCAL_WORKER_CONFIG:-{config}/workers.json}}"',
+             f'export CODEX_LOCAL_OPENCODE_CONFIG="${{CODEX_LOCAL_OPENCODE_CONFIG:-{config}/opencode-worker.json}}"',
+             f'export CODEX_LOCAL_MODEL_MANAGER={q(str(release / "bin/codex-local-model"))}']
+    if command == 'codex-local-investigator':
+        lines.append('export CODEX_LOCAL_TIER=investigator')
+    lines.append('exec ' + q(str(release / 'bin' / executable)) + ' ' +
+                 ' '.join(q(arg) for arg in args) + ' "$@"')
+    return '\n'.join(lines) + '\n'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=['install', 'verify', 'rollback'])
+    parser.add_argument('--home', type=Path, default=Path.home(), help='target user home; clean-prefix testing supported')
+    parser.add_argument('--model-switch', choices=['0', '1'], default='0', help='1 requires separately provisioned Spark recipes')
+    args = parser.parse_args()
+    home = args.home.expanduser().resolve()
+    data = home / '.local/share/codex-local-harness'
+    config = home / '.config/codex-local'
+    receipt = data / 'installation.json'
+    data.mkdir(parents=True, exist_ok=True)
+    with (data / 'model.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.action == 'verify':
+            state = json.loads(receipt.read_text())
+            verify(Path(state['release']))
+            for path, expected in state['installed'].items():
+                if digest(Path(path)) != expected:
+                    raise ValueError(f'installed command mismatch: {path}')
+            if (data / 'runtime/current').resolve() != Path(state['release']):
+                raise ValueError('runtime/current differs from installed release')
+            print(json.dumps(state, indent=2))
+            return
+        if args.action == 'rollback':
+            state = json.loads(receipt.read_text())
+            for path, expected in state['installed'].items():
+                if digest(Path(path)) != expected:
+                    raise ValueError(f'changed since install; refusing rollback: {path}')
+            restore(json.loads(Path(state['backup']).read_text()))
+            print('Previous installation restored; release and backup retained.')
+            return
+        manifest = verify(ROOT)
+        release_id = digest(ROOT / MANIFEST)
+        release = data / 'runtime' / release_id
+        release.parent.mkdir(parents=True, exist_ok=True)
+        if not release.exists():
+            staging = Path(tempfile.mkdtemp(prefix='.install-', dir=release.parent))
+            try:
+                for name in [*manifest['files'], MANIFEST]:
+                    target = staging / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(ROOT / name, target)
+                verify(staging)
+                staging.rename(release)
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging)
+        verify(release)
+        backup = data / 'install-backups' / f'{time.time_ns()}'
+        backup.mkdir(parents=True, mode=0o700)
+        changes = []
+        installed = {}
+        def write(path, content, mode=0o600):
+            changes.append(snapshot(path, backup, len(changes)))
+            atomic(path, content, mode)
+        try:
+            if not (config / 'workers.json').exists():
+                write(config / 'workers.json', (release / 'config/workers-vllm.json').read_text())
+            if not (config / 'opencode-worker.json').exists():
+                # Preserve existing worker behavior on upgrades; no credentials copied.
+                existing = home / '.config/opencode/opencode.json'
+                if existing.exists():
+                    opencode_path = existing
+                else:
+                    write(config / 'opencode-worker.json', (release / 'config/opencode-worker.json').read_text())
+                    opencode_path = config / 'opencode-worker.json'
+            else:
+                opencode_path = config / 'opencode-worker.json'
+            if not (config / 'workstation.env').exists():
+                settings = {
+                    'CODEX_LOCAL_MODEL_SWITCH': args.model_switch,
+                    'CODEX_LOCAL_OPENCODE_CONFIG': str(opencode_path),
+                    'CODEX_LOCAL_HEALTH_DIR': str(data / 'health'),
+                    'CODEX_LOCAL_MODEL_LOCK': str(data / 'model.lock'),
+                }
+                env = '# Local overrides; explicit environment variables take precedence.\n'
+                for key, value in settings.items():
+                    env += f'if [[ ! -v {key} ]]; then export {key}={shlex.quote(value)}; fi\n'
+                write(config / 'workstation.env', env)
+            for command in COMMANDS:
+                target = home / '.local/bin' / command
+                write(target, wrapper(release, config, command), 0o755)
+                installed[str(target)] = digest(target)
+            current = data / 'runtime/current'
+            changes.append(snapshot(current, backup, len(changes)))
+            temporary = data / 'runtime' / f'.current-{time.time_ns()}'
+            temporary.symlink_to(release)
+            os.replace(temporary, current)
+            hook = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': shlex.quote(str(home / '.local/bin/codex-local-completion')) + ' stop-hook', 'timeout': 10, 'statusMessage': 'Checking local worker completion'}]}]}}
+            write(config / 'hooks.example.json', json.dumps(hook, indent=2) + '\n')
+            changes.append(snapshot(receipt, backup, len(changes)))
+            backup_manifest = backup / 'files.json'
+            atomic(backup_manifest, json.dumps(changes, indent=2) + '\n')
+            atomic(receipt, json.dumps({'release': str(release), 'release_id': release_id,
+                                       'backup': str(backup_manifest), 'installed': installed,
+                                       'qualified_base': manifest['qualified_base']}, indent=2) + '\n')
+        except BaseException:
+            restore(changes)
+            raise
+        print(f'Installed {release_id}\nRollback: {release}/bin/install-harness rollback --home {shlex.quote(str(home))}')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, OSError) as error:
+        sys.exit(str(error))
