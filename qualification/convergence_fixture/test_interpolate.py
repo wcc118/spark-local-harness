@@ -138,10 +138,33 @@ def test_nan_value():
 
 
 def test_non_finite_query():
-    """Non-finite query returns None."""
+    """Non-finite query raises ValueError."""
     points = [(0.0, 0.0), (1.0, 10.0)]
-    result = interpolate(points, [float('inf')])
-    assert result == [None]
+    try:
+        interpolate(points, [float('inf')])
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_non_finite_query_negative_inf():
+    """Negative infinite query raises ValueError."""
+    points = [(0.0, 0.0), (1.0, 10.0)]
+    try:
+        interpolate(points, [float('-inf')])
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_non_finite_query_nan():
+    """NaN query raises ValueError."""
+    points = [(0.0, 0.0), (1.0, 10.0)]
+    try:
+        interpolate(points, [float('nan')])
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
 
 
 def test_negative_slope():

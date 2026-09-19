@@ -43,10 +43,9 @@ def interpolate(points, queries):
 
     results = []
     for q in queries:
-        # Check finite query
+        # Check finite query - non-finite queries raise ValueError
         if not math.isfinite(q):
-            results.append(None)
-            continue
+            raise ValueError("Query must be finite")
 
         # Handle queries within tolerance of endpoints
         if q <= t_min:
