@@ -1,0 +1,210 @@
+{
+  "repository": "wcc118/codex-local-harness",
+  "issue": 182,
+  "runs": [
+    {
+      "run_id": "20260919T192700Z-554862",
+      "role": "coder",
+      "exit_status": 65,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T192700Z-554862.jsonl": "cfc81ace36961797113d73ec506004bce7a9045268abe4e155e8b416dae298bb"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "qwen-code",
+        "coverage": "complete",
+        "input_reported": 193763,
+        "output_reported": 2656,
+        "reasoning_reported": null,
+        "cache_read_write": 0,
+        "total_including_cache": 196419,
+        "total_excluding_cache": 196419,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 12,
+        "tool_errors": 2,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T192842Z-556924",
+      "role": "coder",
+      "exit_status": 0,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T192842Z-556924.jsonl": "729181c401b9cfed008d199944920cc14b57c6ef8d7b0cb9e23f9d3fcf3d1e42"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "qwen-code",
+        "coverage": "complete",
+        "input_reported": 157640,
+        "output_reported": 1299,
+        "reasoning_reported": null,
+        "cache_read_write": 0,
+        "total_including_cache": 158939,
+        "total_excluding_cache": 158939,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 10,
+        "tool_errors": 0,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T193644Z-574065",
+      "role": "reviewer",
+      "exit_status": 2,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T193644Z-574065.jsonl": "aca0773c1a874560c7fc8935ad0e5570c9e1f4919a409be6cc577bcaac673efb",
+        "20260919T193644Z-574065.envelope.json": "53025047072b10ae737de53b08cb8166803231a220db82efd2e7918e2f8c8252",
+        "20260919T193644Z-574065.inspected-result.json": "c751e73be082d9fefc600abf024d24f2cb40ec43a62f58ff38cf8ab6fd0af484"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "partial",
+        "input_reported": 31584,
+        "output_reported": 18306,
+        "reasoning_reported": 0,
+        "cache_read_write": 192256,
+        "total_including_cache": 242146,
+        "total_excluding_cache": 49890,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 11,
+        "tool_errors": 1,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T194810Z-600561",
+      "role": "reviewer",
+      "exit_status": 1,
+      "acknowledged": true,
+      "artifacts_sha256": {},
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "unknown",
+        "input_reported": null,
+        "output_reported": null,
+        "reasoning_reported": null,
+        "cache_read_write": null,
+        "total_including_cache": null,
+        "total_excluding_cache": null,
+        "total_provenance": "unavailable",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 0,
+        "tool_errors": 0,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T194847Z-601580",
+      "role": "reviewer",
+      "exit_status": 1,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T194847Z-601580.jsonl": "65ff461d0de06bd37c58e06e801c725ad195b2cda40a2ea6591cd71e7ee4271c",
+        "20260919T194847Z-601580.envelope.json": "3ef8e29643650aaab3e61bd6156b3a322eb44bf8412f5e4a643df63b560752fc"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "partial",
+        "input_reported": 12919,
+        "output_reported": 2016,
+        "reasoning_reported": 0,
+        "cache_read_write": 57344,
+        "total_including_cache": 72279,
+        "total_excluding_cache": 14935,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 12,
+        "tool_errors": 0,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T195239Z-610142",
+      "role": "reviewer",
+      "exit_status": 0,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T195239Z-610142.jsonl": "724fc4de82c75f67fc36d4df442efe72dde4f641161075f470c93137d99d2577",
+        "20260919T195239Z-610142.envelope.json": "1d4142dc844a80f4fad09a5f6a8ee7355ff7e9fb5e589b3ceb95b794b311bb34",
+        "20260919T195239Z-610142.result.json": "e740a670c10a0a705b8e530d8010326ed79938725e56ebbff1932592418479aa"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "complete",
+        "input_reported": 12995,
+        "output_reported": 2686,
+        "reasoning_reported": 0,
+        "cache_read_write": 69120,
+        "total_including_cache": 84801,
+        "total_excluding_cache": 15681,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 8,
+        "tool_errors": 0,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T192409Z-547225",
+      "role": "coder",
+      "exit_status": 65,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T192409Z-547225.jsonl": "fab4a4114c9980b3b3d6120954afc75329bc737a1c27df57ee6accbf3b3c77ac"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "qwen-code",
+        "coverage": "complete",
+        "input_reported": 183213,
+        "output_reported": 3699,
+        "reasoning_reported": null,
+        "cache_read_write": 0,
+        "total_including_cache": 186912,
+        "total_excluding_cache": 186912,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 11,
+        "tool_errors": 1,
+        "malformed_events": false
+      }
+    },
+    {
+      "run_id": "20260919T193225Z-559774",
+      "role": "reviewer",
+      "exit_status": 124,
+      "acknowledged": true,
+      "artifacts_sha256": {
+        "20260919T193225Z-559774.jsonl": "d00bd742d1851561032448e0f6a247b1ec03d86d39988cd7377930dbed246ff0",
+        "20260919T193225Z-559774.envelope.json": "cb536ca64782bc26cc852c3b3f0ab1df43e2a03786deb4d7c67996cb45a4b078"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "partial",
+        "input_reported": 12171,
+        "output_reported": 5097,
+        "reasoning_reported": 0,
+        "cache_read_write": 0,
+        "total_including_cache": 17268,
+        "total_excluding_cache": 17268,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 0,
+        "tool_errors": 0,
+        "malformed_events": false
+      }
+    }
+  ]
+}
