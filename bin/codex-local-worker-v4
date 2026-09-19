@@ -185,12 +185,13 @@ reviewer_token_budget=${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-250000}
   echo "ERROR: CODEX_LOCAL_REVIEWER_TOKEN_BUDGET must be a positive integer" >&2; exit 2;
 }
 
-if [[ $worker_model == vllm/* && ${CODEX_LOCAL_MODEL_SWITCH:-1} == 1 ]]; then
+if [[ ( $worker_model == vllm/* || $worker_model == deepseek/deepseek-v4-flash-0731-exl3-k2 ) && ${CODEX_LOCAL_MODEL_SWITCH:-1} == 1 ]]; then
   vllm_model=${worker_model#vllm/}
   case "$vllm_model" in
     Qwen/Qwen3.8-27B-FP8) vllm_profile=qwen38 ;;
     Qwen/Qwen3-Coder-Next-FP8) vllm_profile=coder-next ;;
     nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4 ;;
+    deepseek/deepseek-v4-flash-0731-exl3-k2) vllm_profile=deepseek-v4-reasoning ;;
     *) echo "ERROR: unsupported vLLM worker model: $vllm_model" >&2; exit 69 ;;
   esac
   model_manager=${CODEX_LOCAL_MODEL_MANAGER:-/home/connellwc83/.local/bin/codex-local-model}
@@ -235,6 +236,15 @@ jq '.mcp.github.enabled = false
     | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {
         "name": "Qwen3.5 122B NVFP4 (Spark)",
         "limit": { "context": 65536, "output": 8192 }
+      }
+    | .provider.deepseek = {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "DeepSeek V4 Flash reasoning (Spark)",
+        "options": {"baseURL": "http://127.0.0.1:8011/v1"},
+        "models": {"deepseek-v4-flash-0731-exl3-k2": {
+          "name": "DeepSeek V4 Flash reasoning",
+          "limit": {"context": 1000000, "output": 32768}
+        }}
       }' /home/connellwc83/.config/opencode/opencode.json \
   >"$worker_runtime_home/.config/opencode/opencode.json"
 cp -a /home/connellwc83/.config/opencode/agents/. \
@@ -396,6 +406,24 @@ if [[ $record_run == 1 ]]; then
     echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
     record_publication_failure start workflow
   fi
+fi
+if [[ $worker_model == deepseek/deepseek-v4-flash-0731-exl3-k2 ]]; then
+  case "$worker_role" in
+    coder)
+      worker_contract='Use four bounded phases: inspect the directly relevant files, make the required edit, run the stated focused verification, then summarize and stop. Preserve the issue scope. If requirements conflict or evidence is missing, report the blocker.'
+      ;;
+    reviewer)
+      worker_contract='Review the supplied issue, patch, and evidence. For each finding, identify the failing behavior, its triggering input or state, and whether surrounding code prevents it. Report only conclusions directly supported by evidence. Distinguish observed tests from reported tests. State uncertainty and missing evidence; do not guess. Follow the supplied review result schema and stop after returning it.'
+      ;;
+    helper)
+      worker_contract='Investigate the supplied issue read-only. Separate observations, hypotheses, and conclusions. Consider alternative explanations and reject those contradicted by evidence. Return the narrowest supported conclusion, evidence references, uncertainties, and missing evidence. Do not guess when alternatives cannot be distinguished. Follow the supplied output requirements and stop after answering.'
+      ;;
+  esac
+  worker_task="$worker_contract"$'\n\n'"$worker_task"
+  # The bridge reads a file while native execution reads the string. Both
+  # receive the final prepared packet, including reviewer evidence/schema.
+  worker_task_file="$worker_runtime_home/structured-task.txt"
+  printf '%s\n' "$worker_task" >"$worker_task_file"
 fi
 set +e
 worker_env=(env -i HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="${LOGNAME:-worker}"

@@ -59,6 +59,23 @@ codex-local-reviewer CHECKOUT --task-file PACKET.md
 `profiles/candidate-v3.json` is not installed and must not be compared until
 the corrected baseline qualification suite remains green.
 
+### Model Rotation
+
+The harness supports switching between Coder-Next and DeepSeek V4 Flash:
+
+```bash
+# Switch to DeepSeek (default for reviewer routes)
+codex-local-model use deepseek-v4-reasoning
+
+# Return to Coder-Next (default for coder routes)
+codex-local-model use coder-next
+
+# Check active model
+codex-local-model status
+```
+
+See `docs/deepseek-rotation.md` for full operating behavior and safety features.
+
 After review, `bin/promote-v4-worker` promotes the hardened candidate behind
 the stable entry points. It creates a private backup of the qualified baseline
 worker first and is safe to rerun after a successful promotion.

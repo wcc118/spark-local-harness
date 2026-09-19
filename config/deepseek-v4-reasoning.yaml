@@ -1,0 +1,6 @@
+services:
+  deepseek-v4-flash:
+    environment:
+      EXTRA_VLLM_ARGS: >-
+        --default-chat-template-kwargs.thinking=true
+        --default-chat-template-kwargs.reasoning_effort=high

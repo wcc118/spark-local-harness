@@ -4,6 +4,11 @@ Codex is the architectural steward, escalation layer, final semantic reviewer,
 and merge authority. Local models perform bounded repository labor. OpenCode is
 a replaceable worker runtime, not a top-level orchestrator.
 
+Default coding uses Coder-Next. Use `codex-local-investigator` for read-only
+DeepSeek investigation and `codex-local-reviewer` for DeepSeek review. DeepSeek
+coding is opt-in with `CODEX_LOCAL_TIER=deepseek codex-local-coder`. The harness
+adds the role contract and switches models through its existing worker lock.
+
 ## Workflow
 
 1. Work from one GitHub issue with explicit acceptance criteria.
@@ -19,6 +24,15 @@ a replaceable worker runtime, not a top-level orchestrator.
    content.
 8. Change production behavior only through a measured candidate and preserve a
    tested rollback profile.
+9. Own each local worker until the harness exits and its result is consumed.
+   Set `CODEX_LOCAL_RECORD_RUN=1` and preserve the calling Codex session identity.
+   Retain the execution session ID and poll with `write_stdin` until exit; resume
+   yielded `functions.exec` cells with `functions.wait` first. Keep waits bounded
+   to 30 seconds and do not end the turn while a worker is pending. Inspect exit,
+   result, and GitHub state; acknowledge the run with `codex-local-completion ack`
+   and record the next action. If the handle is lost, use
+   `codex-local-completion status --wait 30`. Never treat quiet inference as
+   completion or a terminal failure as success. See `docs/worker-completion.md`.
 
 ## Merge policy
 
@@ -44,4 +58,3 @@ The harness learns through controlled experiments:
 
 Telemetry never changes prompts, routes, permissions, or merge policy
 automatically.
-

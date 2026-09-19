@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export CODEX_LOCAL_TIER=investigator
+exec "${CODEX_LOCAL_WORKER:-/home/connellwc83/.local/bin/codex-local-worker}" helper "$@"

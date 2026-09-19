@@ -1,0 +1,12 @@
+services:
+  deepseek-v4-flash:
+    container_name: codex_deepseek_v4_candidate
+    restart: "no"
+    environment:
+      HOST: 127.0.0.1
+      PORT: 8011
+      CUTE_DSL_ARCH: sm_121a
+      GPU_MEMORY_UTILIZATION: "0.85"
+      MAX_MODEL_LEN: "1000000"
+      MAX_NUM_SEQS: "4"
+      MAX_NUM_BATCHED_TOKENS: "4096"

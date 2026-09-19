@@ -10,9 +10,12 @@ ready_attempts=${CODEX_LOCAL_MODEL_READY_ATTEMPTS:-36}
 stop_attempts=${CODEX_LOCAL_MODEL_STOP_ATTEMPTS:-60}
 lock_path=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-harness/model.lock}
 lock_timeout=${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-1800}
+deepseek_endpoint=${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}
+deepseek_launcher=${CODEX_LOCAL_DEEPSEEK_LAUNCHER:-$(dirname -- "$0")/codex-local-deepseek-v4}
+recipe_launcher=${CODEX_LOCAL_RECIPE_LAUNCHER:-/home/connellwc83/spark-vllm-docker/run-recipe.sh}
 
 usage() {
-  echo "usage: codex-local-model status | use {qwen38|coder-next|qwen35-nvfp4}" >&2
+  echo "usage: codex-local-model status | use {qwen38|coder-next|qwen35-nvfp4|deepseek-v4-reasoning}" >&2
   exit 2
 }
 
@@ -21,12 +24,13 @@ profile_model() {
     qwen38) printf '%s\n' 'Qwen/Qwen3.8-27B-FP8' ;;
     coder-next) printf '%s\n' 'Qwen/Qwen3-Coder-Next-FP8' ;;
     qwen35-nvfp4) printf '%s\n' 'nvidia/Qwen3.5-122B-A10B-NVFP4' ;;
+    deepseek-v4-reasoning) printf '%s\n' 'deepseek-v4-flash-0731-exl3-k2' ;;
     *) return 2 ;;
   esac
 }
 
 active_model() {
-  "$curl_bin" -fsS --connect-timeout 2 --max-time 4 "$endpoint/v1/models" 2>/dev/null |
+  "$curl_bin" -fsS --connect-timeout 2 --max-time 4 "${1:-$endpoint}/v1/models" 2>/dev/null |
     jq -r 'if (.data | length) == 1 then .data[0].id else empty end' 2>/dev/null || true
 }
 
@@ -43,7 +47,7 @@ acquire_lock() {
 wait_for_model() {
   local expected=$1 observed
   for (( attempt=1; attempt<=ready_attempts; attempt++ )); do
-    observed=$(active_model)
+    observed=$(active_model "${2:-$endpoint}")
     if [[ $observed == "$expected" ]]; then
       echo "ready: $observed"
       return 0
@@ -71,15 +75,20 @@ launch() {
   case "$profile" in
     qwen38)
       log=/root/.cache/vllm/qwen38-27b-fp8.log
-      extra='--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 212500 --gpu-memory-utilization 0.90 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000'
+      extra='--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 185000 --gpu-memory-utilization 0.87 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000'
       ;;
     coder-next)
       log=/root/.cache/vllm/qwen3-coder-next-fp8.log
-      extra='--enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 212500 --gpu-memory-utilization 0.90 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000'
+      extra='--enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 185000 --gpu-memory-utilization 0.87 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000'
       ;;
     qwen35-nvfp4)
       log=/root/.cache/vllm/qwen35-nvfp4-122b.log
       extra='--trust-remote-code --quantization modelopt_fp4 --kv-cache-dtype fp8 --tensor-parallel-size 1 --max-model-len 65536 --gpu-memory-utilization 0.82 --enforce-eager --max-num-seqs 8 --max-num-batched-tokens 8192 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --language-model-only --attention-backend flashinfer --enable-prefix-caching --load-format fastsafetensors --host 0.0.0.0 --port 8000'
+      ;;
+    deepseek-v4-reasoning)
+      CODEX_LOCAL_DEEPSEEK_REASONING=1 "$deepseek_launcher" start
+      wait_for_model "$model" "$deepseek_endpoint"
+      return
       ;;
   esac
   "$docker_bin" exec -d "$container" bash -lc \
@@ -92,6 +101,7 @@ case ${1:-} in
   status)
     (( $# == 1 )) || usage
     model=$(active_model)
+    [[ -n $model ]] || model=$(active_model "$deepseek_endpoint")
     if [[ -n $model ]]; then
       jq -n --arg model "$model" '{status:"ready",model:$model}'
     else
@@ -104,11 +114,49 @@ case ${1:-} in
     expected=$(profile_model "$target") || usage
     acquire_lock
     current=$(active_model)
+    deepseek_current=$(active_model "$deepseek_endpoint")
+    if [[ -n $current && -n $deepseek_current ]]; then
+      echo "ERROR: both model endpoints are active; refusing an ambiguous switch" >&2
+      exit 69
+    fi
+    if [[ $target == deepseek-v4-reasoning ]]; then
+      current=$deepseek_current
+    fi
     if [[ $current == "$expected" ]]; then
       echo "already active: $current"
       exit 0
     fi
-    stop_server
+    # A server may still own GPU memory while its API is unavailable.
+    # Include container state when stopping a partially started runtime.
+    deepseek_running=$("$docker_bin" inspect --format '{{.State.Running}}' codex_deepseek_v4_candidate 2>/dev/null || true)
+    if [[ -n $deepseek_current || $deepseek_running == true ]]; then
+      [[ -z $deepseek_current || $deepseek_current == deepseek-v4-flash-0731-exl3-k2 ]] || {
+        echo "ERROR: unexpected model at DeepSeek endpoint: $deepseek_current" >&2; exit 69;
+      }
+      "$deepseek_launcher" stop
+      [[ -z $(active_model "$deepseek_endpoint") ]] || {
+        echo "ERROR: DeepSeek did not stop" >&2; exit 69;
+      }
+    fi
+    if [[ $target == deepseek-v4-reasoning ]]; then
+      # Stopping the container waits for its engine processes to exit and
+      # release unified memory before the pinned DeepSeek recipe is started.
+      if "$docker_bin" inspect "$container" >/dev/null 2>&1; then
+        "$docker_bin" stop "$container" >/dev/null
+      fi
+      [[ -z $(active_model) ]] || { echo "ERROR: vLLM did not stop" >&2; exit 69; }
+    else
+      if ! "$docker_bin" inspect "$container" >/dev/null 2>&1; then
+        # The production recipe uses an auto-removed container. Recreate it
+        # through that same recipe when returning from DeepSeek.
+        "$recipe_launcher" qwen3-coder-next-fp8 --solo --port 8000 \
+          --gpu-mem 0.87 --max-model-len 185000 --daemon
+        wait_for_model "$(profile_model coder-next)"
+        [[ $target != coder-next ]] || exit 0
+      fi
+      "$docker_bin" start "$container" >/dev/null
+      stop_server
+    fi
     launch "$target"
     ;;
   *) usage ;;
