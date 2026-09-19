@@ -384,7 +384,7 @@ class DashboardSource:
                 "elapsed_seconds": view.wall_seconds,
                 "tool_calls": view.tool_calls,
                 "pull_request": health.pull_request if health else operation.get("pull_request"),
-                "token_usage": view.local_tokens + view.frontier_tokens,
+                "token_usage": view.local_tokens + view.frontier_tokens if view.local_tokens is not None and view.frontier_tokens is not None else None,
             }
         live_execution = project_live_execution(
             self.v5_runs, now=current_time, session_id=selected, repository=repository,
@@ -1657,8 +1657,8 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         ("Needs judgment", summary["unadjudicated_runs"]),
         ("Contradictions", summary["contradictions"]),
         ("Interrupted", summary["interrupted_runs"]),
-        ("Local tokens", f"{summary['local_tokens']:,}"),
-        ("Recorded frontier tokens", f"{summary['frontier_tokens']:,}"),
+        ("Local tokens", f"{summary['local_tokens']:,}" if summary["local_tokens"] is not None else "Unknown"),
+        ("Recorded frontier tokens", f"{summary['frontier_tokens']:,}" if summary["frontier_tokens"] is not None else "Unknown"),
         ("Codex interventions", summary["codex_interventions"]),
     ]
     card_html = "".join(
@@ -2325,7 +2325,7 @@ def _accounting_html(accounting: dict[str, Any], views: list[dict[str, Any]]) ->
     )
     recent = views[-24:]
     spark = _sparkline_svg(
-        [view["local_tokens"] for view in recent],
+        [view["local_tokens"] for view in recent if view["local_tokens"] is not None],
         f"Local tokens across the last {len(recent)} runs",
     )
     spark_html = f'<div class="card-spark">{spark}</div>' if spark else ""
@@ -2370,7 +2370,7 @@ def _run_row(view: dict[str, Any]) -> str:
         f'<td>{role_model}</td><td>{html.escape(str(view["task_class"] or "unknown"))}</td>'
         f'<td>{html.escape(str(view["claimed_status"] or "none"))}</td><td class="{outcome}">{outcome}</td>'
         f'<td>{html.escape(str(view["lifecycle_state"]))}</td><td>{html.escape(str(view["delivery_ready"]))}</td>'
-        f'<td data-value="{view["wall_seconds"]}">{view["wall_seconds"]:.1f}s</td><td data-value="{view["local_tokens"]}">{view["local_tokens"]:,} / {view["frontier_tokens"]:,}</td>'
+        f'<td data-value="{view["wall_seconds"]}">{view["wall_seconds"]:.1f}s</td><td data-value="{view["local_tokens"]}">{format(view["local_tokens"], ",") if view["local_tokens"] is not None else "Unknown"} / {format(view["frontier_tokens"], ",") if view["frontier_tokens"] is not None else "Unknown"}</td>'
         f'<td><details data-details-id="run:{run_id}"><summary>{len(view["evidence_refs"])} refs</summary>{evidence}</details></td></tr>'
     )
 

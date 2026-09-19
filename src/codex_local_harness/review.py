@@ -91,6 +91,7 @@ class Envelope:
     tracked_generated_artifact_count: int = 0
     scratch_dir: str | None = None
     runtime_home: str | None = None
+    investigative: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -188,14 +189,24 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         raise ReviewError("reported review task is empty or exceeds its size bound")
     identity = json.dumps(envelope.as_dict(), sort_keys=True, separators=(",", ":"))
     evidence = f"HARNESS_OBSERVED_EVIDENCE={packet.compact_json()}\n\n" if packet else ""
-    prompt = (
-        "IMMUTABLE_REVIEW_ENVELOPE=" + identity + "\n\n"
-        + evidence
-        + "Review only the checkout and commit identified above. Do not access another checkout. "
+    boundary = (
+        "Investigate the exact read-only checkout using repository inspection and focused tests. "
+        "The bounded patch is an index, not the complete evidence boundary: inspect omitted code "
+        "in the checkout when needed. Use the supplied scratch directory for diagnostic tests and "
+        "writable test copies. Preserve implementation and acceptance criteria. "
+        "Continue while useful investigation remains; report an explicit blocker if unable to progress. "
+        if envelope.investigative else
         "Inspect the harness-observed exact-head diff and deterministic git-diff-check result in this "
         "packet. The evidence boundary is intentionally tool-free: do not invoke tools or seek more "
         "files. If the bounded patch is truncated or insufficient, return ESCALATE. Serialize the "
         "complete result immediately. "
+    )
+    prompt = (
+        "IMMUTABLE_REVIEW_ENVELOPE=" + identity + "\n\n"
+        + evidence
+        + "Review only the checkout and commit identified above. Do not access another checkout. "
+        + boundary
+        +
         "Do not change GitHub state. End with exactly one single-line machine result prefixed "
         f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
         "coder findings; never delete, regenerate, or repair them. Test execution is configured "
@@ -579,12 +590,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--envelope-out", type=Path, required=True)
     prepare.add_argument("--scratch-dir", type=Path)
     prepare.add_argument("--runtime-home", type=Path)
+    prepare.add_argument("--investigative", action="store_true")
 
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--envelope", type=Path, required=True)
     finalize.add_argument("--log", type=Path, required=True)
     finalize.add_argument("--run-id", required=True)
     finalize.add_argument("--result-out", type=Path, required=True)
+    finalize.add_argument("--no-publish", action="store_true")
 
     incomplete = sub.add_parser("incomplete")
     incomplete.add_argument("--envelope", type=Path, required=True)
@@ -598,10 +611,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.checkout, args.repository, args.issue, args.pr,
                 scratch_dir=args.scratch_dir, runtime_home=args.runtime_home,
             )
+            if args.investigative:
+                from dataclasses import replace
+                envelope = replace(envelope, investigative=True)
             packet = build_reviewer_evidence_packet(
                 Path(envelope.checkout), envelope.repository, envelope.issue,
                 envelope.pull_request, envelope.base_sha, envelope.head_sha,
-                run_command, dict(discover_test_executables()),
+                run_command, {} if args.investigative else dict(discover_test_executables()),
             )
             write_json(args.envelope_out, envelope.as_dict())
             sys.stdout.write(prepare_prompt(envelope, args.task_file.read_text(encoding="utf-8"), packet))
@@ -610,7 +626,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             audit_tool_scope(args.log, envelope)
             verify_checkout_unchanged(envelope)
             result = validate_result(canonicalize_result(parse_result(args.log), envelope), envelope)
-            publication = publish_result(result, envelope, args.run_id)
+            publication = ({"published": False, "head_sha": envelope.head_sha}
+                           if args.no_publish else publish_result(result, envelope, args.run_id))
             write_json(args.result_out, {"result": result, "publication": publication})
             print(json.dumps(publication, sort_keys=True))
         else:

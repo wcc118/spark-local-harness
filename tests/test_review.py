@@ -573,3 +573,18 @@ def test_publish_rejects_stale_head(tmp_path):
 def test_publish_fails_when_label_postcondition_is_wrong(tmp_path):
     with pytest.raises(ReviewError, match="label postcondition failed"):
         publish_result(valid_result(), envelope(tmp_path), "run-1", PublishRun(bad_labels=True))
+
+
+def test_investigative_packet_does_not_advertise_host_executables(tmp_path, monkeypatch):
+    from codex_local_harness import review
+    monkeypatch.setattr(review, "build_envelope", lambda *a, **kw: envelope(tmp_path))
+    monkeypatch.setattr(review, "discover_test_executables", lambda: pytest.fail("host executables are not container evidence"))
+    def packet(*args):
+        assert args[-1] == {}
+        return None
+    monkeypatch.setattr(review, "build_reviewer_evidence_packet", packet)
+    task = tmp_path / "task.txt"
+    task.write_text("Run python3 -m pytest inside the worker environment.")
+    assert review.main(["prepare", "--investigative", "--checkout", str(tmp_path),
+                        "--repository", REPO, "--issue", "7", "--pr", "11",
+                        "--task-file", str(task), "--envelope-out", str(tmp_path / "env.json")]) == 0

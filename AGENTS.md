@@ -58,3 +58,16 @@ The harness learns through controlled experiments:
 
 Telemetry never changes prompts, routes, permissions, or merge policy
 automatically.
+
+## Opt-in convergence candidate (#181)
+
+`bin/codex-local-worker-candidate` is an isolated qualification entry point; do not
+install it over production without a separate promotion decision. See
+`docs/local-convergence.md` for its supervision, guidance and accounting commands.
+For this candidate, bounded means issue scope and acceptance, not an automatic
+whole-task timer or fixed correction count. Codex assesses evidence of progress,
+supplies missing details and resolves genuine stalls. Mechanical polling continues
+without model inference; read incremental evidence and avoid replaying full logs.
+Keep packets focused on current criteria, unresolved findings and relevant evidence.
+Inspect and acknowledge each terminal execution before checkpoint continuation.
+Record meaningful outcomes and next actions in GitHub so a new session can resume.

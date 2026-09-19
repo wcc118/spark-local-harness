@@ -46,6 +46,13 @@ def snapshot(health: Path, session: str) -> list[dict[str, Any]]:
         raise CompletionError("A Codex session identity is required")
     owned: dict[str, dict[str, Any]] = {}
     stages: dict[str, dict[str, str]] = {}
+    admitted = {}
+    for event in records(health / "ownership.jsonl"):
+        if event.get("session_id") == session:
+            run = event["run_id"]
+            admitted[run] = event
+            owned[run] = event
+            stages[run] = {}
     for event in records(health / "workflow.jsonl"):
         if event.get("session_id") != session:
             continue
@@ -64,6 +71,8 @@ def snapshot(health: Path, session: str) -> list[dict[str, Any]]:
         if event.get("session_id") == session
     }
     results = []
+    executions = {e["run_id"]: e for e in records(health / "execution.jsonl")
+                  if e.get("session_id") == session}
     for run, event in owned.items():
         life = lifecycle.get(run, {})
         exit_status = life.get("exit_status")
@@ -77,6 +86,14 @@ def snapshot(health: Path, session: str) -> list[dict[str, Any]]:
                 life.get("event") == "completed" and exit_status == 0
                 and all(s == "passed" for s in stages[run].values())
             ) else "failed"
+        # Candidate ownership is independent of workflow projection. Only the
+        # wrapper's final EXIT record settles it, never a quiet endpoint.
+        if run in admitted:
+            execution = executions.get(run, {})
+            settled = execution.get("state") == "terminal" and type(execution.get("exit_status")) is int
+            exit_status = execution.get("exit_status") if settled else None
+            ended = settled
+            state = ("passed" if exit_status == 0 else "failed") if settled else "pending"
         result = {
             "run_id": run, "session_id": session, "repository": event.get("repository"),
             "issue": event.get("issue"), "role": event.get("role"), "state": state,

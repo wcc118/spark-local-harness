@@ -119,7 +119,8 @@ def fake_server():
         thread.join()
 
 
-def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, fake_server: str):
+@pytest.mark.parametrize("task_timeout", [0, 3])
+def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, fake_server: str, task_timeout):
     log = tmp_path / "run.jsonl"
     control = tmp_path / "run.control.json"
     secret = tmp_path / "run.secret"
@@ -127,7 +128,7 @@ def test_bridge_binds_session_captures_permission_and_completes(tmp_path: Path, 
     status = run_bridge(
         base_url=fake_server, password=PASSWORD, run_id="run-1", task="Do work",
         agent="coder", model="vllm/model-name", log=log, control=control,
-        secret=secret, timeout=3,
+        secret=secret, timeout=task_timeout,
     )
 
     assert status == 0
