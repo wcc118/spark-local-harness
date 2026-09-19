@@ -1,0 +1,427 @@
+{
+  "runs": [
+    {
+      "phase": "baseline-initial-review",
+      "run_id": "20260919T202112Z-678875",
+      "handoff": {
+        "run_id": "20260919T202112Z-678875",
+        "session_id": "01a0ba24-a189-74d3-98c7-7d75ce404cda",
+        "repository": "wcc118/codex-local-harness",
+        "issue": 186,
+        "role": "reviewer",
+        "state": "failed",
+        "exit_status": 124,
+        "lifecycle_event": "timed-out",
+        "stages": {
+          "review": "interrupted"
+        },
+        "observed_at": "2026-09-19T20:23:29.172703103Z",
+        "lifecycle_observed_at": "2026-09-19T20:23:29.172703103Z",
+        "fingerprint": "a3bac17cc16ac479bf0c60169737df1570612e0626c2ad9939d18cbf2596609e",
+        "acknowledged": true
+      },
+      "wall_seconds": 136.0,
+      "result": null,
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "partial",
+        "input_reported": 8086,
+        "output_reported": 5369,
+        "reasoning_reported": 0,
+        "cache_read_write": 4096,
+        "total_including_cache": 17551,
+        "total_excluding_cache": 13455,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 0,
+        "tool_errors": 0,
+        "malformed_events": false
+      },
+      "sha256": {
+        "20260919T202112Z-678875.jsonl": "60019178f61f167d6b3e2117a7bc5a22703108bf0172daafef47977cf0d8d5ec",
+        "20260919T202112Z-678875.envelope.json": "9fc82d7e3d8ad6852b69a7a986f694deb99b2625474ebec234742fa5f4feed1f"
+      }
+    },
+    {
+      "phase": "candidate-initial-review",
+      "run_id": "20260919T202435Z-683440",
+      "handoff": {
+        "run_id": "20260919T202435Z-683440",
+        "session_id": "01a0ba24-a189-74d3-98c7-7d75ce404cda",
+        "repository": "wcc118/codex-local-harness",
+        "issue": 186,
+        "role": "reviewer",
+        "state": "passed",
+        "exit_status": 0,
+        "lifecycle_event": "completed",
+        "stages": {
+          "review": "passed"
+        },
+        "observed_at": "2026-09-19T20:26:26.732477274Z",
+        "lifecycle_observed_at": "2026-09-19T20:26:26.732477274Z",
+        "fingerprint": "98986298f19ed0ed829581bc56eeece76ed179a4f46ba1fc72925a2700e409ee",
+        "acknowledged": true
+      },
+      "wall_seconds": 110.0,
+      "result": {
+        "publication": {
+          "comment_url": "https://github.com/wcc118/codex-local-harness/pull/187#issuecomment-5745056610",
+          "head_sha": "d818f0eb38c8cbb6f1f4afe58f058a255cc068dd",
+          "label": "status/blocked"
+        },
+        "result": {
+          "confidence": "high",
+          "criteria": [
+            "Non-finite queries (NaN, +inf, -inf) must raise ValueError",
+            "Interpolation of finite queries with strictly increasing finite points, endpoints included",
+            "Queries within 1e-12 of endpoints clamp; farther out-of-domain finite queries return None",
+            "Inputs never mutated"
+          ],
+          "escalation_reason": null,
+          "findings": [
+            {
+              "behavior": "interpolate.py lines 47-49 append None for any non-finite query; contract requires ValueError",
+              "evidence": "Direct execution: all three returned [None]; no exception raised. Contradicts stated criterion.",
+              "finding": "Non-finite queries return None instead of raising ValueError",
+              "triggering_input": "interpolate([(0.0,0.0),(1.0,10.0)], [float('inf')]) / [-inf] / [nan]"
+            },
+            {
+              "behavior": "test_non_finite_query asserts +inf returns [None] (opposite of contract); no tests for NaN or -inf queries raising ValueError",
+              "evidence": "26/26 tests pass but encode the wrong behavior; criterion not enforced.",
+              "finding": "Test suite does not enforce rejection of all three non-finite queries",
+              "triggering_input": "test_non_finite_query only; missing NaN/-inf cases"
+            }
+          ],
+          "issue": 186,
+          "pull_request": 187,
+          "repository": "wcc118/codex-local-harness",
+          "reviewed_head_sha": "d818f0eb38c8cbb6f1f4afe58f058a255cc068dd",
+          "schema_version": 1,
+          "summary": "The implementation and test suite contradict the contract: non-finite queries (NaN, +inf, -inf) return None rather than raising ValueError, and the tests do not enforce rejection of all three. Supplied 26 tests pass but encode the incorrect behavior. REQUEST_CHANGES.",
+          "tests": [
+            {
+              "command": "python3 -m pytest -q test_interpolate.py (scratch copy)",
+              "exit_code": 0,
+              "outcome": "26 tests passed; suite encodes non-finite queries returning None, contradicting the contract",
+              "provenance": "reviewer-observed"
+            },
+            {
+              "command": "python3 probe: interpolate with inf/-inf/nan queries",
+              "exit_code": 0,
+              "outcome": "All three returned [None], no ValueError raised",
+              "provenance": "reviewer-observed"
+            },
+            {
+              "command": "git diff --check comparison-base..head",
+              "outcome": "exit 0; whitespace check only, unrelated to functional criteria",
+              "provenance": "harness-observed"
+            }
+          ],
+          "verdict": "REQUEST_CHANGES"
+        }
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "complete",
+        "input_reported": 13630,
+        "output_reported": 3803,
+        "reasoning_reported": 0,
+        "cache_read_write": 70400,
+        "total_including_cache": 87833,
+        "total_excluding_cache": 17433,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 7,
+        "tool_errors": 0,
+        "malformed_events": false
+      },
+      "sha256": {
+        "20260919T202435Z-683440.jsonl": "16643ecc1933372d996d75bbd13f6d866d22b3139ee77f8e20bc99e9d77ecaf3",
+        "20260919T202435Z-683440.envelope.json": "c5dc9ca22996870804a99805e575260f279a9b7f539b7e5aa9545e2676bddc98",
+        "20260919T202435Z-683440.result.json": "68a8692bb0f5fdd45e1f17409d07e2778479a8e6870a9d4a29ffe11c19f3373c"
+      }
+    },
+    {
+      "phase": "baseline-correction",
+      "run_id": "20260919T202843Z-687938",
+      "handoff": {
+        "run_id": "20260919T202843Z-687938",
+        "session_id": "01a0ba24-a189-74d3-98c7-7d75ce404cda",
+        "repository": "wcc118/codex-local-harness",
+        "issue": 186,
+        "role": "coder",
+        "state": "passed",
+        "exit_status": 0,
+        "lifecycle_event": "completed",
+        "stages": {
+          "local-work": "passed",
+          "delivery": "passed"
+        },
+        "observed_at": "2026-09-19T20:29:53.758525866Z",
+        "lifecycle_observed_at": "2026-09-19T20:29:53.758525866Z",
+        "fingerprint": "32239caab08168a1cb60db1711d6b2a21a4d858b6cc8f88e7ce47a271333196e",
+        "acknowledged": true
+      },
+      "wall_seconds": 68.0,
+      "result": {
+        "head_sha": "e2372eb872b610cfcaa0a72e890fa39a4b1934b7",
+        "issue": 186,
+        "label": "status/review",
+        "publication_verification": {
+          "attempts": 2,
+          "initial": "d818f0eb38c8cbb6f1f4afe58f058a255cc068dd",
+          "outcome": "recovered",
+          "retry": "e2372eb872b610cfcaa0a72e890fa39a4b1934b7"
+        },
+        "published": true,
+        "pull_request": 187,
+        "repository": "wcc118/codex-local-harness"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "qwen-code",
+        "coverage": "complete",
+        "input_reported": 216139,
+        "output_reported": 2101,
+        "reasoning_reported": null,
+        "cache_read_write": 0,
+        "total_including_cache": 218240,
+        "total_excluding_cache": 218240,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 14,
+        "tool_errors": 1,
+        "malformed_events": false
+      },
+      "sha256": {
+        "20260919T202843Z-687938.jsonl": "0db52c1ea724b7fc64e22dffb886801d30190760766a187acf4bcadfdcaf374d",
+        "20260919T202843Z-687938.result.json": "15e18e5266491fc1dc851ed1f494bd03a3f9ce50b6aa2d0231c4f4a61b2b5f2b"
+      }
+    },
+    {
+      "phase": "candidate-correction",
+      "run_id": "20260919T203037Z-693091",
+      "handoff": {
+        "run_id": "20260919T203037Z-693091",
+        "session_id": "01a0ba24-a189-74d3-98c7-7d75ce404cda",
+        "repository": "wcc118/codex-local-harness",
+        "issue": 186,
+        "role": "coder",
+        "state": "passed",
+        "exit_status": 0,
+        "lifecycle_event": "completed",
+        "stages": {
+          "local-work": "passed",
+          "delivery": "passed"
+        },
+        "observed_at": "2026-09-19T20:31:39.067442862Z",
+        "lifecycle_observed_at": "2026-09-19T20:31:39.067442862Z",
+        "fingerprint": "74de9a8a65bff5beb9d507062274ef8e16dcf7c7f0b5ed54c5ab6805adb2db06",
+        "acknowledged": true
+      },
+      "wall_seconds": 61.0,
+      "result": {
+        "head_sha": "f34203b2ec29a194a9d3e8ecd77faac7bcb444d6",
+        "issue": 186,
+        "label": "status/review",
+        "publication_verification": {
+          "attempts": 1,
+          "initial": "f34203b2ec29a194a9d3e8ecd77faac7bcb444d6",
+          "outcome": "matched",
+          "retry": null
+        },
+        "published": true,
+        "pull_request": 188,
+        "repository": "wcc118/codex-local-harness"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "qwen-code",
+        "coverage": "complete",
+        "input_reported": 201675,
+        "output_reported": 1888,
+        "reasoning_reported": null,
+        "cache_read_write": 0,
+        "total_including_cache": 203563,
+        "total_excluding_cache": 203563,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 12,
+        "tool_errors": 0,
+        "malformed_events": false
+      },
+      "sha256": {
+        "20260919T203037Z-693091.result.json": "32f5fafe67e6bc9f9e24f17a4abebec1b09a03b8b362aaa8322545e3adcf4ff5",
+        "20260919T203037Z-693091.jsonl": "0eae3de179dc499732664bfb226faec188634c1a74e24d1e1be8694a9dc1cee0"
+      }
+    },
+    {
+      "phase": "candidate-final-review",
+      "run_id": "20260919T203448Z-696080",
+      "handoff": {
+        "run_id": "20260919T203448Z-696080",
+        "session_id": "01a0ba24-a189-74d3-98c7-7d75ce404cda",
+        "repository": "wcc118/codex-local-harness",
+        "issue": 186,
+        "role": "reviewer",
+        "state": "passed",
+        "exit_status": 0,
+        "lifecycle_event": "completed",
+        "stages": {
+          "review": "passed"
+        },
+        "observed_at": "2026-09-19T20:36:33.945274604Z",
+        "lifecycle_observed_at": "2026-09-19T20:36:33.945274604Z",
+        "fingerprint": "7ac14e51f42235151da5ea2c1d1ea01cc79903d4283a08508fcf65e79e63fcda",
+        "acknowledged": true
+      },
+      "wall_seconds": 103.0,
+      "result": {
+        "publication": {
+          "comment_url": "https://github.com/wcc118/codex-local-harness/pull/188#issuecomment-5745118834",
+          "head_sha": "f34203b2ec29a194a9d3e8ecd77faac7bcb444d6",
+          "label": "status/review-passed"
+        },
+        "result": {
+          "confidence": "high",
+          "criteria": [
+            "interpolate validates at least two finite time/value pairs with strictly increasing times",
+            "non-finite point times/values and non-finite queries (NaN, +inf, -inf) raise ValueError",
+            "queries within 1e-12 outside endpoints clamp to endpoint value",
+            "queries farther outside domain return None",
+            "inputs are not mutated",
+            "linear interpolation in query order including endpoints",
+            "standard library only"
+          ],
+          "escalation_reason": null,
+          "findings": [],
+          "issue": 186,
+          "pull_request": 188,
+          "repository": "wcc118/codex-local-harness",
+          "reviewed_head_sha": "f34203b2ec29a194a9d3e8ecd77faac7bcb444d6",
+          "schema_version": 1,
+          "summary": "Implementation and its tests satisfy the stated contract. All 28 supplied tests pass under python3 -m pytest, and the three non-finite query rejection tests (NaN, +inf, -inf) are present and enforce ValueError. Direct checks confirm endpoint-tolerance clamping, beyond-domain None, non-finite point rejection, and input non-mutation. No functional defect found.",
+          "tests": [
+            {
+              "command": "python3 -m pytest -q qualification/convergence_fixture/test_interpolate.py",
+              "exit_code": 0,
+              "outcome": "28 tests passed in 0.01s; includes separate tests for NaN, +inf, and -inf query rejection (lines 140-167) each asserting ValueError",
+              "provenance": "reviewer-observed"
+            },
+            {
+              "command": "python3 focused checks on interpolate.py",
+              "exit_code": 0,
+              "outcome": "NaN/+inf/-inf queries each raised ValueError; non-finite point times/values raised ValueError; endpoint clamping returned endpoint values; beyond tolerance returned None; inputs unmutated",
+              "provenance": "reviewer-observed"
+            }
+          ],
+          "verdict": "APPROVE"
+        }
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "complete",
+        "input_reported": 14334,
+        "output_reported": 3206,
+        "reasoning_reported": 0,
+        "cache_read_write": 42240,
+        "total_including_cache": 59780,
+        "total_excluding_cache": 17540,
+        "total_provenance": "runtime-reported",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 5,
+        "tool_errors": 0,
+        "malformed_events": false
+      },
+      "sha256": {
+        "20260919T203448Z-696080.jsonl": "f572c849952eed368bb428b5f1b8aedf94215c7ea3dc3dfdcfc642c3a38ca078",
+        "20260919T203448Z-696080.envelope.json": "021c403a1d90f100ee72dd88b1d0982d85a38ec581298213135c54dc77a5d441",
+        "20260919T203448Z-696080.result.json": "58a366c7966f347e802fdedf86cd239ffd0fabdc4a504a5a25a3ded756f1fd53"
+      }
+    },
+    {
+      "phase": "baseline-final-review",
+      "run_id": "20260919T203700Z-707286",
+      "handoff": {
+        "run_id": "20260919T203700Z-707286",
+        "session_id": "01a0ba24-a189-74d3-98c7-7d75ce404cda",
+        "repository": "wcc118/codex-local-harness",
+        "issue": 186,
+        "role": "reviewer",
+        "state": "failed",
+        "exit_status": 75,
+        "lifecycle_event": "timed-out",
+        "stages": {
+          "review": "interrupted"
+        },
+        "observed_at": "2026-09-19T20:39:32.058158488Z",
+        "lifecycle_observed_at": "2026-09-19T20:39:32.058158488Z",
+        "fingerprint": "a550282848be445bbbafbf2b78510beef2ee983b1430d0cd9f97f2747108faf3",
+        "acknowledged": true
+      },
+      "wall_seconds": 151.0,
+      "result": {
+        "issue": 186,
+        "published": false,
+        "pull_request": 187,
+        "reason": "wall-time-budget",
+        "repository": "wcc118/codex-local-harness",
+        "reviewed_head_sha": "e2372eb872b610cfcaa0a72e890fa39a4b1934b7",
+        "schema_version": 1,
+        "status": "incomplete"
+      },
+      "usage": {
+        "schema_version": 1,
+        "runtime": "opencode",
+        "coverage": "unknown",
+        "input_reported": null,
+        "output_reported": null,
+        "reasoning_reported": null,
+        "cache_read_write": null,
+        "total_including_cache": null,
+        "total_excluding_cache": null,
+        "total_provenance": "unavailable",
+        "reasoning_rule": "reported separately; never added to the runtime total",
+        "tool_calls": 0,
+        "tool_errors": 0,
+        "malformed_events": false
+      },
+      "sha256": {
+        "20260919T203700Z-707286.result.json": "6bdc5c420b7e1bd1d7185c33d3863e33eed1ac036fcd646376ac58fc283b27c1",
+        "20260919T203700Z-707286.jsonl": "c62ebc9410f93d82542a2314b81ce67fb0c8db1d55bf0a5d910efe90fd68d9ec",
+        "20260919T203700Z-707286.envelope.json": "63d83787b72705f05357166205f1019c71d5b93083619f5b4bb274e6e69344f6"
+      }
+    }
+  ],
+  "frontier_intervals": {
+    "baseline": {
+      "cached_input_tokens": 3446400,
+      "input_tokens": 3458753,
+      "output_tokens": 3527,
+      "reasoning_output_tokens": 1280,
+      "total_tokens": 3462280,
+      "uncached_input_tokens": 12353,
+      "uncached_input_plus_output": 15880
+    },
+    "candidate": {
+      "cached_input_tokens": 2733184,
+      "input_tokens": 2745980,
+      "output_tokens": 3097,
+      "reasoning_output_tokens": 1190,
+      "total_tokens": 2749077,
+      "uncached_input_tokens": 12796,
+      "uncached_input_plus_output": 15893
+    }
+  },
+  "limits": [
+    "Existing long conversation, not a dedicated fresh Codex session",
+    "Single pair; no statistical savings inference",
+    "Baseline initial poll required extra exec wait calls; later polls used direct thirty-second waits",
+    "Baseline coding bore Qwen cold start; candidate final review bore DeepSeek cold start",
+    "Baseline updated existing PR; candidate created a new PR",
+    "Interval sums exclude preparation and between-interval report work; they are not the total cost of issue 184"
+  ]
+}
