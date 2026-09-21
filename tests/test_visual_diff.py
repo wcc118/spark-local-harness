@@ -50,7 +50,7 @@ def test_diff_single_pixel_change():
 
     # Candidate: same except one pixel
     candidate_data = bytearray(b"\xff" * 40000)
-    candidate_data[50 * 4 + 50] = 0  # Change one R channel
+    candidate_data[(50 * 100 + 50) * 4] = 0  # Change the R channel of the pixel at x=50, y=50
     candidate = bytes(candidate_data)
     candidate = _bytes_to_png(100, 100, candidate)
 
@@ -220,8 +220,6 @@ def test_diff_deterministic_ordering():
 
 def test_render_overlay_valid_png():
     """Test that render_overlay produces a valid PNG."""
-    Image, _ = _require_pil_numpy()
-
     baseline = _bytes_to_png(100, 100, b"\xff" * 40000)
     candidate_data = bytearray(b"\xff" * 40000)
     candidate_data[5000] = 0  # One changed pixel
@@ -239,8 +237,6 @@ def test_render_overlay_valid_png():
 
 def test_render_overlay_has_rectangles():
     """Test that render_overlay draws rectangles around regions."""
-    Image, _ = _require_pil_numpy()
-
     baseline = _bytes_to_png(100, 100, b"\xff" * 40000)
     candidate_data = bytearray(b"\xff" * 40000)
 

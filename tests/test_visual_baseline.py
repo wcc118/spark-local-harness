@@ -258,10 +258,10 @@ class TestSaveBaseline:
         """Test that path traversal attempts are rejected."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
 
-        with pytest.raises(ValueError, match="invalid path component"):
+        with pytest.raises(ValueError, match="must match"):
             save_baseline(tmp_path, "../escaped", "1280x800", png, renderer={})
 
-        with pytest.raises(ValueError, match="invalid path component"):
+        with pytest.raises(ValueError, match="must match"):
             save_baseline(tmp_path, "test", "../../../escaped", png, renderer={})
 
 
