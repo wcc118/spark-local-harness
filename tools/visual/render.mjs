@@ -17,6 +17,13 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
+class MutationError extends Error {
+  constructor(payload) {
+    super(payload.message);
+    this.payload = payload;
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -302,7 +309,11 @@ async function run() {
           );
           results.push(result);
         } catch (e) {
-          console.error(JSON.stringify({ error: 'page_render', page: pageName, viewport: vpName, message: e.message }));
+          if (e instanceof MutationError) {
+            console.error(JSON.stringify({ ...e.payload, page: pageName, viewport: vpName }));
+          } else {
+            console.error(JSON.stringify({ error: 'page_render', page: pageName, viewport: vpName, message: e.message }));
+          }
           pageFailure = true;
         }
       }
@@ -411,14 +422,12 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
 
       // Check if we found any elements
       if (matchedCount === 0) {
-        console.error(JSON.stringify({
+        throw new MutationError({
           error: 'mutation_no_match',
           mutation_id: id,
           selector: selector,
           message: `Selector "${selector}" matched no elements`
-        }));
-        await ctx.close();
-        process.exit(4);
+        });
       }
 
       // Determine which index to apply mutation to
@@ -427,16 +436,14 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
         targetIndex = null; // Apply to all
       } else if (typeof index === 'number') {
         if (index < 0 || index >= matchedCount) {
-          console.error(JSON.stringify({
+          throw new MutationError({
             error: 'mutation_index_out_of_range',
             mutation_id: id,
             selector: selector,
             index: index,
             matched: matchedCount,
             message: `Index ${index} out of range for selector "${selector}" (found ${matchedCount} elements)`
-          }));
-          await ctx.close();
-          process.exit(4);
+          });
         }
         targetIndex = index;
       } else {

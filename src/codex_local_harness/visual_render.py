@@ -118,7 +118,7 @@ def validate_mutation(mutation: dict[str, Any]) -> list[str]:
     # index validation
     if 'index' in mutation:
         index = mutation['index']
-        if not isinstance(index, int) or index < 0:
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             if index != "all":
                 errors.append(f"Mutation 'index' must be a non-negative integer or 'all': {index}")
 
@@ -169,6 +169,8 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
                 errors.append(f"Invalid mask selector: {mask}")
 
     # Validate mutations if present
+    if 'mutations' in spec and not isinstance(spec['mutations'], list):
+        errors.append("'mutations' must be a list")
     if 'mutations' in spec and isinstance(spec['mutations'], list):
         mutations = spec['mutations']
         if len(mutations) > 50:

@@ -1250,3 +1250,19 @@ class TestMutationBehavior:
             d = self._render(tmp_path, muts)
             hashes.add(hashlib.sha256((d / "1280x800.png").read_bytes()).hexdigest())
         assert len(hashes) == 1
+
+
+class TestMutationValidationEdges:
+    """Edge cases found in review: booleans and non-list values must be rejected."""
+
+    def test_boolean_index_is_rejected(self):
+        errors = validate_mutation({"id": "b", "selector": ".v", "op": "remove", "index": True})
+        assert any("index" in e for e in errors)
+
+    def test_mutations_must_be_a_list(self):
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "mutations": {"id": "not-a-list"},
+        }
+        assert any("mutations" in e for e in validate_spec(spec))
