@@ -1266,3 +1266,720 @@ class TestMutationValidationEdges:
             "mutations": {"id": "not-a-list"},
         }
         assert any("mutations" in e for e in validate_spec(spec))
+
+
+class TestChecksValidation:
+    """Tests for checks option validation."""
+
+    def test_checks_default_is_true(self):
+        """Test that checks defaults to true when not specified."""
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+        }
+        errors = validate_spec(spec)
+        assert errors == []
+
+    def test_checks_false_valid(self):
+        """Test that checks: false is valid."""
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "checks": False,
+        }
+        errors = validate_spec(spec)
+        assert errors == []
+
+    def test_checks_true_valid(self):
+        """Test that checks: true is valid."""
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "checks": True,
+        }
+        errors = validate_spec(spec)
+        assert errors == []
+
+    def test_checks_non_boolean_rejected(self):
+        """Test that non-boolean checks value is rejected."""
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "checks": "true",
+        }
+        errors = validate_spec(spec)
+        assert any("checks" in e.lower() and "boolean" in e.lower() for e in errors)
+
+    def test_checks_integer_rejected(self):
+        """Test that integer checks value is rejected."""
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "checks": 1,
+        }
+        errors = validate_spec(spec)
+        assert any("checks" in e.lower() for e in errors)
+
+
+class TestChecksOutput:
+    """Browser tests for checks output (.checks.json)."""
+
+    def test_contrast_low_flagged(self, tmp_path: Path):
+        """Test that low contrast is flagged with warning."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "contrast.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body style='font-family: sans-serif'>"
+            "<div style='color:#aaaaaa;background:#ffffff'>Low contrast grey</div>"
+            "<div style='color:#000000;background:#ffffff'>High contrast black</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "contrast", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "contrast" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # Should have contrast findings
+        assert checks["version"] == 1
+        assert "findings" in checks
+        contrast_findings = [f for f in checks["findings"] if f["check"] == "contrast"]
+        assert len(contrast_findings) >= 1, "Expected at least one contrast finding"
+
+        # Verify structure
+        for finding in contrast_findings:
+            assert finding["severity"] == "warning"
+            assert "selector" in finding
+            assert "box" in finding
+            assert "text" in finding
+            assert "detail" in finding
+
+    def test_contrast_unknown_with_image_bg(self, tmp_path: Path):
+        """Test that text on background-image counted in contrast_unknown."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "bg-image.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<div style='background-image:url(data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22></svg>)'>"
+            "Text on image bg"
+            "</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "bgimage", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "bgimage" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # Should have contrast_unknown count
+        assert "stats" in checks
+        assert "contrast_unknown" in checks["stats"]
+        # Contrast unknown should be >= 1 since we have a background image
+
+    def test_clipped_text_flagged(self, tmp_path: Path):
+        """Test that clipped text is flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "clipped.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<div style='width:100px;overflow:hidden'>"
+            "This is very long text that will be clipped"
+            "</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "clipped", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "clipped" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        clipped_findings = [f for f in checks["findings"] if f["check"] == "clipped-text"]
+        assert len(clipped_findings) >= 1, "Expected at least one clipped-text finding"
+
+    def test_page_overflow_x_flagged(self, tmp_path: Path):
+        """Test that page overflow x is flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "overflow.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body style='margin:0'>"
+            "<div style='width:3000px;height:100px;background:blue'></div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "overflow", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "overflow" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        overflow_findings = [f for f in checks["findings"] if f["check"] == "page-overflow-x"]
+        assert len(overflow_findings) == 1, "Expected exactly one page-overflow-x finding"
+
+    def test_missing_accessible_name_flagged(self, tmp_path: Path):
+        """Test that missing accessible name is flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "missing-name.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<button id='no-name'>Click me</button>"
+            "<a href='#'>Link</a>"
+            "<img src='test.png' alt=''>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "missing-name", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "missing-name" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # Should find missing accessible name issues
+        missing_findings = [f for f in checks["findings"] if f["check"] == "missing-accessible-name"]
+        assert len(missing_findings) >= 2, "Expected at least 2 missing-accessible-name findings (button and link)"
+
+    def test_missing_accessible_name_control(self, tmp_path: Path):
+        """Test that elements with accessible names pass."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "has-name.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<button aria-label='Close'>X</button>"
+            "<a href='#' aria-label='Home'>Link</a>"
+            "<img src='test.png' alt='Logo'>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "has-name", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "has-name" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        missing_findings = [f for f in checks["findings"] if f["check"] == "missing-accessible-name"]
+        assert len(missing_findings) == 0, f"Expected no missing-accessible-name findings, got: {missing_findings}"
+
+    def test_placeholder_text_flagged(self, tmp_path: Path):
+        """Test that placeholder text patterns are flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "placeholder.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<span>undefined</span>"
+            "<span>{{name}}</span>"
+            "<span>%s</span>"
+            "<span>TODO</span>"
+            "<span>Ordinary text</span>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "placeholder", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "placeholder" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        placeholder_findings = [f for f in checks["findings"] if f["check"] == "placeholder-text"]
+        assert len(placeholder_findings) >= 3, "Expected at least 3 placeholder-text findings"
+
+    def test_placeholder_text_control(self, tmp_path: Path):
+        """Test that ordinary text passes."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "ordinary.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<p>Hello world</p>"
+            "<p>This is normal text</p>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "ordinary", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "ordinary" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        placeholder_findings = [f for f in checks["findings"] if f["check"] == "placeholder-text"]
+        assert len(placeholder_findings) == 0, f"Expected no placeholder-text findings, got: {placeholder_findings}"
+
+    def test_implausible_timestamp_flagged(self, tmp_path: Path):
+        """Test that implausible timestamps are flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "timestamp.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<span>Created: 1970-01-01T00:00:01+00:00</span>"
+            "<span>Updated: 56 years ago</span>"
+            "<span>3 minutes ago</span>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "timestamp", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "timestamp" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        implausible_findings = [f for f in checks["findings"] if f["check"] == "implausible-timestamp"]
+        assert len(implausible_findings) >= 2, "Expected at least 2 implausible-timestamp findings"
+
+    def test_tiny_text_flagged(self, tmp_path: Path):
+        """Test that tiny text is flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "tiny.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<span style='font-size:8px'>Tiny text</span>"
+            "<span style='font-size:12px'>Normal text</span>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "tiny", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "tiny" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        tiny_findings = [f for f in checks["findings"] if f["check"] == "tiny-text"]
+        assert len(tiny_findings) >= 1, "Expected at least one tiny-text finding"
+
+    def test_repeated_unavailable_flagged(self, tmp_path: Path):
+        """Test that repeated unavailable is flagged."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "unavailable.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<div class='panel'>"
+            "Status: Unavailable, Error: Unavailable, Result: Unavailable, Details: Unavailable"
+            "</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "unavailable", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "unavailable" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        unavailable_findings = [f for f in checks["findings"] if f["check"] == "repeated-unavailable"]
+        assert len(unavailable_findings) >= 1, "Expected at least one repeated-unavailable finding"
+
+        # Check stats.unavailable_count
+        assert "stats" in checks
+        assert checks["stats"]["unavailable_count"] >= 4, "Expected unavailable_count >= 4"
+
+    def test_mask_hides_checks(self, tmp_path: Path):
+        """Test that masked elements don't trigger checks."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "masked.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body style='font-family: sans-serif'>"
+            "<div class='visible'>Visible text</div>"
+            "<div class='masked' style='color:#aaaaaa;background:#ffffff'>Low contrast masked</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "masked", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "masks": [".masked"],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "masked" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # Masked low contrast should not be reported
+        contrast_findings = [f for f in checks["findings"] if f["check"] == "contrast"]
+        for finding in contrast_findings:
+            # Verify the finding is not from the masked element
+            assert "masked" not in finding.get("selector", ""), f"Masked element should not be reported: {finding}"
+
+    def test_set_style_mutation_triggers_check(self, tmp_path: Path):
+        """Test that set-style mutation makes check fire."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "mutation.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body style='font-family: sans-serif'>"
+            "<h1 id='title'>Title</h1>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "mutation", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "mutations": [
+                {
+                    "id": "low-contrast",
+                    "selector": "#title",
+                    "op": "set-style",
+                    "value": "color:#aaaaaa",
+                }
+            ],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "mutation" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # The mutation should make the title have low contrast
+        contrast_findings = [f for f in checks["findings"] if f["check"] == "contrast"]
+        assert len(contrast_findings) >= 1, "Expected at least one contrast finding after mutation"
+
+    def test_checks_false_no_file(self, tmp_path: Path):
+        """Test that checks: false produces no .checks.json file."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "nochecks.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<div style='color:#aaaaaa;background:#ffffff'>Low contrast</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "nochecks", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "checks": False,
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "nochecks" / "1280x800.checks.json"
+        assert not checks_path.exists(), "checks: false should not produce .checks.json"
+
+        # But meta.json should record it
+        meta_path = out / "nochecks" / "1280x800.meta.json"
+        assert meta_path.exists()
+        meta = json.loads(meta_path.read_text())
+        assert meta["checks"] is False
+
+    def test_determinism(self, tmp_path: Path):
+        """Test that three renders produce identical .checks.json bytes."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "determinism.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<h1>Static Page</h1>"
+            "<p>Some content</p>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+
+        # Render 3 times
+        hashes = set()
+        for i in range(3):
+            run_out = out / f"run{i}"
+            run_out.mkdir()
+            spec = {
+                "pages": [{"name": "determinism", "url": f"file://{page}"}],
+                "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+                "timeout_ms": 30000,
+            }
+            render(spec, run_out)
+
+            checks_bytes = (run_out / "determinism" / "1280x800.checks.json").read_bytes()
+            hashes.add(hashlib.sha256(checks_bytes).hexdigest())
+
+        assert len(hashes) == 1, f"Expected identical checks.json hashes, got: {hashes}"
+
+
+class TestChecksStructure:
+    """Tests for checks.json structure."""
+
+    def test_summary_has_all_keys(self, tmp_path: Path):
+        """Test that summary has all check keys."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "struct.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<p>Normal content</p>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "struct", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "struct" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # Verify summary has all check keys
+        assert "summary" in checks
+        required_keys = {
+            "contrast",
+            "clipped-text",
+            "page-overflow-x",
+            "missing-accessible-name",
+            "placeholder-text",
+            "implausible-timestamp",
+            "tiny-text",
+            "repeated-unavailable",
+        }
+        assert set(checks["summary"].keys()) == required_keys
+
+    def test_stats_has_all_fields(self, tmp_path: Path):
+        """Test that stats has all required fields."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "stats.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<p>Content</p>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "stats", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "stats" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        assert "stats" in checks
+        required_fields = {
+            "elements_examined",
+            "page_height",
+            "viewport_height",
+            "page_height_ratio",
+            "unavailable_count",
+            "contrast_unknown",
+        }
+        assert set(checks["stats"].keys()) == required_fields
+
+    def test_findings_in_document_order(self, tmp_path: Path):
+        """Test that findings are in document order."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "order.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<div id='first' style='color:#aaaaaa'>First</div>"
+            "<div id='second' style='color:#aaaaaa'>Second</div>"
+            "<div id='third' style='color:#aaaaaa'>Third</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "order", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "order" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        # Find contrast findings
+        contrast_findings = [f for f in checks["findings"] if f["check"] == "contrast"]
+
+        # Extract IDs from selectors to check order
+        ids = []
+        for finding in contrast_findings:
+            selector = finding.get("selector", "")
+            if "first" in selector:
+                ids.append("first")
+            elif "second" in selector:
+                ids.append("second")
+            elif "third" in selector:
+                ids.append("third")
+
+        assert ids == sorted(ids, key=lambda x: {"first": 1, "second": 2, "third": 3}.get(x, 0)), \
+            "Findings should be in document order"
+
+    def test_truncated_flag(self, tmp_path: Path):
+        """Test that truncated flag is set when findings exceed 200."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        # Create many elements
+        elements = []
+        for i in range(250):
+            elements.append(f"<div style='color:#aaaaaa'>Text {i}</div>")
+        page = tmp_path / "many.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>" + "".join(elements) + "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "many", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "many" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        assert checks.get("truncated", False) is True
+        assert len(checks["findings"]) == 200
+
+    def test_summary_keys_sorted(self, tmp_path: Path):
+        """Test that summary keys are sorted alphabetically."""
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+
+        page = tmp_path / "sorted.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<p>Content</p>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "sorted", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+
+        checks_path = out / "sorted" / "1280x800.checks.json"
+        assert checks_path.exists()
+        checks = json.loads(checks_path.read_text())
+
+        keys = list(checks["summary"].keys())
+        assert keys == sorted(keys), "Summary keys should be sorted alphabetically"

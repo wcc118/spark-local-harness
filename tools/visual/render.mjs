@@ -24,6 +24,59 @@ class MutationError extends Error {
   }
 }
 
+// Contrast computation helpers (run inside page.evaluate)
+const contrastCode = `
+const parse = (c) => { const m = c.match(/^rgba?\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)$/); return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null; };
+const over = (top, bottom) => { const a = top[3]; return [0, 1, 2].map((i) => top[i] * a + bottom[i] * (1 - a)).concat([1]); };
+const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+const ratio = (a, b) => { const [hi, lo] = lum(a) >= lum(b) ? [lum(a), lum(b)] : [lum(b), lum(a)]; return (hi + 0.05) / (lo + 0.05); };
+const getEffectiveBackground = (el) => {
+  let current = el;
+  const colors = [];
+  while (current && current !== document.documentElement) {
+    const style = window.getComputedStyle(current);
+    const bgColor = style.backgroundColor;
+    const bgImage = style.backgroundImage;
+    if (bgImage && bgImage !== 'none') return null; // Cannot compute
+    const parsed = parse(bgColor);
+    if (parsed && parsed[3] !== 0) {
+      colors.push(parsed);
+    }
+    current = current.parentElement;
+  }
+  // Default to white if no background found
+  if (colors.length === 0) return [255, 255, 255, 1];
+  // Composite from top to bottom
+  let result = [255, 255, 255, 1];
+  for (const c of colors) {
+    result = over(c, result);
+  }
+  return result;
+};
+const getAncestorPath = (el) => {
+  const path = [];
+  let current = el;
+  let depth = 0;
+  while (current && current !== document.documentElement && depth < 5) {
+    const tag = current.tagName.toLowerCase();
+    const id = current.id ? '#' + current.id : '';
+    let selector = tag + id;
+    if (!id && current.classList.length > 0) {
+      selector += '.' + current.classList[0];
+    }
+    if (current.parentElement) {
+      const siblings = Array.from(current.parentElement.children).filter(c => c.tagName === current.tagName);
+      const idx = siblings.indexOf(current);
+      if (idx > 0) selector += ':nth-of-type(' + (idx + 1) + ')';
+    }
+    path.unshift(selector);
+    current = current.parentElement;
+    depth++;
+  }
+  return path.join(' > ');
+};
+`;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -202,6 +255,359 @@ function validateMutation(mutation) {
   return errors;
 }
 
+// Check analysis function
+async function runChecks(page, viewport, masks) {
+  const maskSelector = masks.length > 0 ? masks.join(',') : null;
+
+  const result = await page.evaluate(({ vpWidth, vpHeight, maskSelector, contrastCode }) => {
+    // Inject contrast helpers
+    eval(contrastCode);
+
+    const elements = document.querySelectorAll('*');
+    const findings = [];
+    const summary = {
+      contrast: 0,
+      'clipped-text': 0,
+      'page-overflow-x': 0,
+      'missing-accessible-name': 0,
+      'placeholder-text': 0,
+      'implausible-timestamp': 0,
+      'tiny-text': 0,
+      'repeated-unavailable': 0
+    };
+    let elementsExamined = 0;
+    let pageHeight = document.documentElement.scrollHeight;
+    let viewportHeight = vpHeight;
+    let unavailableCount = 0;
+    let contrastUnknown = 0;
+    let pageOverflowX = false;
+
+    // Check for page overflow x
+    if (document.documentElement.scrollWidth > vpWidth + 1) {
+      pageOverflowX = true;
+      summary['page-overflow-x'] = 1;
+      findings.push({
+        check: 'page-overflow-x',
+        severity: 'warning',
+        selector: 'document.documentElement',
+        box: { x: 0, y: 0, width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+        text: null,
+        detail: `scrollWidth ${document.documentElement.scrollWidth} exceeds viewport width ${vpWidth}`
+      });
+    }
+
+    // Placeholder text patterns
+    const placeholderPatterns = [
+      'undefined',
+      'null',
+      'nan',
+      '[object object]',
+      'todo',
+      'tbd',
+      'lorem ipsum'
+    ];
+    const placeholderRegex = /\{\{.*?\}\}|%[sd]|\$\{.*?\}/i;
+
+    // Timestamp patterns
+    const epochPattern = /1970-01-01/;
+    const yearsAgoPattern = /\b(\d{2,}) years? ago\b/i;
+
+    // Iterate through all elements
+    for (const el of elements) {
+      const style = window.getComputedStyle(el);
+
+      // Skip non-rendered elements
+      if (style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.opacity === '0') {
+        continue;
+      }
+
+      // Skip zero-size elements
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        continue;
+      }
+
+      // Skip masked elements
+      if (maskSelector) {
+        try {
+          if (el.closest(maskSelector)) continue;
+        } catch (e) {
+          // Invalid selector already reported
+        }
+      }
+
+      elementsExamined++;
+
+      // Get ancestor path for selector
+      const selector = getAncestorPath(el);
+
+      // Get text content (visible)
+      const text = el.textContent ? el.textContent.trim() : null;
+
+      // 1. Contrast check
+      if (text && text.length > 0) {
+        const textColor = style.color;
+        const textColorParsed = parse(textColor);
+
+        if (textColorParsed) {
+          const bgColor = getEffectiveBackground(el);
+          if (bgColor) {
+            const r = ratio(textColorParsed, bgColor);
+            const fontSize = parseFloat(style.fontSize) || 0;
+            const fontWeight = parseInt(style.fontWeight) || 400;
+
+            // Large text: >= 24px or >= 18.66px with weight >= 700
+            const isLargeText = fontSize >= 24 || (fontSize >= 18.66 && fontWeight >= 700);
+            const threshold = isLargeText ? 3.0 : 4.5;
+
+            if (r < threshold) {
+              summary.contrast++;
+              findings.push({
+                check: 'contrast',
+                severity: 'warning',
+                selector: selector,
+                box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+                text: text.slice(0, 80),
+                detail: `contrast ratio ${r.toFixed(2)} (threshold: ${threshold})`
+              });
+            }
+          } else {
+            contrastUnknown++;
+          }
+        } else {
+          contrastUnknown++;
+        }
+      }
+
+      // 2. Clipped text check
+      if (text && text.length > 0) {
+        const overflowX = style.overflowX;
+        const overflowY = style.overflowY;
+        const textOverflow = style.textOverflow;
+        const scrollWidth = el.scrollWidth;
+        const scrollHeight = el.scrollHeight;
+        const clientWidth = el.clientWidth;
+        const clientHeight = el.clientHeight;
+
+        let isClipped = false;
+
+        if ((overflowX === 'hidden' || overflowX === 'clip' || overflowY === 'hidden' || overflowY === 'clip') &&
+            (scrollWidth > clientWidth + 1 || scrollHeight > clientHeight + 1)) {
+          isClipped = true;
+        }
+
+        if (textOverflow === 'ellipsis' && scrollWidth > clientWidth + 1) {
+          // Check if text is actually truncated
+          if (el.scrollWidth > el.clientWidth + 1) {
+            isClipped = true;
+          }
+        }
+
+        if (isClipped) {
+          summary['clipped-text']++;
+          findings.push({
+            check: 'clipped-text',
+            severity: 'warning',
+            selector: selector,
+            box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+            text: text.slice(0, 80),
+            detail: 'text overflow hidden'
+          });
+        }
+      }
+
+      // 3. Missing accessible name check
+      const tag = el.tagName.toLowerCase();
+      let needsAccessibleName = false;
+
+      if (tag === 'button' ||
+          (tag === 'a' && el.hasAttribute('href')) ||
+          (tag === 'img' && !el.hasAttribute('alt')) ||
+          (tag === 'input' && el.type !== 'hidden') ||
+          tag === 'select' ||
+          tag === 'textarea' ||
+          el.getAttribute('role') === 'button' ||
+          el.getAttribute('role') === 'link') {
+        needsAccessibleName = true;
+      }
+
+      if (needsAccessibleName) {
+        let hasAccessibleName = false;
+
+        // Check various sources of accessible name
+        if (tag === 'img') {
+          // alt attribute (empty is allowed)
+          if (el.hasAttribute('alt')) {
+            hasAccessibleName = true;
+          }
+        } else if (tag === 'input') {
+          if (el.type === 'button' || el.type === 'submit' || el.type === 'reset') {
+            // Use value attribute for button-type inputs
+            if (el.value && el.value.trim()) {
+              hasAccessibleName = true;
+            }
+          } else if (el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby') ||
+                     el.title || el.value) {
+            hasAccessibleName = true;
+          }
+        } else {
+          if (el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby') ||
+              el.title || (text && text.length > 0) || el.value) {
+            hasAccessibleName = true;
+          }
+        }
+
+        // Check for associated label
+        if (!hasAccessibleName) {
+          const id = el.id;
+          if (id) {
+            const label = document.querySelector(`label[for="${id}"]`);
+            if (label && label.textContent && label.textContent.trim()) {
+              hasAccessibleName = true;
+            }
+          }
+        }
+
+        if (!hasAccessibleName) {
+          summary['missing-accessible-name']++;
+          findings.push({
+            check: 'missing-accessible-name',
+            severity: 'warning',
+            selector: selector,
+            box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+            text: text ? text.slice(0, 80) : null,
+            detail: 'missing accessible name'
+          });
+        }
+      }
+
+      // 4. Placeholder text check
+      if (text && text.length > 0) {
+        const lowerText = text.toLowerCase();
+        let isPlaceholder = false;
+
+        for (const pattern of placeholderPatterns) {
+          if (lowerText === pattern) {
+            isPlaceholder = true;
+            break;
+          }
+        }
+
+        if (!isPlaceholder && placeholderRegex.test(text)) {
+          isPlaceholder = true;
+        }
+
+        if (isPlaceholder) {
+          summary['placeholder-text']++;
+          findings.push({
+            check: 'placeholder-text',
+            severity: 'error',
+            selector: selector,
+            box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+            text: text.slice(0, 80),
+            detail: 'placeholder text detected'
+          });
+        }
+      }
+
+      // 5. Implausible timestamp check
+      if (text && text.length > 0) {
+        let isImplausible = false;
+
+        if (epochPattern.test(text)) {
+          isImplausible = true;
+        }
+
+        const yearsMatch = text.match(yearsAgoPattern);
+        if (yearsMatch && parseInt(yearsMatch[1]) >= 20) {
+          isImplausible = true;
+        }
+
+        if (isImplausible) {
+          summary['implausible-timestamp']++;
+          findings.push({
+            check: 'implausible-timestamp',
+            severity: 'error',
+            selector: selector,
+            box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+            text: text.slice(0, 80),
+            detail: 'implausible timestamp'
+          });
+        }
+      }
+
+      // 6. Tiny text check
+      if (text && text.length > 0) {
+        const fontSize = parseFloat(style.fontSize) || 0;
+        if (fontSize < 10) {
+          summary['tiny-text']++;
+          findings.push({
+            check: 'tiny-text',
+            severity: 'info',
+            selector: selector,
+            box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+            text: text.slice(0, 80),
+            detail: `font size ${fontSize}px`
+          });
+        }
+      }
+
+      // 7. Repeated unavailable check
+      if (text && text.length > 0) {
+        const count = (text.match(/Unavailable/gi) || []).length;
+        if (count > 0) {
+          unavailableCount += count;
+          // Check if count >= 3 in this element
+          if (count >= 3) {
+            summary['repeated-unavailable']++;
+            findings.push({
+              check: 'repeated-unavailable',
+              severity: 'info',
+              selector: selector,
+              box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+              text: text.slice(0, 80),
+              detail: `contains 'Unavailable' ${count} times`
+            });
+          }
+        }
+      }
+
+      // Stop if we have enough findings
+      if (findings.length >= FINDINGS_MAX) {
+        break;
+      }
+    }
+
+    const truncated = findings.length >= FINDINGS_MAX;
+    if (truncated) {
+      findings.length = FINDINGS_MAX;
+    }
+
+    const pageHeightRatio = pageHeight > 0 && viewportHeight > 0
+      ? Math.round((pageHeight / viewportHeight) * 100) / 100
+      : 0;
+
+    return {
+      version: 1,
+      stats: {
+        elements_examined: elementsExamined,
+        page_height: pageHeight,
+        viewport_height: viewportHeight,
+        page_height_ratio: pageHeightRatio,
+        unavailable_count: unavailableCount,
+        contrast_unknown: contrastUnknown
+      },
+      summary: summary,
+      findings: findings,
+      truncated: truncated
+    };
+  }, { vpWidth: viewport.width, vpHeight: viewport.height, maskSelector: maskSelector, contrastCode: contrastCode });
+
+  return result;
+}
+
 // Validate spec before launching browser
 const errors = [];
 for (const page of spec.pages) {
@@ -227,6 +633,12 @@ if (spec.masks) {
     if (!isValidSelector(mask)) {
       errors.push(`Invalid mask selector: ${mask}`);
     }
+  }
+}
+
+if (spec.checks !== undefined) {
+  if (typeof spec.checks !== 'boolean') {
+    errors.push(`Invalid checks value: must be boolean, got ${typeof spec.checks}`);
   }
 }
 
@@ -258,6 +670,10 @@ if (errors.length > 0) {
 
 // Blocked request tracking
 const blockedUrls = new Set();
+
+// Check configuration
+const CHECKS_DEFAULT = true;
+const FINDINGS_MAX = 200;
 
 async function run() {
   let browser;
@@ -305,7 +721,8 @@ async function run() {
             pageOutDir,
             spec.masks || [],
             spec.mutations || [],
-            timeoutMs
+            timeoutMs,
+            spec.checks !== undefined ? spec.checks : CHECKS_DEFAULT
           );
           results.push(result);
         } catch (e) {
@@ -340,7 +757,7 @@ async function run() {
   process.exit(0);
 }
 
-async function renderPage(browser, url, viewport, vpName, pageName, outDir, masks, mutations, timeoutMs) {
+async function renderPage(browser, url, viewport, vpName, pageName, outDir, masks, mutations, timeoutMs, doChecks = CHECKS_DEFAULT) {
   const ctx = await browser.newContext({
     viewport: viewport,
     deviceScaleFactor: 1,
@@ -501,6 +918,13 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
     }
   }
 
+  // Checks analysis (after mutations, before screenshot)
+  let checksOutput = null;
+  if (doChecks) {
+    const checksResult = await runChecks(page, viewport, masks);
+    checksOutput = checksResult;
+  }
+
   // Screenshot
   const pngBuffer = await page.screenshot({ fullPage: false });
 
@@ -600,9 +1024,15 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
     masks: masks,
     mutations: appliedMutations,
     url: url,
-    blocked_urls: Array.from(blockedUrls)
+    blocked_urls: Array.from(blockedUrls),
+    checks: doChecks
   };
   writeFileSync(`${outDir}/${vpName}.meta.json`, JSON.stringify(metaJson, null, 2));
+
+  // Checks output
+  if (checksOutput !== null) {
+    writeFileSync(`${outDir}/${vpName}.checks.json`, JSON.stringify(checksOutput, null, 2));
+  }
 
   await ctx.close();
 
