@@ -143,6 +143,132 @@ Exit codes:
 Output includes unique hash counts for PNG, text, and ARIA outputs, plus
 which artifact types differ.
 
+## Mutations
+
+Mutations allow you to deterministically seed known defects into pages before
+capturing screenshots. This is useful for testing how the rendering pipeline
+handles various visual issues like wrong numbers, hidden elements, low contrast,
+or overflow.
+
+### Spec Field
+
+Add a `mutations` field to your spec as an optional array (max 50 items) of
+mutation objects:
+
+```json
+{
+  "mutations": [
+    {
+      "id": "unique-id",
+      "selector": "css-selector",
+      "op": "set-text|set-style|set-attr|remove",
+      "value": "mutation-specific-value",
+      "index": 0
+    }
+  ]
+}
+```
+
+### Mutation Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | Yes | Unique identifier matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` |
+| `selector` | Yes | CSS selector (non-empty, no control chars) |
+| `op` | Yes | Operation: `set-text`, `set-style`, `set-attr`, `remove` |
+| `value` | Conditional | Required for `set-text`, `set-style`, `set-attr`; must be absent for `remove` |
+| `index` | No | Zero-based index or `"all"` to change all matches; defaults to 0 |
+
+### Operations
+
+| Op | Value Format | Description |
+|----|--------------|-------------|
+| `set-text` | String (max 500 chars) | Sets `textContent` of matched element(s) |
+| `set-style` | CSS declarations | Adds inline style with `!important` (no `{`, `}`, `<`, `>`, or `url(`) |
+| `set-attr` | `name=value` | Sets attribute (allowed: `aria-label`, `title`, `alt`, `class`, or `data-*`) |
+| `remove` | (no value) | Removes the element from the DOM |
+
+### Behavior
+
+- Mutations are applied after page load, after animation-off and mask stylesheets,
+  but before the screenshot and all other outputs.
+- Mutations are applied in list order.
+- If a selector matches no elements, or `index` is out of range, rendering
+  **fails** with exit code 4 and a JSON error on stderr naming the mutation id.
+- Never skips silently; always fail loudly on errors.
+
+### Example
+
+Seed a wrong number, hide a loading indicator, and set aria-label:
+
+```json
+{
+  "pages": [
+    {
+      "name": "dashboard",
+      "url": "http://127.0.0.1:8765/"
+    }
+  ],
+  "viewports": [
+    {"name": "1280x800", "width": 1280, "height": 800}
+  ],
+  "mutations": [
+    {
+      "id": "wrong-number",
+      "selector": ".stat-value",
+      "op": "set-text",
+      "value": "999,999",
+      "index": 1
+    },
+    {
+      "id": "hide-loader",
+      "selector": ".loading-indicator",
+      "op": "remove"
+    },
+    {
+      "id": "aria-label",
+      "selector": ".chart",
+      "op": "set-attr",
+      "value": "aria-label=Revenue Chart"
+    }
+  ],
+  "timeout_ms": 30000
+}
+```
+
+### Meta Output
+
+The `.meta.json` file records the applied mutations with matched counts:
+
+```json
+{
+  "sha256_png": "...",
+  "playwright_version": "1.63.0",
+  "browser_version": "chromium-...",
+  "viewport": {"width": 1280, "height": 800},
+  "masks": [".loader"],
+  "mutations": [
+    {
+      "id": "wrong-number",
+      "selector": ".stat-value",
+      "op": "set-text",
+      "index": 1,
+      "matched": 2
+    },
+    {
+      "id": "hide-loader",
+      "selector": ".loading-indicator",
+      "op": "remove",
+      "matched": 1
+    }
+  ],
+  "url": "http://127.0.0.1:8765/",
+  "blocked_urls": []
+}
+```
+
+Note: Values are not recorded in meta.json for security and determinism.
+
 ## Determinism Recipe for Live Pages
 
 Live dashboards change between renders. To make them deterministic:

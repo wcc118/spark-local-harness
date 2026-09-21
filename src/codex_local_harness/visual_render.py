@@ -35,10 +35,94 @@ def validate_selector(selector: str) -> bool:
     return True
 
 
-DEFAULT_VIEWPORTS: tuple[dict[str, Any], ...] = (
-    {'name': '1280x800', 'width': 1280, 'height': 800},
-    {'name': '390x844', 'width': 390, 'height': 844},
-)
+def validate_mutation(mutation: dict[str, Any]) -> list[str]:
+    """Validate a single mutation object and return list of errors."""
+    errors = []
+
+    # Check required fields
+    if 'id' not in mutation:
+        errors.append("Mutation missing 'id' field")
+    elif not isinstance(mutation['id'], str):
+        errors.append(f"Mutation 'id' must be a string: {mutation.get('id')}")
+    elif not validate_name(mutation['id']):
+        errors.append(f"Invalid mutation id: {mutation['id']}")
+    else:
+        # Check for control characters in id (more strict than validate_name)
+        for char in mutation['id']:
+            if ord(char) < 32 or ord(char) == 127:
+                errors.append(f"Mutation id contains control characters: {repr(mutation['id'])}")
+                break
+
+    if 'selector' not in mutation:
+        errors.append("Mutation missing 'selector' field")
+    elif not isinstance(mutation['selector'], str):
+        errors.append(f"Mutation 'selector' must be a string: {mutation.get('selector')}")
+    elif not mutation['selector']:
+        errors.append("Mutation selector cannot be empty")
+    else:
+        # Check for control characters in selector
+        for char in mutation['selector']:
+            if ord(char) < 32 or ord(char) == 127:
+                errors.append(f"Mutation selector contains control characters: {repr(mutation['selector'])}")
+                break
+
+    if 'op' not in mutation:
+        errors.append("Mutation missing 'op' field")
+    elif mutation['op'] not in ('set-text', 'set-style', 'set-attr', 'remove'):
+        errors.append(f"Invalid mutation op: {mutation['op']}. Must be one of: set-text, set-style, set-attr, remove")
+
+    # Value validation depends on op
+    if 'op' in mutation:
+        op = mutation['op']
+        value = mutation.get('value')
+
+        if op == 'set-text':
+            if 'value' not in mutation:
+                errors.append("Mutation with op 'set-text' missing 'value' field")
+            elif not isinstance(value, str):
+                errors.append(f"Mutation 'value' must be a string for set-text: {type(value).__name__}")
+            elif len(value) > 500:
+                errors.append(f"Mutation 'value' exceeds 500 characters for set-text: {len(value)}")
+
+        elif op == 'set-style':
+            if 'value' not in mutation:
+                errors.append("Mutation with op 'set-style' missing 'value' field")
+            elif not isinstance(value, str):
+                errors.append(f"Mutation 'value' must be a string for set-style: {type(value).__name__}")
+            else:
+                # Reject values containing {, }, <, > or url(
+                for disallowed in ('{', '}', '<', '>', 'url('):
+                    if disallowed in value:
+                        errors.append(f"Mutation 'value' contains disallowed character sequence '{disallowed}' for set-style")
+                        break
+
+        elif op == 'set-attr':
+            if 'value' not in mutation:
+                errors.append("Mutation with op 'set-attr' missing 'value' field")
+            elif not isinstance(value, str):
+                errors.append(f"Mutation 'value' must be a string for set-attr: {type(value).__name__}")
+            else:
+                # Parse name=value
+                if '=' not in value:
+                    errors.append(f"Mutation 'value' must be name=value format for set-attr: {value}")
+                else:
+                    name, _ = value.split('=', 1)
+                    allowed_names = ('aria-label', 'title', 'alt', 'class')
+                    if not (name in allowed_names or name.startswith('data-')):
+                        errors.append(f"Mutation 'value' has disallowed attribute name for set-attr: {name}")
+
+        elif op == 'remove':
+            if 'value' in mutation:
+                errors.append("Mutation with op 'remove' must not have 'value' field")
+
+    # index validation
+    if 'index' in mutation:
+        index = mutation['index']
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            if index != "all":
+                errors.append(f"Mutation 'index' must be a non-negative integer or 'all': {index}")
+
+    return errors
 
 
 def validate_spec(spec: dict[str, Any]) -> list[str]:
@@ -84,7 +168,41 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
             if not validate_selector(mask):
                 errors.append(f"Invalid mask selector: {mask}")
 
+    # Validate mutations if present
+    if 'mutations' in spec and not isinstance(spec['mutations'], list):
+        errors.append("'mutations' must be a list")
+    if 'mutations' in spec and isinstance(spec['mutations'], list):
+        mutations = spec['mutations']
+        if len(mutations) > 50:
+            errors.append(f"Too many mutations: {len(mutations)} (max 50)")
+
+        seen_ids: set[str] = set()
+        for i, mutation in enumerate(mutations):
+            if not isinstance(mutation, dict):
+                errors.append(f"Mutation {i} is not an object")
+                continue
+            # Check for extra fields
+            allowed_fields = {'id', 'selector', 'op', 'value', 'index'}
+            for key in mutation:
+                if key not in allowed_fields:
+                    errors.append(f"Mutation {i} has unknown field: {key}")
+                    break
+            # Validate mutation
+            mutation_errors = validate_mutation(mutation)
+            errors.extend(mutation_errors)
+            # Check for duplicate ids (only if id validation passed)
+            if 'id' in mutation and isinstance(mutation['id'], str):
+                if mutation['id'] in seen_ids:
+                    errors.append(f"Duplicate mutation id: {mutation['id']}")
+                seen_ids.add(mutation['id'])
+
     return errors
+
+
+DEFAULT_VIEWPORTS: tuple[dict[str, Any], ...] = (
+    {'name': '1280x800', 'width': 1280, 'height': 800},
+    {'name': '390x844', 'width': 390, 'height': 844},
+)
 
 
 def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = None, node: str = "node", timeout: float = 300.0) -> dict[str, Any]:
