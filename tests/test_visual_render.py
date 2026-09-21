@@ -27,7 +27,7 @@ TESTS_DIR = Path(__file__).parent
 
 def skip_if_playwright_missing() -> str | None:
     """Skip if Playwright is not installed. Returns reason or None."""
-    visual_dir = Path(os.environ.get('CODEX_LOCAL_VISUAL_DIR', '/home/connellwc83/.local/share/codex-local-harness/visual'))
+    visual_dir = Path(os.environ.get('CODEX_LOCAL_VISUAL_DIR', str(Path.home() / '.local' / 'share' / 'codex-local-harness' / 'visual')))
     if not (visual_dir / 'package.json').exists():
         return f"Playwright not found at {visual_dir}"
     if not (visual_dir / 'node_modules' / 'playwright').exists():
@@ -49,7 +49,7 @@ def static_html_fixture(tmp_path: Path) -> str:
         .header { padding: 20px; background: #f0f0f0; }
         .content { padding: 20px; }
         .footer { padding: 20px; background: #e0e0e0; }
-        .masked { visibility: hidden; }
+        .masked { background: #c00; color: #fff; padding: 10px; }
     </style>
 </head>
 <body>
@@ -272,8 +272,9 @@ class TestRenderIntegration:
         for i in range(5):
             run_out = out_dir / f"run{i}"
             run_out.mkdir()
-            result = render(spec, run_out)
-            hashes.append(result['hashes']['png'])
+            render(spec, run_out)
+            png = (run_out / "static-page" / "1280x800.png").read_bytes()
+            hashes.append(hashlib.sha256(png).hexdigest())
 
         # All hashes should be identical
         assert len(set(hashes)) == 1, f"Expected identical hashes, got: {hashes}"
@@ -301,14 +302,14 @@ class TestRenderIntegration:
 
         # Render unmasked
         render(spec, out_unmasked)
-        unmasked_png = (out_unmasked / "1280x800.png").read_bytes()
-        unmasked_text = (out_unmasked / "1280x800.text.txt").read_text()
+        unmasked_png = (out_unmasked / "test-page" / "1280x800.png").read_bytes()
+        unmasked_text = (out_unmasked / "test-page" / "1280x800.text.txt").read_text()
 
         # Render masked (hide .masked class)
         spec['masks'] = ['.masked']
         render(spec, out_masked)
-        masked_png = (out_masked / "1280x800.png").read_bytes()
-        masked_text = (out_masked / "1280x800.text.txt").read_text()
+        masked_png = (out_masked / "test-page" / "1280x800.png").read_bytes()
+        masked_text = (out_masked / "test-page" / "1280x800.text.txt").read_text()
 
         # PNGs should be different
         assert unmasked_png != masked_png, "PNGs should differ when masked"
@@ -441,7 +442,7 @@ class TestCLIIntegration:
         script_path = Path(__file__).parent.parent / "tools" / "visual" / "render.mjs"
 
         result = subprocess.run(
-            [node_path, '--input-type=module', str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
+            [node_path, str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
             env={**os.environ, 'CODEX_LOCAL_VISUAL_DIR': os.environ.get('CODEX_LOCAL_VISUAL_DIR', '/home/connellwc83/.local/share/codex-local-harness/visual')},
             capture_output=True,
             text=True
@@ -518,7 +519,7 @@ class TestMetaJsonFields:
         assert meta_path.exists()
 
         meta = json.loads(meta_path.read_text())
-        
+
         required_fields = [
             'sha256_png', 'playwright_version', 'browser_version',
             'launch_args', 'viewport', 'masks', 'url'
@@ -562,7 +563,7 @@ class TestNodeScript:
         script_path = Path(__file__).parent.parent / "tools" / "visual" / "render.mjs"
 
         result = subprocess.run(
-            [node_path, '--input-type=module', str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
+            [node_path, str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
             env={**os.environ, 'CODEX_LOCAL_VISUAL_DIR': os.environ.get('CODEX_LOCAL_VISUAL_DIR', '/home/connellwc83/.local/share/codex-local-harness/visual')},
             capture_output=True,
             text=True
@@ -586,7 +587,7 @@ class TestNodeScript:
         script_path = Path(__file__).parent.parent / "tools" / "visual" / "render.mjs"
 
         result = subprocess.run(
-            [node_path, '--input-type=module', str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
+            [node_path, str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
             env={**os.environ, 'CODEX_LOCAL_VISUAL_DIR': os.environ.get('CODEX_LOCAL_VISUAL_DIR', '/home/connellwc83/.local/share/codex-local-harness/visual')},
             capture_output=True,
             text=True
@@ -617,7 +618,7 @@ class TestNodeScript:
         script_path = Path(__file__).parent.parent / "tools" / "visual" / "render.mjs"
 
         result = subprocess.run(
-            [node_path, '--input-type=module', str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
+            [node_path, str(script_path), '--spec', str(spec_file), '--out', str(out_dir)],
             env={**os.environ, 'CODEX_LOCAL_VISUAL_DIR': os.environ.get('CODEX_LOCAL_VISUAL_DIR', '/home/connellwc83/.local/share/codex-local-harness/visual')},
             capture_output=True,
             text=True
@@ -650,7 +651,7 @@ class TestAriaSnapshot:
         assert aria_path.exists()
 
         content = aria_path.read_text()
-        
+
         # Should be valid JSON
         try:
             parsed = json.loads(content)
@@ -658,3 +659,88 @@ class TestAriaSnapshot:
         except json.JSONDecodeError:
             # Fallback: just check it's not empty
             assert len(content) > 0, "ARIA snapshot should not be empty"
+
+
+class TestCheckDeterminism:
+    """check-determinism must give real verdicts and never pass vacuously."""
+
+    def _run(self, capsys, argv: list[str]) -> tuple[int, dict | None]:
+        from codex_local_harness.visual_render_cli import main
+
+        code = main(["check-determinism", "--json", *argv])
+        out = capsys.readouterr().out.strip()
+        return code, (json.loads(out) if out else None)
+
+    def test_static_page_is_deterministic(self, capsys, static_html_fixture: str):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        code, summary = self._run(
+            capsys,
+            ["--url", static_html_fixture, "--name", "static", "--viewport", "1280x800", "--runs", "3"],
+        )
+        assert code == 0
+        assert summary["unique_png_hashes"] == 1
+        assert summary["unique_text_hashes"] == 1
+        assert summary["unique_aria_hashes"] == 1
+        assert summary["all_identical"] is True
+
+    def test_volatile_page_is_reported(self, capsys, tmp_path: Path):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        page = tmp_path / "volatile.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body><div id='v'></div>"
+            "<script>document.getElementById('v').textContent = String(Math.random());</script>"
+            "</body></html>"
+        )
+        code, summary = self._run(
+            capsys,
+            ["--url", f"file://{page}", "--name", "volatile", "--viewport", "1280x800", "--runs", "4"],
+        )
+        assert code == 1
+        assert "text" in summary["differing_artifacts"]
+        assert summary["all_identical"] is False
+
+    def test_failed_runs_never_pass_vacuously(self, capsys, tmp_path: Path):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        missing = tmp_path / "does-not-exist.html"
+        code, summary = self._run(
+            capsys,
+            ["--url", f"file://{missing}", "--name", "missing", "--viewport", "1280x800", "--runs", "2"],
+        )
+        assert code == 2
+        assert summary is None
+
+
+class TestMultipleMasks:
+    """Every mask selector must take effect, not only the first."""
+
+    def test_multiple_masks_all_applied(self, tmp_path: Path):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        page = tmp_path / "two-masks.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<p>Stable text</p>"
+            "<div class='first'>FIRST-VOLATILE</div>"
+            "<div class='second'>SECOND-VOLATILE</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "two-masks", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "masks": [".first", ".second"],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+        text = (out / "two-masks" / "1280x800.text.txt").read_text()
+        assert "Stable text" in text
+        assert "FIRST-VOLATILE" not in text
+        assert "SECOND-VOLATILE" not in text

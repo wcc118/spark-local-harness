@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Deterministic screenshot render tool using Playwright.
- * 
+ *
  * Usage: node render.mjs --spec FILE --out DIR
- * 
+ *
  * Exit codes:
  *   0 - Success
  *   2 - Bad spec file
@@ -11,24 +11,24 @@
  *   4 - Page failure
  */
 import { createRequire } from 'node:module';
-import { resolve, dirname, basename } from 'node:path';
+import { homedir } from 'node:os';
+import { resolve, dirname, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Get Playwright directory from environment or default
-const playwrightDir = process.env.CODEX_LOCAL_VISUAL_DIR || 
-  '/home/connellwc83/.local/share/codex-local-harness/visual';
+const playwrightDir = process.env.CODEX_LOCAL_VISUAL_DIR ||
+  join(homedir(), '.local', 'share', 'codex-local-harness', 'visual');
+const requireFromPinnedDir = createRequire(resolve(playwrightDir, 'package.json'));
 
 // Resolve Playwright from the pinned directory
 let playwrightPackage;
 try {
-  const packageJsonPath = resolve(playwrightDir, 'package.json');
-  playwrightPackage = createRequire(packageJsonPath)('playwright');
+  playwrightPackage = requireFromPinnedDir('playwright');
 } catch (e) {
   console.error(JSON.stringify({ error: 'playwright_missing', message: e.message, dir: playwrightDir }));
   process.exit(3);
@@ -96,8 +96,8 @@ function isValidName(name) {
 
 // Validate URL patterns
 function isValidUrl(url) {
-  return url.startsWith('http://127.0.0.1') || 
-         url.startsWith('http://localhost') || 
+  return url.startsWith('http://127.0.0.1') ||
+         url.startsWith('http://localhost') ||
          url.startsWith('file://');
 }
 
@@ -158,11 +158,11 @@ async function run() {
   try {
     // Create the output directory
     const outPath = outDir;
-    
+
     for (const pageSpec of spec.pages) {
       const pageName = pageSpec.name;
       const pageUrl = pageSpec.url;
-      
+
       // Create page output directory
       const pageOutDir = `${outPath}/${pageName}`;
       try {
@@ -174,17 +174,17 @@ async function run() {
 
       for (const viewport of spec.viewports) {
         const vpName = viewport.name;
-        const viewportObj = { 
-          width: viewport.width, 
-          height: viewport.height 
+        const viewportObj = {
+          width: viewport.width,
+          height: viewport.height
         };
-        
+
         try {
           const result = await renderPage(
-            browser, 
-            pageUrl, 
-            viewportObj, 
-            vpName, 
+            browser,
+            pageUrl,
+            viewportObj,
+            vpName,
             pageName,
             pageOutDir,
             spec.masks || [],
@@ -229,33 +229,28 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
     reducedMotion: 'reduce'
   });
 
-  // Set up network blocking
-  ctx.on('request', (request) => {
-    const urlStr = request.url();
-    // Allow: target's own origin, file:, data:, blob:
-    const parsedUrl = new URL(urlStr);
-    const targetOrigin = new URL(url).origin;
-    
-    if (urlStr.startsWith('file:') || urlStr.startsWith('data:') || urlStr.startsWith('blob:')) {
-      return;
-    }
-    
-    // Check if same origin as target
-    try {
-      if (parsedUrl.origin === targetOrigin) {
-        return;
+  // Network restriction: allow the target's own origin plus file:, data: and blob:
+  const targetOrigin = url.startsWith('file:') ? null : new URL(url).origin;
+  await ctx.route('**/*', async (route) => {
+    const urlStr = route.request().url();
+    let allowed = urlStr.startsWith('file:') || urlStr.startsWith('data:') || urlStr.startsWith('blob:');
+    if (!allowed && targetOrigin) {
+      try {
+        allowed = new URL(urlStr).origin === targetOrigin;
+      } catch (e) {
+        allowed = false;
       }
-    } catch (e) {
-      // Ignore URL parsing errors
     }
-    
-    // Block the request
-    void request.abort().catch(() => {});
-    blockedUrls.add(urlStr);
+    if (allowed) {
+      await route.continue();
+    } else {
+      blockedUrls.add(urlStr);
+      await route.abort();
+    }
   });
 
   const page = await ctx.newPage();
-  
+
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: timeoutMs });
   } catch (e) {
@@ -264,8 +259,8 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
   }
 
   // Apply styling to disable animations/transitions
-  await page.addStyleTag({ 
-    content: '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}' 
+  await page.addStyleTag({
+    content: '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}'
   });
 
   // Wait for fonts and settle
@@ -274,15 +269,15 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
   } catch (e) {
     // Ignore font ready errors
   }
-  
+
   await page.waitForTimeout(300);
 
   // Apply masks (hide elements)
   if (masks.length > 0) {
-    const maskStyles = masks.map(selector => 
+    const maskStyles = masks.map(selector =>
       `${selector}{visibility:hidden!important}`
-    ).join(';');
-    
+    ).join('\n');
+
     try {
       await page.addStyleTag({ content: maskStyles });
     } catch (e) {
@@ -292,7 +287,7 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
 
   // Screenshot
   const pngBuffer = await page.screenshot({ fullPage: false });
-  
+
   // Calculate SHA256
   const pngHash = createHash('sha256').update(pngBuffer).digest('hex');
 
@@ -311,34 +306,34 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
   writeFileSync(`${outDir}/${vpName}.aria.txt`, ariaText);
 
   // Layout analysis
-  const layoutData = await page.evaluate((vpWidth, vpHeight) => {
+  const layoutData = await page.evaluate(({ vpWidth, vpHeight }) => {
     const elements = document.querySelectorAll('*');
     const overflowing = [];
-    
+
     for (const el of elements) {
       const rect = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
-      
+
       // Check for overflow
       const scrollWidth = el.scrollWidth;
       const scrollHeight = el.scrollHeight;
       const clientWidth = el.clientWidth;
       const clientHeight = el.clientHeight;
-      
+
       let isOverflowing = false;
-      
+
       // Check if scroll dimensions exceed client dimensions
       if (scrollWidth > clientWidth + 1 || scrollHeight > clientHeight + 1) {
         if (style.overflow !== 'visible') {
           isOverflowing = true;
         }
       }
-      
+
       // Check if element extends beyond viewport
       if (rect.right > vpWidth || rect.bottom > vpHeight) {
         isOverflowing = true;
       }
-      
+
       if (isOverflowing) {
         overflowing.push({
           tag: el.tagName.toLowerCase(),
@@ -353,14 +348,14 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
           text: el.textContent ? el.textContent.slice(0, 80) : null
         });
       }
-      
+
       if (overflowing.length >= 50) {
         break;
       }
     }
-    
+
     return overflowing;
-  }, viewport.width, viewport.height);
+  }, { vpWidth: viewport.width, vpHeight: viewport.height });
 
   const layoutJson = {
     viewport: { width: viewport.width, height: viewport.height },
@@ -370,8 +365,8 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
 
   // Meta information
   const browserInfo = await browser.version();
-  const playwrightVersion = playwrightPackage.version;
-  
+  const playwrightVersion = requireFromPinnedDir('playwright/package.json').version;
+
   const metaJson = {
     sha256_png: pngHash,
     playwright_version: playwrightVersion,

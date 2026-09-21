@@ -35,10 +35,16 @@ def validate_selector(selector: str) -> bool:
     return True
 
 
+DEFAULT_VIEWPORTS: tuple[dict[str, Any], ...] = (
+    {'name': '1280x800', 'width': 1280, 'height': 800},
+    {'name': '390x844', 'width': 390, 'height': 844},
+)
+
+
 def validate_spec(spec: dict[str, Any]) -> list[str]:
     """Validate spec structure and return list of errors."""
     errors = []
-    
+
     # Check required fields
     if 'pages' not in spec or not isinstance(spec['pages'], list):
         errors.append("Missing or invalid 'pages' field")
@@ -55,7 +61,7 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
                 errors.append(f"Page {i} missing 'url'")
             elif not validate_url(page['url']):
                 errors.append(f"Invalid URL: {page['url']}")
-    
+
     if 'viewports' not in spec or not isinstance(spec['viewports'], list):
         errors.append("Missing or invalid 'viewports' field")
     else:
@@ -71,38 +77,42 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
                 errors.append(f"Viewport {i} missing or invalid 'width'")
             if 'height' not in vp or not isinstance(vp['height'], int):
                 errors.append(f"Viewport {i} missing or invalid 'height'")
-    
+
     # Validate masks if present
     if 'masks' in spec and isinstance(spec['masks'], list):
         for i, mask in enumerate(spec['masks']):
             if not validate_selector(mask):
                 errors.append(f"Invalid mask selector: {mask}")
-    
+
     return errors
 
 
 def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = None, node: str = "node", timeout: float = 300.0) -> dict[str, Any]:
     """Render screenshots using the Node ESM script.
-    
+
     Args:
         spec: Specification dict with pages, viewports, masks, timeout_ms
         out_dir: Output directory for rendered files
         visual_dir: Path to pinned Playwright directory (default: CODEX_LOCAL_VISUAL_DIR env or default)
         node: Node executable path
         timeout: Process timeout in seconds
-    
+
     Returns:
         Parsed summary from the Node script
-    
+
     Raises:
         ValueError: If spec validation fails
         RuntimeError: If Playwright is missing or Node returns non-zero exit code
     """
+    # Default viewports when the spec does not name any
+    if 'viewports' not in spec:
+        spec = {**spec, 'viewports': [dict(v) for v in DEFAULT_VIEWPORTS]}
+
     # Validate spec
     errors = validate_spec(spec)
     if errors:
         raise ValueError(f"Invalid spec: {'; '.join(errors)}")
-    
+
     # Resolve visual directory
     if visual_dir is None:
         visual_dir = Path(
@@ -119,7 +129,7 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
                 visual_dir = Path(visual_dir_str)
             else:
                 visual_dir = Path('/home/connellwc83/.local/share/codex-local-harness/visual')
-    
+
     # Check Playwright is installed
     package_json = visual_dir / 'package.json'
     if not package_json.exists():
@@ -128,7 +138,7 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
             f"Playwright not found at {visual_dir}. "
             f"Install with: {install_cmd}"
         )
-    
+
     # Check node_modules contains playwright
     node_modules = visual_dir / 'node_modules' / 'playwright'
     if not node_modules.exists():
@@ -137,33 +147,32 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
             f"Playwright module not found at {visual_dir / 'node_modules' / 'playwright'}. "
             f"Install with: {install_cmd}"
         )
-    
+
     # Create spec file
     import tempfile
     import os
-    
+
     # Add visual_dir to spec for Node script
     spec_with_dir = dict(spec)
     spec_with_dir['visual_dir'] = str(visual_dir)
-    
+
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         json.dump(spec_with_dir, f)
         spec_file = f.name
-    
+
     try:
         # Build argument list for subprocess (no shell)
         cmd = [
             node,
-            '--input-type=module',
-            str(Path(__file__).parent.parent / 'tools' / 'visual' / 'render.mjs'),
+            str(Path(__file__).resolve().parents[2] / "tools" / "visual" / "render.mjs"),
             '--spec', spec_file,
             '--out', str(out_dir)
         ]
-        
+
         # Build minimal environment with CODEX_LOCAL_VISUAL_DIR
         env = os.environ.copy()
         env['CODEX_LOCAL_VISUAL_DIR'] = str(visual_dir)
-        
+
         # Run the Node script
         result = subprocess.run(
             cmd,
@@ -172,7 +181,7 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
             text=True,
             timeout=timeout
         )
-        
+
         # Check exit code
         if result.returncode == 2:
             # Bad spec - the Node script already printed JSON error
@@ -208,14 +217,14 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
                 f"stdout: {result.stdout.strip()}. "
                 f"stderr: {result.stderr.strip()}"
             )
-        
+
         # Parse and return summary
         try:
             summary = json.loads(result.stdout.strip())
             return summary
         except json.JSONDecodeError:
             raise RuntimeError(f"Failed to parse summary from Node script: {result.stdout.strip()}")
-    
+
     finally:
         # Clean up spec file
         try:
@@ -227,7 +236,7 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
 def main() -> int:
     """CLI entry point for visual_render."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         prog='codex-visual-render',
         description='Render deterministic screenshots using Playwright'
@@ -237,14 +246,14 @@ def main() -> int:
     parser.add_argument('--visual-dir', type=Path, help='Playwright pinned directory')
     parser.add_argument('--node', default='node', help='Node executable path')
     parser.add_argument('--timeout', type=float, default=300.0, help='Process timeout in seconds')
-    
+
     args = parser.parse_args()
-    
+
     try:
         # Load spec
         with args.spec.open('r', encoding='utf-8') as f:
             spec = json.load(f)
-        
+
         # Render
         result = render(
             spec,
@@ -253,10 +262,10 @@ def main() -> int:
             node=args.node,
             timeout=args.timeout
         )
-        
+
         print(json.dumps(result, sort_keys=True))
         return 0
-        
+
     except ValueError as e:
         print(f"Validation error: {e}", file=sys.stderr)
         return 2
