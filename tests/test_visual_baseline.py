@@ -501,3 +501,29 @@ class TestRegionOrdering:
         # Verify ordering: larger region first
         assert len(result.regions) == 2
         assert result.regions[0].changed_pixels >= result.regions[1].changed_pixels
+
+
+class TestBaselineDimensions:
+    """Metadata must record the PNG dimensions and load must verify them."""
+
+    def test_metadata_records_png_dimensions(self, tmp_path: Path):
+        png = _create_rgba_png(120, 80, (10, 20, 30, 255))
+        baseline_dir = save_baseline(tmp_path, "dims", "120x80", png, renderer={})
+        metadata = json.loads((baseline_dir / "viewport.json").read_text(encoding="utf-8"))
+        assert metadata["width"] == 120
+        assert metadata["height"] == 80
+
+    def test_load_rejects_metadata_dimension_mismatch(self, tmp_path: Path):
+        png = _create_rgba_png(120, 80, (10, 20, 30, 255))
+        baseline_dir = save_baseline(tmp_path, "dims", "120x80", png, renderer={})
+        meta_path = baseline_dir / "viewport.json"
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        metadata["width"] = 121
+        meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+        with pytest.raises(ValueError, match="do not match PNG"):
+            load_baseline(tmp_path, "dims", "120x80")
+
+    def test_save_rejects_non_png_without_creating_files(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="not a valid PNG"):
+            save_baseline(tmp_path, "bad", "10x10", b"not a png at all, just text", renderer={})
+        assert not (tmp_path / "bad").exists()

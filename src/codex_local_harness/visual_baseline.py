@@ -51,6 +51,17 @@ def _validate_path_component(path: str) -> None:
         raise ValueError(f"invalid path component: {path}")
 
 
+def _png_dimensions(data: bytes) -> tuple[int, int]:
+    """Return (width, height) from a PNG header without decoding the image."""
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        raise ValueError("data is not a valid PNG image")
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    if width < 1 or height < 1:
+        raise ValueError("PNG has invalid dimensions")
+    return width, height
+
+
 def _compute_sha256(data: bytes) -> str:
     """Compute SHA256 hex digest of bytes."""
     return hashlib.sha256(data).hexdigest()
@@ -96,6 +107,9 @@ def save_baseline(
     _validate_path_component(name)
     _validate_path_component(viewport)
 
+    # Reject non-PNG input before touching the filesystem
+    width, height = _png_dimensions(png)
+
     # Build paths
     baseline_dir = root / name / viewport
     png_path = baseline_dir / "viewport.png"
@@ -118,12 +132,14 @@ def save_baseline(
     # Metadata dict
     metadata = {
         "created_at": created_at,
+        "height": height,
         "masks": list(masks),
         "name": name,
         "renderer": renderer,
         "sha256": sha256,
         "source": source,
         "viewport": viewport,
+        "width": width,
     }
 
     # Write metadata atomically
@@ -206,6 +222,13 @@ def load_baseline(root: Path | str, name: str, viewport: str) -> tuple[bytes, di
     if computed_sha256 != stored_sha256:
         raise ValueError(
             f"SHA256 mismatch: expected {stored_sha256}, got {computed_sha256}"
+        )
+
+    width, height = _png_dimensions(png)
+    if metadata.get("width") != width or metadata.get("height") != height:
+        raise ValueError(
+            f"metadata dimensions {metadata.get('width')}x{metadata.get('height')} "
+            f"do not match PNG {width}x{height}"
         )
 
     return png, metadata
