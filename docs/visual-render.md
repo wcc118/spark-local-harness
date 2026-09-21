@@ -88,7 +88,7 @@ PYTHONPATH=src python3 -m codex_local_harness.visual_render_cli render \
   --viewport 1280x800 \
   --viewport 390x844 \
   --mask .spark-pulse \
-  --mask .agent-brain
+  --mask .agent-brain --mask .freshness
 ```
 
 Options:
@@ -121,6 +121,7 @@ PYTHONPATH=src python3 -m codex_local_harness.visual_render_cli check-determinis
   --viewport 1280x800 \
   --mask .spark-pulse \
   --mask .agent-brain \
+  --mask .freshness \
   --runs 10 \
   --json
 ```
@@ -153,6 +154,7 @@ Live dashboards change between renders. To make them deterministic:
    renders:
    - `.spark-pulse`: Animated status indicators
    - `.agent-brain`: Animated agent visualization
+- `.freshness`: relative-time badge such as "38 minutes ago", which changes as the wall clock advances
    - Dynamic timestamps or counters
 
 ```bash
@@ -161,7 +163,7 @@ PYTHONPATH=src python3 -m codex_local_harness.visual_render_cli render \
   --name harness-dashboard \
   --out ~/.local/share/codex-local-harness/renders \
   --mask .spark-pulse \
-  --mask .agent-brain
+  --mask .agent-brain --mask .freshness
 ```
 
 3. **Verify determinism**:
@@ -172,6 +174,7 @@ PYTHONPATH=src python3 -m codex_local_harness.visual_render_cli check-determinis
   --viewport 1280x800 \
   --mask .spark-pulse \
   --mask .agent-brain \
+  --mask .freshness \
   --runs 10
 ```
 
@@ -222,7 +225,7 @@ Limited to 50 entries maximum.
   "browser_version": "chromium-123456",
   "launch_args": ["--font-render-hinting=none", "--disable-gpu", ...],
   "viewport": {"width": 1280, "height": 800},
-  "masks": [".spark-pulse", ".agent-brain"],
+  "masks": [".spark-pulse", ".agent-brain", ".freshness"],
   "url": "http://127.0.0.1:8765/",
   "blocked_urls": ["http://203.0.113.1/x.png"]
 }
@@ -336,3 +339,7 @@ Run `check-determinism` with `--json` to see which artifact types differ:
 - ARIA differs: Accessibility tree changes
 
 Mask volatile elements or use replay mode to freeze content.
+
+## Known limitation for live dashboards
+
+With the three masks above, the harness dashboard in replay mode gave 12 identical PNG, text and ARIA hashes at both viewports. The layout report covers the whole document, not only the visible viewport, and at 1280x800 it occasionally differed (page height 3665 versus 3684) because another unmasked live section lower on the page changes height. `check-determinism` reports this as a `layout` difference. Add masks for further volatile sections when a baseline needs the full-page layout to be stable; viewport screenshots, text and ARIA output were already stable.

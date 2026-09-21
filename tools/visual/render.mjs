@@ -310,11 +310,19 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
   writeFileSync(`${outDir}/${vpName}.aria.txt`, ariaText);
 
   // Layout analysis
-  const layoutData = await page.evaluate(({ vpWidth, vpHeight }) => {
+  const layoutData = await page.evaluate(({ vpWidth, vpHeight, maskSelector }) => {
     const elements = document.querySelectorAll('*');
     const overflowing = [];
 
     for (const el of elements) {
+      // Masked regions are volatile by definition; keep them out of the layout report
+      if (maskSelector) {
+        try {
+          if (el.closest(maskSelector)) continue;
+        } catch (e) {
+          // an invalid selector was already reported when masks were applied
+        }
+      }
       const rect = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
 
@@ -359,7 +367,7 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
     }
 
     return overflowing;
-  }, { vpWidth: viewport.width, vpHeight: viewport.height });
+  }, { vpWidth: viewport.width, vpHeight: viewport.height, maskSelector: masks.join(',') });
 
   const layoutJson = {
     viewport: { width: viewport.width, height: viewport.height },
