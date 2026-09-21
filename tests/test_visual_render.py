@@ -16,6 +16,7 @@ from codex_local_harness.visual_render import (
     validate_viewport_name,
     validate_url,
     validate_selector,
+    validate_mutation,
     validate_spec,
     render,
 )
@@ -243,6 +244,324 @@ class TestValidation:
         }
         errors = validate_spec(spec)
         assert any('url' in e.lower() for e in errors)
+
+
+class TestMutationValidation:
+    """Tests for mutation validation."""
+
+    def test_validate_mutation_set_text_valid(self):
+        """Test valid set-text mutation."""
+        mutation = {
+            'id': 'text-change',
+            'selector': '.title',
+            'op': 'set-text',
+            'value': 'New Title'
+        }
+        errors = validate_mutation(mutation)
+        assert errors == []
+
+    def test_validate_mutation_set_text_missing_value(self):
+        """Test set-text mutation missing value."""
+        mutation = {
+            'id': 'text-change',
+            'selector': '.title',
+            'op': 'set-text'
+        }
+        errors = validate_mutation(mutation)
+        assert any('value' in e.lower() for e in errors)
+
+    def test_validate_mutation_set_text_value_too_long(self):
+        """Test set-text mutation value exceeds 500 chars."""
+        mutation = {
+            'id': 'text-change',
+            'selector': '.title',
+            'op': 'set-text',
+            'value': 'x' * 501
+        }
+        errors = validate_mutation(mutation)
+        assert any('exceeds' in e.lower() or '500' in e.lower() for e in errors)
+
+    def test_validate_mutation_set_style_valid(self):
+        """Test valid set-style mutation."""
+        mutation = {
+            'id': 'style-change',
+            'selector': '.item',
+            'op': 'set-style',
+            'value': 'color: red; font-size: 16px'
+        }
+        errors = validate_mutation(mutation)
+        assert errors == []
+
+    def test_validate_mutation_set_style_disallowed_char_curly(self):
+        """Test set-style with disallowed curly brace."""
+        mutation = {
+            'id': 'style-change',
+            'selector': '.item',
+            'op': 'set-style',
+            'value': 'color: red; {bad}'
+        }
+        errors = validate_mutation(mutation)
+        assert any('disallowed' in e.lower() for e in errors)
+
+    def test_validate_mutation_set_style_disallowed_char_angle(self):
+        """Test set-style with disallowed angle bracket."""
+        mutation = {
+            'id': 'style-change',
+            'selector': '.item',
+            'op': 'set-style',
+            'value': 'color: <red>'
+        }
+        errors = validate_mutation(mutation)
+        assert any('disallowed' in e.lower() for e in errors)
+
+    def test_validate_mutation_set_style_disallowed_url(self):
+        """Test set-style with disallowed url()."""
+        mutation = {
+            'id': 'style-change',
+            'selector': '.item',
+            'op': 'set-style',
+            'value': 'background: url(image.png)'
+        }
+        errors = validate_mutation(mutation)
+        assert any('disallowed' in e.lower() for e in errors)
+
+    def test_validate_mutation_set_attr_valid(self):
+        """Test valid set-attr mutation."""
+        mutation = {
+            'id': 'attr-change',
+            'selector': '.link',
+            'op': 'set-attr',
+            'value': 'aria-label=New Label'
+        }
+        errors = validate_mutation(mutation)
+        assert errors == []
+
+    def test_validate_mutation_set_attr_allowed_names(self):
+        """Test set-attr with allowed attribute names."""
+        for name in ['aria-label', 'title', 'alt', 'class', 'data-test', 'data-foo-bar']:
+            mutation = {
+                'id': 'attr-change',
+                'selector': '.item',
+                'op': 'set-attr',
+                'value': f'{name}=value'
+            }
+            errors = validate_mutation(mutation)
+            assert errors == [], f"Failed for {name}"
+
+    def test_validate_mutation_set_attr_disallowed_name(self):
+        """Test set-attr with disallowed attribute name."""
+        mutation = {
+            'id': 'attr-change',
+            'selector': '.item',
+            'op': 'set-attr',
+            'value': 'href=http://example.com'
+        }
+        errors = validate_mutation(mutation)
+        assert any('disallowed' in e.lower() or 'name' in e.lower() for e in errors)
+
+    def test_validate_mutation_set_attr_no_equals(self):
+        """Test set-attr without = separator."""
+        mutation = {
+            'id': 'attr-change',
+            'selector': '.item',
+            'op': 'set-attr',
+            'value': 'aria-labelvalue'
+        }
+        errors = validate_mutation(mutation)
+        assert any('name=value' in e.lower() for e in errors)
+
+    def test_validate_mutation_remove_no_value(self):
+        """Test remove mutation must not have value."""
+        mutation = {
+            'id': 'remove-item',
+            'selector': '.item',
+            'op': 'remove'
+        }
+        errors = validate_mutation(mutation)
+        assert errors == []
+
+    def test_validate_mutation_remove_has_value(self):
+        """Test remove mutation with value is invalid."""
+        mutation = {
+            'id': 'remove-item',
+            'selector': '.item',
+            'op': 'remove',
+            'value': 'some value'
+        }
+        errors = validate_mutation(mutation)
+        assert any('must not have' in e.lower() for e in errors)
+
+    def test_validate_mutation_missing_id(self):
+        """Test mutation missing id."""
+        mutation = {
+            'selector': '.item',
+            'op': 'set-text',
+            'value': 'test'
+        }
+        errors = validate_mutation(mutation)
+        assert any('id' in e.lower() for e in errors)
+
+    def test_validate_mutation_invalid_id(self):
+        """Test mutation with invalid id."""
+        mutation = {
+            'id': '-invalid',
+            'selector': '.item',
+            'op': 'set-text',
+            'value': 'test'
+        }
+        errors = validate_mutation(mutation)
+        assert any('id' in e.lower() for e in errors)
+
+    def test_validate_mutation_missing_selector(self):
+        """Test mutation missing selector."""
+        mutation = {
+            'id': 'test-mutation',
+            'op': 'set-text',
+            'value': 'test'
+        }
+        errors = validate_mutation(mutation)
+        assert any('selector' in e.lower() for e in errors)
+
+    def test_validate_mutation_empty_selector(self):
+        """Test mutation with empty selector."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '',
+            'op': 'set-text',
+            'value': 'test'
+        }
+        errors = validate_mutation(mutation)
+        assert any('empty' in e.lower() or 'selector' in e.lower() for e in errors)
+
+    def test_validate_mutation_missing_op(self):
+        """Test mutation missing op."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '.item',
+            'value': 'test'
+        }
+        errors = validate_mutation(mutation)
+        assert any('op' in e.lower() for e in errors)
+
+    def test_validate_mutation_invalid_op(self):
+        """Test mutation with invalid op."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '.item',
+            'op': 'invalid-op'
+        }
+        errors = validate_mutation(mutation)
+        assert any('op' in e.lower() for e in errors)
+
+    def test_validate_mutation_index_valid(self):
+        """Test mutation with valid index."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '.item',
+            'op': 'set-text',
+            'value': 'test',
+            'index': 2
+        }
+        errors = validate_mutation(mutation)
+        assert errors == []
+
+    def test_validate_mutation_index_all(self):
+        """Test mutation with index='all'."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '.item',
+            'op': 'set-text',
+            'value': 'test',
+            'index': 'all'
+        }
+        errors = validate_mutation(mutation)
+        assert errors == []
+
+    def test_validate_mutation_index_negative(self):
+        """Test mutation with negative index."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '.item',
+            'op': 'set-text',
+            'value': 'test',
+            'index': -1
+        }
+        errors = validate_mutation(mutation)
+        assert any('index' in e.lower() for e in errors)
+
+    def test_validate_mutation_index_not_integer(self):
+        """Test mutation with non-integer index."""
+        mutation = {
+            'id': 'test-mutation',
+            'selector': '.item',
+            'op': 'set-text',
+            'value': 'test',
+            'index': 'invalid'
+        }
+        errors = validate_mutation(mutation)
+        assert any('index' in e.lower() for e in errors)
+
+    def test_validate_spec_with_valid_mutations(self):
+        """Test spec with valid mutations."""
+        spec = {
+            'pages': [{'name': 'test', 'url': 'http://localhost/test'}],
+            'viewports': [{'name': '1280x800', 'width': 1280, 'height': 800}],
+            'mutations': [
+                {
+                    'id': 'mut1',
+                    'selector': '.item',
+                    'op': 'set-text',
+                    'value': 'New Text'
+                }
+            ]
+        }
+        errors = validate_spec(spec)
+        assert errors == []
+
+    def test_validate_spec_duplicate_mutation_id(self):
+        """Test spec with duplicate mutation ids."""
+        spec = {
+            'pages': [{'name': 'test', 'url': 'http://localhost/test'}],
+            'viewports': [{'name': '1280x800', 'width': 1280, 'height': 800}],
+            'mutations': [
+                {'id': 'dup', 'selector': '.a', 'op': 'set-text', 'value': 'a'},
+                {'id': 'dup', 'selector': '.b', 'op': 'set-text', 'value': 'b'}
+            ]
+        }
+        errors = validate_spec(spec)
+        assert any('duplicate' in e.lower() for e in errors)
+
+    def test_validate_spec_too_many_mutations(self):
+        """Test spec with more than 50 mutations."""
+        mutations = [
+            {'id': f'm{i}', 'selector': f'.item{i}', 'op': 'set-text', 'value': f'text{i}'}
+            for i in range(51)
+        ]
+        spec = {
+            'pages': [{'name': 'test', 'url': 'http://localhost/test'}],
+            'viewports': [{'name': '1280x800', 'width': 1280, 'height': 800}],
+            'mutations': mutations
+        }
+        errors = validate_spec(spec)
+        assert any('too many' in e.lower() or '50' in e.lower() for e in errors)
+
+    def test_validate_spec_extra_mutation_field(self):
+        """Test spec with extra mutation field."""
+        spec = {
+            'pages': [{'name': 'test', 'url': 'http://localhost/test'}],
+            'viewports': [{'name': '1280x800', 'width': 1280, 'height': 800}],
+            'mutations': [
+                {
+                    'id': 'test-mut',
+                    'selector': '.item',
+                    'op': 'set-text',
+                    'value': 'text',
+                    'extra_field': 'should fail'
+                }
+            ]
+        }
+        errors = validate_spec(spec)
+        assert any('unknown' in e.lower() or 'field' in e.lower() for e in errors)
 
 
 class TestRenderIntegration:
@@ -814,3 +1133,120 @@ class TestFailureModes:
         vr.render(spec, out, visual_dir=visual)
         assert "SECRET_TOKEN_FOR_TEST" not in seen["env"]
         assert seen["env"]["CODEX_LOCAL_VISUAL_DIR"] == str(visual)
+
+
+class TestMutationBehavior:
+    """Mutations must really change the rendered page (browser tests)."""
+
+    PAGE = (
+        "<!DOCTYPE html><html><body style='font-family: sans-serif'>"
+        "<h1 id='title'>Total load</h1>"
+        "<p class='v'>12.5 kN</p><p class='v'>13.1 kN</p>"
+        "<button id='go'>Go</button>"
+        "<div id='gone'>REMOVE-ME</div>"
+        "<div id='shown'>SHOW-ME</div>"
+        "</body></html>"
+    )
+
+    def _render(self, tmp_path: Path, mutations: list[dict]) -> Path:
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        page = tmp_path / "mut.html"
+        page.write_text(self.PAGE)
+        out = tmp_path / f"out-{len(list(tmp_path.glob('out-*')))}"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "mut", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "mutations": mutations,
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+        return out / "mut"
+
+    def test_set_text_defaults_to_first_match(self, tmp_path: Path):
+        d = self._render(tmp_path, [{"id": "unit", "selector": ".v", "op": "set-text", "value": "12.5 N"}])
+        text = (d / "1280x800.text.txt").read_text()
+        assert "12.5 N" in text
+        assert "13.1 kN" in text
+        assert "12.5 kN" not in text
+
+    def test_set_text_index_and_all(self, tmp_path: Path):
+        d = self._render(tmp_path, [{"id": "second", "selector": ".v", "op": "set-text", "value": "X", "index": 1}])
+        text = (d / "1280x800.text.txt").read_text()
+        assert "12.5 kN" in text and "13.1 kN" not in text
+        d = self._render(tmp_path, [{"id": "every", "selector": ".v", "op": "set-text", "value": "Y", "index": "all"}])
+        text = (d / "1280x800.text.txt").read_text()
+        assert "12.5 kN" not in text and "13.1 kN" not in text
+        assert text.count("Y") == 2
+
+    def test_set_style_display_none_hides_text(self, tmp_path: Path):
+        d = self._render(tmp_path, [{"id": "hide", "selector": "#shown", "op": "set-style", "value": "display:none"}])
+        text = (d / "1280x800.text.txt").read_text()
+        assert "SHOW-ME" not in text
+        assert "REMOVE-ME" in text
+
+    def test_set_style_keeps_existing_inline_style(self, tmp_path: Path):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        page = tmp_path / "inline.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body>"
+            "<div id='x' style='display:none'>HIDDEN-BY-INLINE</div>"
+            "</body></html>"
+        )
+        out = tmp_path / "out-inline"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "inline", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "mutations": [{"id": "color", "selector": "#x", "op": "set-style", "value": "color: red"}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+        text = (out / "inline" / "1280x800.text.txt").read_text()
+        assert "HIDDEN-BY-INLINE" not in text
+
+    def test_set_attr_changes_accessible_name(self, tmp_path: Path):
+        d = self._render(tmp_path, [{"id": "label", "selector": "#go", "op": "set-attr", "value": "aria-label=Stop now"}])
+        aria = (d / "1280x800.aria.txt").read_text()
+        assert "Stop now" in aria
+
+    def test_remove_deletes_element(self, tmp_path: Path):
+        d = self._render(tmp_path, [{"id": "rm", "selector": "#gone", "op": "remove"}])
+        text = (d / "1280x800.text.txt").read_text()
+        assert "REMOVE-ME" not in text
+        assert "SHOW-ME" in text
+
+    def test_no_match_fails_loudly(self, tmp_path: Path):
+        with pytest.raises(RuntimeError, match="mutation_no_match"):
+            self._render(tmp_path, [{"id": "nope", "selector": ".does-not-exist", "op": "remove"}])
+
+    def test_index_out_of_range_fails_loudly(self, tmp_path: Path):
+        with pytest.raises(RuntimeError, match="out_of_range"):
+            self._render(tmp_path, [{"id": "far", "selector": ".v", "op": "set-text", "value": "Z", "index": 5}])
+
+    def test_meta_records_mutations_without_values(self, tmp_path: Path):
+        d = self._render(
+            tmp_path,
+            [
+                {"id": "unit", "selector": ".v", "op": "set-text", "value": "SECRET-VALUE-123"},
+                {"id": "rm", "selector": "#gone", "op": "remove"},
+            ],
+        )
+        raw = (d / "1280x800.meta.json").read_text()
+        meta = json.loads(raw)
+        assert [m["id"] for m in meta["mutations"]] == ["unit", "rm"]
+        assert meta["mutations"][0]["matched"] == 2
+        assert meta["mutations"][1]["matched"] == 1
+        assert "SECRET-VALUE-123" not in raw
+
+    def test_mutated_render_is_deterministic(self, tmp_path: Path):
+        muts = [{"id": "unit", "selector": ".v", "op": "set-text", "value": "9 kN", "index": "all"}]
+        hashes = set()
+        for _ in range(3):
+            d = self._render(tmp_path, muts)
+            hashes.add(hashlib.sha256((d / "1280x800.png").read_bytes()).hexdigest())
+        assert len(hashes) == 1

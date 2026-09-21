@@ -107,6 +107,94 @@ function isValidSelector(selector) {
   return !/[\x00-\x1F\x7F]/.test(selector);
 }
 
+// Validate mutation id pattern
+function isValidMutationId(id) {
+  if (!id || typeof id !== 'string') return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id);
+}
+
+// Validate mutation op
+function isValidMutationOp(op) {
+  return ['set-text', 'set-style', 'set-attr', 'remove'].includes(op);
+}
+
+// Validate mutation
+function validateMutation(mutation) {
+  const errors = [];
+
+  if (!mutation || typeof mutation !== 'object') {
+    errors.push('Mutation is not an object');
+    return errors;
+  }
+
+  // Required fields
+  if (!mutation.id || typeof mutation.id !== 'string') {
+    errors.push('Mutation missing or invalid id');
+  } else if (!isValidMutationId(mutation.id)) {
+    errors.push(`Invalid mutation id: ${mutation.id}`);
+  }
+
+  if (!mutation.selector || typeof mutation.selector !== 'string') {
+    errors.push('Mutation missing or invalid selector');
+  } else if (!isValidSelector(mutation.selector)) {
+    errors.push(`Invalid mutation selector: ${mutation.selector}`);
+  }
+
+  if (!mutation.op || typeof mutation.op !== 'string') {
+    errors.push('Mutation missing or invalid op');
+  } else if (!isValidMutationOp(mutation.op)) {
+    errors.push(`Invalid mutation op: ${mutation.op}`);
+  }
+
+  // Value validation based on op
+  if (mutation.op === 'set-text') {
+    if (!mutation.value || typeof mutation.value !== 'string') {
+      errors.push('Mutation with op set-text missing or invalid value');
+    } else if (mutation.value.length > 500) {
+      errors.push(`Mutation value exceeds 500 characters: ${mutation.value.length}`);
+    }
+  } else if (mutation.op === 'set-style') {
+    if (!mutation.value || typeof mutation.value !== 'string') {
+      errors.push('Mutation with op set-style missing or invalid value');
+    } else {
+      const disallowed = ['{', '}', '<', '>', 'url('];
+      for (const char of disallowed) {
+        if (mutation.value.includes(char)) {
+          errors.push(`Mutation value contains disallowed sequence: ${char}`);
+          break;
+        }
+      }
+    }
+  } else if (mutation.op === 'set-attr') {
+    if (!mutation.value || typeof mutation.value !== 'string') {
+      errors.push('Mutation with op set-attr missing or invalid value');
+    } else {
+      if (!mutation.value.includes('=')) {
+        errors.push(`Mutation value must be name=value format: ${mutation.value}`);
+      } else {
+        const [name] = mutation.value.split('=');
+        const allowedNames = ['aria-label', 'title', 'alt', 'class'];
+        if (!allowedNames.includes(name) && !name.startsWith('data-')) {
+          errors.push(`Mutation has disallowed attribute name: ${name}`);
+        }
+      }
+    }
+  } else if (mutation.op === 'remove') {
+    if (mutation.value !== undefined) {
+      errors.push('Mutation with op remove must not have value');
+    }
+  }
+
+  // Index validation
+  if (mutation.index !== undefined) {
+    if (mutation.index !== 'all' && (typeof mutation.index !== 'number' || mutation.index < 0 || !Number.isInteger(mutation.index))) {
+      errors.push(`Mutation index must be non-negative integer or 'all': ${mutation.index}`);
+    }
+  }
+
+  return errors;
+}
+
 // Validate spec before launching browser
 const errors = [];
 for (const page of spec.pages) {
@@ -131,6 +219,27 @@ if (spec.masks) {
   for (const mask of spec.masks) {
     if (!isValidSelector(mask)) {
       errors.push(`Invalid mask selector: ${mask}`);
+    }
+  }
+}
+
+// Validate mutations if present
+if (spec.mutations && Array.isArray(spec.mutations)) {
+  if (spec.mutations.length > 50) {
+    errors.push(`Too many mutations: ${spec.mutations.length} (max 50)`);
+  }
+
+  const seenIds = new Set();
+  for (let i = 0; i < spec.mutations.length; i++) {
+    const mutation = spec.mutations[i];
+    const mutErrors = validateMutation(mutation);
+    errors.push(...mutErrors);
+
+    // Check for duplicate ids
+    if (mutation.id && !seenIds.has(mutation.id)) {
+      seenIds.add(mutation.id);
+    } else if (mutation.id) {
+      errors.push(`Duplicate mutation id: ${mutation.id}`);
     }
   }
 }
@@ -188,6 +297,7 @@ async function run() {
             pageName,
             pageOutDir,
             spec.masks || [],
+            spec.mutations || [],
             timeoutMs
           );
           results.push(result);
@@ -219,7 +329,7 @@ async function run() {
   process.exit(0);
 }
 
-async function renderPage(browser, url, viewport, vpName, pageName, outDir, masks, timeoutMs) {
+async function renderPage(browser, url, viewport, vpName, pageName, outDir, masks, mutations, timeoutMs) {
   const ctx = await browser.newContext({
     viewport: viewport,
     deviceScaleFactor: 1,
@@ -286,6 +396,101 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
       await page.addStyleTag({ content: maskStyles });
     } catch (e) {
       // Ignore mask errors
+    }
+  }
+
+  // Apply mutations
+  const appliedMutations = [];
+  if (mutations && mutations.length > 0) {
+    for (const mutation of mutations) {
+      const { id, selector, op, value, index } = mutation;
+
+      // Find all matching elements
+      const elements = await page.$$(selector);
+      const matchedCount = elements.length;
+
+      // Check if we found any elements
+      if (matchedCount === 0) {
+        console.error(JSON.stringify({
+          error: 'mutation_no_match',
+          mutation_id: id,
+          selector: selector,
+          message: `Selector "${selector}" matched no elements`
+        }));
+        await ctx.close();
+        process.exit(4);
+      }
+
+      // Determine which index to apply mutation to
+      let targetIndex;
+      if (index === 'all') {
+        targetIndex = null; // Apply to all
+      } else if (typeof index === 'number') {
+        if (index < 0 || index >= matchedCount) {
+          console.error(JSON.stringify({
+            error: 'mutation_index_out_of_range',
+            mutation_id: id,
+            selector: selector,
+            index: index,
+            matched: matchedCount,
+            message: `Index ${index} out of range for selector "${selector}" (found ${matchedCount} elements)`
+          }));
+          await ctx.close();
+          process.exit(4);
+        }
+        targetIndex = index;
+      } else {
+        // Default index is 0
+        targetIndex = 0;
+      }
+
+      // Apply the mutation to the selected element(s). Values are passed as
+      // arguments: the page context cannot see variables from this scope.
+      const targets = targetIndex === null ? elements : [elements[targetIndex]];
+      if (op === 'set-text') {
+        for (const handle of targets) {
+          await handle.evaluate((node, text) => { node.textContent = text; }, value);
+        }
+      } else if (op === 'set-style') {
+        // Add declarations without clobbering existing inline styles
+        const declarations = value
+          .split(';')
+          .map((d) => d.trim())
+          .filter(Boolean)
+          .map((d) => {
+            const colon = d.indexOf(':');
+            return [d.slice(0, colon).trim(), d.slice(colon + 1).trim()];
+          });
+        for (const handle of targets) {
+          await handle.evaluate((node, decls) => {
+            for (const [prop, val] of decls) {
+              node.style.setProperty(prop, val, 'important');
+            }
+          }, declarations);
+        }
+      } else if (op === 'set-attr') {
+        const eq = value.indexOf('=');
+        const attrName = value.slice(0, eq);
+        const attrValue = value.slice(eq + 1);
+        for (const handle of targets) {
+          await handle.evaluate((node, pair) => {
+            node.setAttribute(pair.name, pair.value);
+          }, { name: attrName, value: attrValue });
+        }
+      } else if (op === 'remove') {
+        for (const handle of targets) {
+          await handle.evaluate((node) => { node.remove(); });
+        }
+      }
+
+      // Record the mutation with matched count
+      appliedMutations.push({
+        id: id,
+        selector: selector,
+        op: op,
+        index: index === undefined ? 0 : index,
+        matched: matchedCount
+      });
     }
   }
 
@@ -386,6 +591,7 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
     launch_args: launchArgs,
     viewport: { width: viewport.width, height: viewport.height },
     masks: masks,
+    mutations: appliedMutations,
     url: url,
     blocked_urls: Array.from(blockedUrls)
   };
