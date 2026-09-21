@@ -133,7 +133,7 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
     # Check Playwright is installed
     package_json = visual_dir / 'package.json'
     if not package_json.exists():
-        install_cmd = "npm install --ignore-scripts --save-exact playwright @1.63.0"
+        install_cmd = "npm install --ignore-scripts --save-exact playwright@1.63.0"
         raise RuntimeError(
             f"Playwright not found at {visual_dir}. "
             f"Install with: {install_cmd}"
@@ -142,7 +142,7 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
     # Check node_modules contains playwright
     node_modules = visual_dir / 'node_modules' / 'playwright'
     if not node_modules.exists():
-        install_cmd = "npm install --ignore-scripts --save-exact playwright @1.63.0"
+        install_cmd = "npm install --ignore-scripts --save-exact playwright@1.63.0"
         raise RuntimeError(
             f"Playwright module not found at {visual_dir / 'node_modules' / 'playwright'}. "
             f"Install with: {install_cmd}"
@@ -169,8 +169,13 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
             '--out', str(out_dir)
         ]
 
-        # Build minimal environment with CODEX_LOCAL_VISUAL_DIR
-        env = os.environ.copy()
+        # Minimal explicit environment. HOME is required so Chromium finds its
+        # browser cache; nothing else from the caller's environment is passed.
+        env = {
+            key: os.environ[key]
+            for key in ('PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'PLAYWRIGHT_BROWSERS_PATH')
+            if key in os.environ
+        }
         env['CODEX_LOCAL_VISUAL_DIR'] = str(visual_dir)
 
         # Run the Node script
@@ -196,20 +201,17 @@ def render(spec: dict[str, Any], out_dir: Path, *, visual_dir: Path | None = Non
                 stderr_data = json.loads(result.stderr.strip())
                 raise RuntimeError(
                     f"Playwright or browser cannot be launched: {stderr_data.get('message', 'unknown')}. "
-                    f"Install with: npm install --ignore-scripts --save-exact playwright @1.63.0"
+                    f"Install with: npm install --ignore-scripts --save-exact playwright@1.63.0"
                 )
             except json.JSONDecodeError:
                 raise RuntimeError(
                     f"Playwright or browser cannot be launched: {result.stderr.strip()}. "
-                    f"Install with: npm install --ignore-scripts --save-exact playwright @1.63.0"
+                    f"Install with: npm install --ignore-scripts --save-exact playwright@1.63.0"
                 )
         elif result.returncode == 4:
-            # Page failure
-            try:
-                summary = json.loads(result.stdout.strip())
-                return summary
-            except json.JSONDecodeError:
-                raise RuntimeError(f"Page failure: {result.stdout.strip()}")
+            # Page failure: never return a partial summary as if it were success
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise RuntimeError(f"Page failure (Node exit 4): {detail}")
         elif result.returncode != 0:
             # Other error
             raise RuntimeError(

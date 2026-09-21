@@ -470,7 +470,7 @@ class TestPythonWrapper:
             render(spec, out_dir)
 
         assert "Install with:" in str(exc_info.value)
-        assert "npm install --ignore-scripts --save-exact playwright @1.63.0" in str(exc_info.value)
+        assert "npm install --ignore-scripts --save-exact playwright@1.63.0" in str(exc_info.value)
         assert "not found" in str(exc_info.value).lower()
 
     def test_invalid_url_raises_error(self, tmp_path: Path):
@@ -744,3 +744,73 @@ class TestMultipleMasks:
         assert "Stable text" in text
         assert "FIRST-VOLATILE" not in text
         assert "SECOND-VOLATILE" not in text
+
+
+class TestFailureModes:
+    """Failures must be visible, never silent successes."""
+
+    def test_page_failure_raises(self, tmp_path: Path):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        spec = {
+            "pages": [{"name": "gone", "url": f"file://{tmp_path / 'does-not-exist.html'}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 15000,
+        }
+        out = tmp_path / "out"
+        out.mkdir()
+        with pytest.raises(RuntimeError, match="Page failure"):
+            render(spec, out)
+
+    def test_websocket_is_blocked_and_recorded(self, tmp_path: Path):
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        page = tmp_path / "ws.html"
+        page.write_text(
+            "<!DOCTYPE html><html><body><p>ws page</p>"
+            "<script>try { new WebSocket('ws://203.0.113.1:9/socket'); } catch (e) {}</script>"
+            "</body></html>"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "ws-page", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+        meta = json.loads((out / "ws-page" / "1280x800.meta.json").read_text())
+        assert any(url.startswith("ws://203.0.113.1") for url in meta["blocked_urls"])
+
+    def test_subprocess_environment_is_minimal(self, monkeypatch, tmp_path: Path):
+        import codex_local_harness.visual_render as vr
+
+        seen = {}
+
+        class Done:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            seen["env"] = kwargs["env"]
+            return Done()
+
+        monkeypatch.setenv("SECRET_TOKEN_FOR_TEST", "should-not-leak")
+        monkeypatch.setattr(vr.subprocess, "run", fake_run)
+        visual = tmp_path / "visual"
+        visual.mkdir()
+        (visual / "package.json").write_text("{}")
+        (visual / "node_modules").mkdir()
+        (visual / "node_modules" / "playwright").mkdir()
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "p", "url": "file:///tmp/x.html"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+        }
+        vr.render(spec, out, visual_dir=visual)
+        assert "SECRET_TOKEN_FOR_TEST" not in seen["env"]
+        assert seen["env"]["CODEX_LOCAL_VISUAL_DIR"] == str(visual)

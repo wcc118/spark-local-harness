@@ -143,6 +143,7 @@ def cmd_check_determinism(args: argparse.Namespace) -> int:
     png_hashes: set[str] = set()
     text_hashes: set[str] = set()
     aria_hashes: set[str] = set()
+    layout_hashes: set[str] = set()
 
     temp_dirs: list[Path] = []
     ok_runs = 0
@@ -170,7 +171,8 @@ def cmd_check_determinism(args: argparse.Namespace) -> int:
                 png_path = page_dir / f"{vp_name}.png"
                 text_path = page_dir / f"{vp_name}.text.txt"
                 aria_path = page_dir / f"{vp_name}.aria.txt"
-                missing = [p.name for p in (png_path, text_path, aria_path) if not p.exists()]
+                layout_path = page_dir / f"{vp_name}.layout.json"
+                missing = [p.name for p in (png_path, text_path, aria_path, layout_path) if not p.exists()]
                 if missing:
                     raise RuntimeError(f"expected artifacts missing: {', '.join(missing)}")
 
@@ -189,6 +191,8 @@ def cmd_check_determinism(args: argparse.Namespace) -> int:
                     with open(aria_path, 'r', encoding='utf-8') as f:
                         aria_hashes.add(hashlib.sha256(f.read().encode('utf-8')).hexdigest())
 
+                import hashlib
+                layout_hashes.add(hashlib.sha256(layout_path.read_bytes()).hexdigest())
                 ok_runs += 1
             except Exception as e:
                 failed_runs += 1
@@ -210,12 +214,15 @@ def cmd_check_determinism(args: argparse.Namespace) -> int:
             differ_types.append('text')
         if len(aria_hashes) > 1:
             differ_types.append('aria')
+        if len(layout_hashes) > 1:
+            differ_types.append('layout')
 
         output = {
             'runs': args.runs,
             'unique_png_hashes': len(png_hashes),
             'unique_text_hashes': len(text_hashes),
             'unique_aria_hashes': len(aria_hashes),
+            'unique_layout_hashes': len(layout_hashes),
             'differing_artifacts': differ_types,
             'all_identical': len(differ_types) == 0
         }

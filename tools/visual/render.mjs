@@ -231,6 +231,10 @@ async function renderPage(browser, url, viewport, vpName, pageName, outDir, mask
 
   // Network restriction: allow the target's own origin plus file:, data: and blob:
   const targetOrigin = url.startsWith('file:') ? null : new URL(url).origin;
+  await ctx.routeWebSocket(/.*/, (ws) => {
+    blockedUrls.add(ws.url());
+    ws.close();
+  });
   await ctx.route('**/*', async (route) => {
     const urlStr = route.request().url();
     let allowed = urlStr.startsWith('file:') || urlStr.startsWith('data:') || urlStr.startsWith('blob:');

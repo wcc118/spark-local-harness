@@ -24,7 +24,7 @@ the read-only worker containers.
 The pinned Playwright 1.63.0 must be installed before rendering:
 
 ```bash
-npm install --ignore-scripts --save-exact playwright @1.63.0
+npm install --ignore-scripts --save-exact playwright@1.63.0
 ```
 
 This installs Playwright without downloading browsers. The Chromium browser
@@ -308,7 +308,7 @@ wrapper interprets these codes and raises appropriate exceptions.
 
 ```bash
 export CODEX_LOCAL_VISUAL_DIR=/path/to/playwright
-npm install --ignore-scripts --save-exact playwright @1.63.0
+npm install --ignore-scripts --save-exact playwright@1.63.0
 ```
 
 ### "Browser cannot be launched"
