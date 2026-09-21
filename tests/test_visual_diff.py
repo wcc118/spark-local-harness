@@ -14,33 +14,13 @@ from codex_local_harness.visual_diff import (
     _bytes_to_png,
 )
 
-
-def _require_pil_numpy():
-    """Skip if Pillow or numpy is missing."""
-    try:
-        from PIL import Image
-        import numpy as np
-        return Image, np
-    except ImportError as exc:
-        pytest.skip(f"Pillow and numpy required for visual diff tests: {exc}")
-
-
-def _with_pil_skip(func):
-    """Decorator to skip tests that require Pillow on RuntimeError."""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except RuntimeError as exc:
-            if "visual diff requires Pillow" in str(exc):
-                pytest.skip("Pillow and numpy required for visual diff tests")
-            raise
-    return wrapper
+PIL = pytest.importorskip("PIL")
+NP = pytest.importorskip("numpy")
+from PIL import Image
 
 
 def _create_rgba_png(width: int, height: int, color: tuple[int, int, int, int]) -> bytes:
     """Create a solid-color PNG."""
-    Image, _ = _require_pil_numpy()
-    
     img = Image.new("RGBA", (width, height), color)
     output = io.BytesIO()
     img.save(output, format="PNG")
@@ -51,7 +31,7 @@ def test_diff_identical_images():
     """Test comparing identical images returns identical=True."""
     png = _create_rgba_png(100, 100, (255, 128, 64, 255))
     result = diff_images(png, png)
-    
+
     assert result.identical is True
     assert result.size_mismatch is False
     assert result.width == 100
@@ -62,7 +42,7 @@ def test_diff_identical_images():
     assert result.regions == ()
 
 
-@_with_pil_skip
+
 def test_diff_single_pixel_change():
     """Test detecting a single pixel change."""
     # Baseline: all white
@@ -75,7 +55,7 @@ def test_diff_single_pixel_change():
     candidate = _bytes_to_png(100, 100, candidate)
 
     result = diff_images(baseline, candidate)
-    
+
     assert result.identical is False
     assert result.size_mismatch is False
     assert result.changed_pixels == 1
@@ -84,9 +64,11 @@ def test_diff_single_pixel_change():
     assert len(result.regions) == 1
     assert result.regions[0].x == 50
     assert result.regions[0].y == 50
+    assert result.regions[0].width == 1
+    assert result.regions[0].height == 1
 
 
-@_with_pil_skip
+
 def test_diff_tolerance_boundary():
     """Test that tolerance works at the boundary."""
     # Create images with exactly tolerance difference
@@ -113,7 +95,7 @@ def test_diff_tolerance_boundary():
     assert result.changed_pixels >= 1
 
 
-@_with_pil_skip
+
 def test_diff_alpha_ignored():
     """Test that alpha channel changes are ignored."""
     # Baseline: fully opaque
@@ -132,9 +114,9 @@ def test_diff_size_mismatch():
     """Test that size mismatches are detected."""
     baseline = _bytes_to_png(100, 100, b"\xff" * 40000)
     candidate = _bytes_to_png(200, 100, b"\xff" * 80000)
-    
+
     result = diff_images(baseline, candidate)
-    
+
     assert result.identical is False
     assert result.size_mismatch is True
     assert result.width == 200
@@ -144,7 +126,7 @@ def test_diff_size_mismatch():
     assert result.regions == ()
 
 
-@_with_pil_skip
+
 def test_diff_ignore_rectangles():
     """Test that ignore rectangles exclude regions from comparison."""
     # Create 100x100 images
@@ -172,7 +154,7 @@ def test_diff_ignore_rectangles():
     assert len(result.regions) == 1
 
 
-@_with_pil_skip
+
 def test_diff_region_grouping():
     """Test that changed pixels are grouped into regions."""
     # Create images with scattered changed pixels
@@ -195,7 +177,7 @@ def test_diff_region_grouping():
     assert len(result.regions) <= 20
 
 
-@_with_pil_skip
+
 def test_diff_deterministic_ordering():
     """Test that region ordering is deterministic."""
     baseline = _bytes_to_png(100, 100, b"\xff" * 40000)
@@ -235,7 +217,7 @@ def test_diff_deterministic_ordering():
             assert r1.y <= r2.y, "y should be ascending"
 
 
-@_with_pil_skip
+
 def test_render_overlay_valid_png():
     """Test that render_overlay produces a valid PNG."""
     Image, _ = _require_pil_numpy()
@@ -254,7 +236,7 @@ def test_render_overlay_valid_png():
         assert img.size == (100, 100)
 
 
-@_with_pil_skip
+
 def test_render_overlay_has_rectangles():
     """Test that render_overlay draws rectangles around regions."""
     Image, _ = _require_pil_numpy()
@@ -280,7 +262,7 @@ def test_render_overlay_has_rectangles():
         assert pixel != (255, 255, 255, 255)
 
 
-@_with_pil_skip
+
 def test_diff_max_regions_limit():
     """Test that max_regions limits the number of regions returned."""
     baseline = _bytes_to_png(200, 200, b"\xff" * 160000)
@@ -300,7 +282,7 @@ def test_diff_max_regions_limit():
     assert result.changed_pixels == 200  # 50 * 4
 
 
-@_with_pil_skip
+
 def test_diff_empty_image():
     """Test diffing empty/very small images."""
     # 1x1 images

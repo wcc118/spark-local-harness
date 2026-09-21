@@ -114,7 +114,7 @@ Pixels are considered changed only when any RGB channel differs by more than `to
 
 ### Cell Size
 
-Changed pixels are grouped into `cell × cell` grid cells, then merged into regions. Larger cells produce coarser region grouping. Default is 16.
+Changed pixels are grouped into `cell × cell` grid cells, then merged into regions based on 4-connected grid cells. Each returned region is the tight bounding box of the actual changed pixels within the merged cells (not grid-aligned). Larger cells produce coarser region grouping. Default is 16.
 
 ### Max Regions
 

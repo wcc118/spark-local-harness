@@ -19,38 +19,13 @@ from codex_local_harness.visual_baseline import (
     _VIEWPORT_PATTERN,
 )
 
-
-def _require_pil_numpy():
-    """Skip if Pillow or numpy is missing."""
-    try:
-        from PIL import Image
-        import numpy as np
-        return Image, np
-    except ImportError as exc:
-        pytest.skip(f"Pillow required for visual baseline tests: {exc}")
-
-
-def _with_pil_skip(func):
-    """Decorator to skip tests that require Pillow on RuntimeError."""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except RuntimeError as exc:
-            if "visual diff requires Pillow" in str(exc):
-                pytest.skip("Pillow and numpy required for visual diff tests")
-            raise
-        except TypeError as exc:
-            # Handle missing fixtures like tmp_path
-            if "missing 1 required positional argument" in str(exc):
-                pytest.skip("Pillow and numpy required for visual diff tests")
-            raise
-    return wrapper
+PIL = pytest.importorskip("PIL")
+NP = pytest.importorskip("numpy")
+from PIL import Image
 
 
 def _create_rgba_png(width: int, height: int, color: tuple[int, int, int, int]) -> bytes:
     """Create a solid-color PNG."""
-    Image, _ = _require_pil_numpy()
-    
     img = Image.new("RGBA", (width, height), color)
     output = io.BytesIO()
     img.save(output, format="PNG")
@@ -61,31 +36,31 @@ def _bytes_to_png(width: int, height: int, rgba_data: bytes) -> bytes:
     """Create a minimal valid PNG from raw RGBA bytes."""
     import struct
     import zlib
-    
+
     def make_chunk(chunk_type: bytes, data: bytes) -> bytes:
         length = len(data)
         crc = zlib.crc32(chunk_type + data) & 0xffffffff
         return struct.pack('>I', length) + chunk_type + data + struct.pack('>I', crc)
-    
+
     ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
     ihdr = make_chunk(b'IHDR', ihdr_data)
-    
+
     scanlines = b''
     for y in range(height):
         scanlines += b'\x00'
         scanlines += rgba_data[y * width * 4:(y + 1) * width * 4]
-    
+
     compressed = zlib.compress(scanlines, 9)
     idat = make_chunk(b'IDAT', compressed)
     iend = make_chunk(b'IEND', b'')
     signature = b'\x89PNG\r\n\x1a\n'
-    
+
     return signature + ihdr + idat + iend
 
 
 class TestValidateName:
     """Test name validation."""
-    
+
     def test_valid_name(self):
         """Test valid names."""
         assert _NAME_PATTERN.match("test")
@@ -94,15 +69,15 @@ class TestValidateName:
         assert _NAME_PATTERN.match("test123")
         assert _NAME_PATTERN.match("a")  # Single char
         assert _NAME_PATTERN.match("a" * 64)  # Max length
-    
+
     def test_invalid_name_starts_with_underscore(self):
         """Test names starting with underscore are rejected."""
         assert not _NAME_PATTERN.match("_test")
-    
+
     def test_invalid_name_with_slash(self):
         """Test names with slash are rejected."""
         assert not _NAME_PATTERN.match("test/path")
-    
+
     def test_invalid_name_too_long(self):
         """Test names over 64 chars are rejected."""
         assert not _NAME_PATTERN.match("a" * 65)
@@ -110,23 +85,23 @@ class TestValidateName:
 
 class TestValidateViewport:
     """Test viewport validation."""
-    
+
     def test_valid_viewports(self):
         """Test valid viewport strings."""
         assert _VIEWPORT_PATTERN.match("1280x800")
         assert _VIEWPORT_PATTERN.match("1920x1080")
         assert _VIEWPORT_PATTERN.match("100x100")
         assert _VIEWPORT_PATTERN.match("10000x10000")
-    
+
     def test_invalid_viewport_missing_x(self):
         """Test viewports without x are rejected."""
         assert not _VIEWPORT_PATTERN.match("1280-800")
-    
+
     def test_invalid_viewport_too_short(self):
         """Test viewports with dimensions too short are rejected."""
         assert not _VIEWPORT_PATTERN.match("1x1")
         assert not _VIEWPORT_PATTERN.match("9x9")
-    
+
     def test_invalid_viewport_too_long(self):
         """Test viewports with dimensions too long are rejected."""
         assert not _VIEWPORT_PATTERN.match("100000x100000")
@@ -135,7 +110,7 @@ class TestValidateViewport:
 class TestSaveBaseline:
     """Test save_baseline function."""
 
-    @_with_pil_skip
+
     def test_save_baseline_success(self, tmp_path: Path):
         """Test successful baseline save."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -153,7 +128,7 @@ class TestSaveBaseline:
         assert (baseline_dir / "viewport.png").exists()
         assert (baseline_dir / "viewport.json").exists()
 
-    @_with_pil_skip
+
     def test_save_baseline_metadata(self, tmp_path: Path):
         """Test saved metadata contains all required fields."""
         png = _create_rgba_png(50, 50, (0, 255, 0, 255))
@@ -182,7 +157,7 @@ class TestSaveBaseline:
         assert meta["created_at"] == "2026-01-01T00:00:00Z"
         assert "sha256" in meta
 
-    @_with_pil_skip
+
     def test_save_baseline_sha256_verified(self, tmp_path: Path):
         """Test that saved PNG's SHA256 matches metadata."""
         png = _create_rgba_png(50, 50, (0, 0, 255, 255))
@@ -203,7 +178,7 @@ class TestSaveBaseline:
         import hashlib
         assert hashlib.sha256(stored_png).hexdigest() == meta["sha256"]
 
-    @_with_pil_skip
+
     def test_save_baseline_refuses_overwrite(self, tmp_path: Path):
         """Test that save refuses to overwrite existing baseline."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -226,7 +201,7 @@ class TestSaveBaseline:
                 renderer={},
             )
 
-    @_with_pil_skip
+
     def test_save_baseline_allows_overwrite(self, tmp_path: Path):
         """Test that save with overwrite=True replaces existing."""
         png1 = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -255,8 +230,8 @@ class TestSaveBaseline:
         # Verify content changed
         stored_png = (baseline_dir / "viewport.png").read_bytes()
         assert stored_png == png2
-    
-    @_with_pil_skip
+
+
     def test_save_baseline_invalid_name(self, tmp_path: Path):
         """Test that invalid names are rejected."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -267,7 +242,7 @@ class TestSaveBaseline:
         with pytest.raises(ValueError, match="name must match"):
             save_baseline(tmp_path, "has/slash", "1280x800", png, renderer={})
 
-    @_with_pil_skip
+
     def test_save_baseline_invalid_viewport(self, tmp_path: Path):
         """Test that invalid viewports are rejected."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -278,7 +253,7 @@ class TestSaveBaseline:
         with pytest.raises(ValueError, match="viewport must match"):
             save_baseline(tmp_path, "test", "9x9", png, renderer={})
 
-    @_with_pil_skip
+
     def test_save_baseline_path_traversal_rejected(self, tmp_path: Path):
         """Test that path traversal attempts are rejected."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -293,7 +268,7 @@ class TestSaveBaseline:
 class TestLoadBaseline:
     """Test load_baseline function."""
 
-    @_with_pil_skip
+
     def test_load_baseline_success(self, tmp_path: Path):
         """Test successful baseline load."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -314,7 +289,7 @@ class TestLoadBaseline:
         assert loaded_meta["viewport"] == "1280x800"
         assert loaded_meta["renderer"] == renderer
 
-    @_with_pil_skip
+
     def test_load_baseline_sha256_mismatch_raises(self, tmp_path: Path):
         """Test that SHA256 mismatch raises ValueError."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -342,12 +317,12 @@ class TestLoadBaseline:
 
 class TestListBaselines:
     """Test list_baselines function."""
-    
+
     def test_list_empty_directory(self, tmp_path: Path):
         """Test listing empty directory returns empty list."""
         assert list_baselines(tmp_path) == []
-    
-    @_with_pil_skip
+
+
     def test_list_with_baselines(self, tmp_path: Path):
         """Test listing returns sorted list of baselines."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -365,7 +340,7 @@ class TestListBaselines:
             ("beta", "200x200"),
         ]
 
-    @_with_pil_skip
+
     def test_list_ignores_invalid_entries(self, tmp_path: Path):
         """Test that invalid entries are ignored."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -385,7 +360,7 @@ class TestListBaselines:
 class TestCompareToBaseline:
     """Test compare_to_baseline function."""
 
-    @_with_pil_skip
+
     def test_compare_identical(self, tmp_path: Path):
         """Test comparing identical images."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -410,7 +385,7 @@ class TestCompareToBaseline:
         assert result.changed_pixels == 0
         assert warnings == []
 
-    @_with_pil_skip
+
     def test_compare_with_changes(self, tmp_path: Path):
         """Test detecting differences."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -435,7 +410,7 @@ class TestCompareToBaseline:
         assert result.identical is False
         assert result.changed_pixels > 0
 
-    @_with_pil_skip
+
     def test_compare_renderer_mismatch_warning(self, tmp_path: Path):
         """Test that renderer mismatch generates warning."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -460,7 +435,7 @@ class TestCompareToBaseline:
         assert len(warnings) == 1
         assert "renderer mismatch" in warnings[0]
 
-    @_with_pil_skip
+
     def test_compare_size_mismatch(self, tmp_path: Path):
         """Test comparing images of different sizes."""
         png = _create_rgba_png(100, 100, (255, 0, 0, 255))
@@ -489,7 +464,7 @@ class TestCompareToBaseline:
 class TestRegionOrdering:
     """Test region ordering determinism."""
 
-    @_with_pil_skip
+
     def test_regions_deterministic(self, tmp_path: Path):
         """Test that region ordering is deterministic."""
         baseline_data = b"\xff" * 40000

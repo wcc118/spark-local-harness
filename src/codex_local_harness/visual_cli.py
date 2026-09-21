@@ -27,7 +27,7 @@ def cmd_baseline_save(args: argparse.Namespace) -> int:
     """Execute baseline-save command."""
     renderer = _parse_renderer_json(args.renderer_json)
     png = args.png.read_bytes()
-    
+
     baseline_dir = save_baseline(
         args.root,
         args.name,
@@ -38,7 +38,7 @@ def cmd_baseline_save(args: argparse.Namespace) -> int:
         source=args.source,
         overwrite=args.overwrite,
     )
-    
+
     print(f"Saved baseline to: {baseline_dir}")
     return 0
 
@@ -56,7 +56,7 @@ def cmd_diff(args: argparse.Namespace) -> int:
     """Execute diff command."""
     baseline = args.baseline.read_bytes()
     candidate = args.candidate.read_bytes()
-    
+
     result = diff_images(
         baseline,
         candidate,
@@ -64,7 +64,7 @@ def cmd_diff(args: argparse.Namespace) -> int:
         cell=args.cell,
         max_regions=args.max_regions,
     )
-    
+
     if args.json:
         output = {
             "changed_pixels": result.changed_pixels,
@@ -97,12 +97,12 @@ def cmd_diff(args: argparse.Namespace) -> int:
             print(f"Regions ({len(result.regions)}):")
             for r in result.regions:
                 print(f"  ({r.x}, {r.y}) {r.width}x{r.height}: {r.changed_pixels} pixels")
-    
+
     if args.overlay:
         overlay = render_overlay(baseline, candidate, result)
         args.overlay.write_bytes(overlay)
         print(f"Overlay written to: {args.overlay}")
-    
+
     # Exit codes: 0 identical, 1 differences found
     return 0 if result.identical else 1
 
@@ -110,10 +110,10 @@ def cmd_diff(args: argparse.Namespace) -> int:
 def cmd_compare(args: argparse.Namespace) -> int:
     """Execute compare command."""
     candidate = args.candidate.read_bytes()
-    
+
     # Parse renderer if provided
     renderer = _parse_renderer_json(args.renderer_json) if args.renderer_json else {}
-    
+
     # Build ignore regions
     ignore: list[tuple[int, int, int, int]] = []
     if args.ignore:
@@ -130,7 +130,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             except ValueError:
                 print(f"Error: invalid ignore region: {region_str}", file=sys.stderr)
                 return 2
-    
+
     result, warnings = compare_to_baseline(
         args.root,
         args.name,
@@ -140,7 +140,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         tolerance=args.tolerance,
         ignore=ignore,
     )
-    
+
     if args.json:
         output = {
             "changed_pixels": result.changed_pixels,
@@ -178,7 +178,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             print(f"Regions ({len(result.regions)}):")
             for r in result.regions:
                 print(f"  ({r.x}, {r.y}) {r.width}x{r.height}: {r.changed_pixels} pixels")
-    
+
     # Exit codes: 0 identical, 1 differences found
     return 0 if result.identical else 1
 
@@ -190,7 +190,7 @@ def main() -> int:
         description="Visual diff and baseline operations",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    
+
     # baseline-save subcommand
     save_parser = subparsers.add_parser(
         "baseline-save",
@@ -204,14 +204,14 @@ def main() -> int:
     save_parser.add_argument("--masks", nargs="*", default=[], help="Masked CSS selectors")
     save_parser.add_argument("--source", default="", help="Source string")
     save_parser.add_argument("--overwrite", action="store_true", help="Allow overwrite")
-    
+
     # baseline-list subcommand
     list_parser = subparsers.add_parser(
         "baseline-list",
         help="List saved baselines",
     )
     list_parser.add_argument("root", type=Path, help="Root directory")
-    
+
     # diff subcommand
     diff_parser = subparsers.add_parser(
         "diff",
@@ -224,7 +224,7 @@ def main() -> int:
     diff_parser.add_argument("--max-regions", "-m", type=int, default=20, help="Max regions")
     diff_parser.add_argument("--json", action="store_true", help="Output as JSON")
     diff_parser.add_argument("--overlay", type=Path, help="Write overlay PNG")
-    
+
     # compare subcommand
     compare_parser = subparsers.add_parser(
         "compare",
@@ -238,9 +238,9 @@ def main() -> int:
     compare_parser.add_argument("--renderer-json", type=Path, help="Renderer JSON file")
     compare_parser.add_argument("--json", action="store_true", help="Output as JSON")
     compare_parser.add_argument("--ignore", nargs="*", help="Ignore regions (x,y,w,h)")
-    
+
     args = parser.parse_args()
-    
+
     try:
         if args.command == "baseline-save":
             return cmd_baseline_save(args)
