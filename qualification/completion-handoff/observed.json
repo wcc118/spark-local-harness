@@ -1,0 +1,38 @@
+{
+  "issue": 177,
+  "codex_version": "0.153.4",
+  "candidate_base": "547bb7b",
+  "focused_tests": {
+    "passed": 81,
+    "failed": 0
+  },
+  "full_tests": {
+    "passed": 563,
+    "failed": 1,
+    "baseline_failure": "test_v060_freeze_binds_paired_benchmark_release",
+    "baseline_reproduced": true,
+    "tracked_issue": 176
+  },
+  "benchmark_tests": {
+    "passed": 5,
+    "failed": 0
+  },
+  "live_codex_stop_test": {
+    "fixture_exit": 65,
+    "decisions": [
+      "block",
+      "allow"
+    ],
+    "terminal_acknowledged": true,
+    "codex_exit": 0,
+    "hook_trust": "one-off externally reviewed test source; no production trust installed",
+    "sandbox": "danger-full-access, matching host execution permissions"
+  },
+  "initial_smoke_infrastructure_failure": {
+    "sandbox": "workspace-write",
+    "error": "bwrap loopback RTM_NEWADDR operation not permitted",
+    "explicitly_interrupted": true
+  },
+  "production_activation": "requires caller hook trust and load verification; no claim of existing remote-session activation",
+  "original_review": "malformed result stays invalid and unpublished"
+}

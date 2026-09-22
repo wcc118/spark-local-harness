@@ -1,0 +1,15 @@
+{
+  "immutable_commit": "114d6ce6f8020d580e3b734b2adf80f4ca7818f5",
+  "matches": {
+    "benchmark": true,
+    "benchmark_cli": true,
+    "dashboard": true,
+    "manifest": true,
+    "paired_runner": true,
+    "routes": true,
+    "reviewer": true,
+    "worker": true,
+    "dashboard_unit": true
+  },
+  "disposition": "Historical provenance check only; mutable-working-tree test remains tracked in #176. No historical digests rewritten."
+}

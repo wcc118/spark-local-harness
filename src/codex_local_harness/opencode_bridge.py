@@ -99,7 +99,7 @@ def _append_event(path: Path, event: dict[str, Any]) -> None:
         handle.flush()
 
 
-def _events(base_url: str, password: str, timeout: float):
+def _events(base_url: str, password: str, timeout: float | None):
     request = urllib.request.Request(base_url + "/event")
     request.add_header("Authorization", "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode())
     try:
@@ -125,7 +125,8 @@ def run_bridge(
     compaction_records: Path | None = None, log: Path, control: Path,
     secret: Path, timeout: float,
 ) -> int:
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout if timeout > 0 else float("inf")
+    startup_deadline = min(deadline, time.monotonic() + 30)
     diagnostics = ExecutionDiagnostics(agent, load_stage_budgets(os.environ.get("CODEX_LOCAL_STAGE_BUDGETS")))
     if (issue is None) != (compaction_records is None):
         raise BridgeError("issue and compaction records must be configured together")
@@ -138,7 +139,7 @@ def run_bridge(
                 break
         except BridgeError:
             pass
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= startup_deadline:
             raise BridgeError("OpenCode server did not become healthy before timeout")
         time.sleep(0.1)
 
@@ -198,7 +199,7 @@ def run_bridge(
 
         terminal_error = False
         message_roles: dict[str, str] = {}
-        for raw in _events(base_url, password, max(1, deadline - time.monotonic())):
+        for raw in _events(base_url, password, max(1, deadline - time.monotonic()) if timeout > 0 else None):
             properties = raw.get("properties") if isinstance(raw.get("properties"), dict) else {}
             part = properties.get("part") if isinstance(properties.get("part"), dict) else {}
             info = properties.get("info") if isinstance(properties.get("info"), dict) else {}

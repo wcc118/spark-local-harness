@@ -23,7 +23,10 @@ worker_server_container=
 worker_control=
 worker_control_secret=
 worker_model_lock_fd=
-isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-/home/connellwc83/.local/share/opencode-orchestration/isolated-checkouts}
+isolation_parent=${CODEX_LOCAL_ISOLATION_PARENT:-${HOME}/.local/share/opencode-orchestration/isolated-checkouts}
+supervision_admitted=0
+convergence=${CODEX_LOCAL_CONVERGENCE:-0}
+health_dir=${CODEX_LOCAL_HEALTH_DIR:-${HOME}/.local/share/codex-local-harness/health}
 diagnostic_started=0
 diagnostic_finalized=0
 worker_started_epoch=
@@ -87,17 +90,23 @@ cleanup() {
   if [[ -n $task_temp && -f $task_temp ]]; then
     rm -f -- "$task_temp"
   fi
-  if [[ -n $review_runtime_tmp && -d $review_runtime_tmp ]]; then
+  if [[ $convergence != 1 && -n $review_runtime_tmp && -d $review_runtime_tmp ]]; then
     rm -rf -- "$review_runtime_tmp"
   fi
   if [[ -n $worker_runtime_home && -d $worker_runtime_home ]]; then
     rm -rf -- "$worker_runtime_home"
   fi
-  if [[ -n $worker_isolation_root && -d $worker_isolation_root && $worker_isolation_root == "$isolation_parent"/* ]]; then
+  if [[ $convergence != 1 && -n $worker_isolation_root && -d $worker_isolation_root && $worker_isolation_root == "$isolation_parent"/* ]]; then
     rm -rf -- "$worker_isolation_root"
+  fi
+  if [[ $supervision_admitted == 1 ]]; then
+    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.supervision --health "$health_dir" --session "$worker_session_id" finish "$worker_run_id" --exit-status "$cleanup_status" || echo "ERROR: terminal ownership record failed; retained work requires inspection" >&2
+    echo "Retained checkpoint: $worker_repo_path (not a live model session)" >&2
   fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ ${1:-} == --task-file ]]; then
   (( $# == 2 )) || usage
@@ -132,7 +141,7 @@ case "$worker_role" in
 esac
 [[ -d "$worker_repo_path" ]] || { echo "ERROR: repository path is not a directory: $worker_repo_path" >&2; exit 2; }
 
-worker_config=${CODEX_LOCAL_WORKER_CONFIG:-/home/connellwc83/.config/codex-local/workers.json}
+worker_config=${CODEX_LOCAL_WORKER_CONFIG:-${HOME}/.config/codex-local/workers.json}
 [[ -r "$worker_config" ]] || { echo "ERROR: worker routing config is not readable: $worker_config" >&2; exit 2; }
 jq -e '.routes and .defaults' "$worker_config" >/dev/null || { echo "ERROR: invalid worker routing config" >&2; exit 2; }
 
@@ -176,36 +185,40 @@ case "$worker_role" in
   reviewer) default_worker_timeout=120 ;;
   coder) default_worker_timeout=1800 ;;
 esac
+if [[ $convergence == 1 && ( $worker_role == coder || $worker_role == reviewer ) ]]; then
+  default_worker_timeout=0
+fi
 worker_timeout=${CODEX_LOCAL_TIMEOUT_SECONDS:-$default_worker_timeout}
-[[ "$worker_timeout" =~ ^[1-9][0-9]*$ ]] || {
-  echo "ERROR: CODEX_LOCAL_TIMEOUT_SECONDS must be a positive integer" >&2; exit 2;
+[[ "$worker_timeout" =~ ^[0-9]+$ && ( "$worker_timeout" != 0 || "$convergence" == 1 ) ]] || {
+  echo "ERROR: CODEX_LOCAL_TIMEOUT_SECONDS must be positive (candidate: 0 disables whole-task deadline)" >&2; exit 2;
 }
 reviewer_token_budget=${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-250000}
 [[ "$reviewer_token_budget" =~ ^[1-9][0-9]*$ ]] || {
   echo "ERROR: CODEX_LOCAL_REVIEWER_TOKEN_BUDGET must be a positive integer" >&2; exit 2;
 }
 
-if [[ $worker_model == vllm/* && ${CODEX_LOCAL_MODEL_SWITCH:-1} == 1 ]]; then
+if [[ ( $worker_model == vllm/* || $worker_model == deepseek/deepseek-v4-flash-0731-exl3-k2 ) && ${CODEX_LOCAL_MODEL_SWITCH:-1} == 1 ]]; then
   vllm_model=${worker_model#vllm/}
   case "$vllm_model" in
     Qwen/Qwen3.8-27B-FP8) vllm_profile=qwen38 ;;
     Qwen/Qwen3-Coder-Next-FP8) vllm_profile=coder-next ;;
     nvidia/Qwen3.5-122B-A10B-NVFP4) vllm_profile=qwen35-nvfp4 ;;
+    deepseek/deepseek-v4-flash-0731-exl3-k2) vllm_profile=deepseek-v4-reasoning ;;
     *) echo "ERROR: unsupported vLLM worker model: $vllm_model" >&2; exit 69 ;;
   esac
-  model_manager=${CODEX_LOCAL_MODEL_MANAGER:-/home/connellwc83/.local/bin/codex-local-model}
-  model_lock=${CODEX_LOCAL_MODEL_LOCK:-/home/connellwc83/.local/share/codex-local-harness/model.lock}
+  model_manager=${CODEX_LOCAL_MODEL_MANAGER:-${HOME}/.local/bin/codex-local-model}
+  model_lock=${CODEX_LOCAL_MODEL_LOCK:-${HOME}/.local/share/codex-local-harness/model.lock}
   [[ -x $model_manager ]] || { echo "ERROR: model manager is unavailable: $model_manager" >&2; exit 69; }
   install -d -m 700 "$(dirname -- "$model_lock")"
   exec {worker_model_lock_fd}>"$model_lock"
-  flock --wait "${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-$worker_timeout}" "$worker_model_lock_fd" || {
+  flock --wait "${CODEX_LOCAL_MODEL_LOCK_TIMEOUT:-1800}" "$worker_model_lock_fd" || {
     echo "ERROR: timed out waiting for the vLLM model lock: $model_lock" >&2; exit 75;
   }
   CODEX_LOCAL_MODEL_LOCK_HELD=1 "$model_manager" use "$vllm_profile" || exit $?
 fi
 
 worker_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-worker_log_dir=/home/connellwc83/.local/share/opencode-orchestration/runs
+worker_log_dir=${CODEX_LOCAL_LOG_DIR:-${HOME}/.local/share/opencode-orchestration/runs}
 install -d -m 700 "$worker_log_dir"
 worker_log="$worker_log_dir/$worker_run_id.jsonl"
 worker_envelope="$worker_log_dir/$worker_run_id.envelope.json"
@@ -217,14 +230,14 @@ umask 077
 # Inference must never inherit the operator's authenticated home or ambient
 # credentials.  Build a disposable OpenCode home containing only the runtime
 # configuration and agent prompts, then launch with an explicit environment.
-worker_runtime_parent=/home/connellwc83/.local/share/opencode-orchestration/worker-homes
+worker_runtime_parent=${HOME}/.local/share/opencode-orchestration/worker-homes
 install -d -m 700 "$worker_runtime_parent"
 worker_runtime_home=$(mktemp -d --tmpdir="$worker_runtime_parent")
 install -d -m 700 "$worker_runtime_home/.config/opencode/agents" "$worker_runtime_home/.qwen" \
   "$worker_runtime_home/.local/share" "$worker_runtime_home/.cache"
 # Automatic OpenCode compaction is the installed auto-only baseline. Manual
 # compaction is a separate controller capability and remains disabled.
-jq '.mcp.github.enabled = false
+jq --arg vllm_url "${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" --arg deepseek_url "${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}/v1" '.mcp = ((.mcp // {}) | with_entries(.value.enabled = false))
     | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
@@ -232,25 +245,39 @@ jq '.mcp.github.enabled = false
     | .agent.reviewer.permission = {"*": "deny", "vision-review_review_screenshot": "allow"}
     | .agent.reviewer.steps = 4
     | .compaction = { "auto": true, "prune": true, "reserved": 16000 }
+    | .provider.vllm.options.baseURL = $vllm_url
     | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {
         "name": "Qwen3.5 122B NVFP4 (Spark)",
         "limit": { "context": 65536, "output": 8192 }
-      }' /home/connellwc83/.config/opencode/opencode.json \
+      }
+    | .provider.deepseek = {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "DeepSeek V4 Flash reasoning (Spark)",
+        "options": {"baseURL": $deepseek_url},
+        "models": {"deepseek-v4-flash-0731-exl3-k2": {
+          "name": "DeepSeek V4 Flash reasoning",
+          "limit": {"context": 1000000, "output": 32768}
+        }}
+      }' "${CODEX_LOCAL_OPENCODE_CONFIG:-${HOME}/.config/opencode/opencode.json}" \
   >"$worker_runtime_home/.config/opencode/opencode.json"
-cp -a /home/connellwc83/.config/opencode/agents/. \
-  "$worker_runtime_home/.config/opencode/agents/"
-if [[ -d /home/connellwc83/projects/codex-local-harness/agents ]]; then
-  cp -a /home/connellwc83/projects/codex-local-harness/agents/. \
-    "$worker_runtime_home/.config/opencode/agents/"
-fi
+worker_agents=${CODEX_LOCAL_AGENTS:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../agents" && pwd)}
+cp -a "$worker_agents/." "$worker_runtime_home/.config/opencode/agents/"
 printf '%s\n' '{"tools":{"approvalMode":"yolo","core":["read_file","grep_search","glob","edit","write_file","run_shell_command"],"disabled":["record_artifact","agent","list_agents","task_stop","send_message","skill","tool_search","read_mcp_resource","web_fetch","computer_use__bring_to_front","computer_use__check_for_update","computer_use__check_permissions","computer_use__click","computer_use__double_click","computer_use__drag","computer_use__end_session","computer_use__get_accessibility_tree","computer_use__get_agent_cursor_state","computer_use__get_config","computer_use__get_cursor_position","computer_use__get_recording_state","computer_use__get_screen_size","computer_use__get_window_state","computer_use__hotkey","computer_use__kill_app","computer_use__launch_app","computer_use__list_apps","computer_use__list_windows","computer_use__move_cursor","computer_use__page","computer_use__press_key","computer_use__replay_trajectory","computer_use__right_click","computer_use__scroll","computer_use__set_agent_cursor_enabled","computer_use__set_agent_cursor_motion","computer_use__set_agent_cursor_style","computer_use__set_config","computer_use__set_value","computer_use__start_recording","computer_use__start_session","computer_use__stop_recording","computer_use__type_text","computer_use__zoom","create_sub_session","enter_worktree","exit_worktree","get_goal","update_goal","monitor","loop_wakeup","cron_create","cron_list","cron_delete"]},"telemetry":{"enabled":false}}' \
   >"$worker_runtime_home/.qwen/settings.json"
+if [[ $convergence == 1 && $worker_role == reviewer ]]; then
+  [[ ${CODEX_LOCAL_SANDBOX:-container} == container ]] || { echo "ERROR: investigative review requires container confinement" >&2; exit 2; }
+  candidate_agents=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../agents" && pwd)
+  cp "$candidate_agents/convergence-reviewer.md" "$worker_runtime_home/.config/opencode/agents/convergence-reviewer.md"
+  worker_agent=convergence-reviewer
+  # Explicit selection is mandatory; native OpenCode otherwise chooses its default agent.
+  worker_mode=tailored
+fi
 worker_opencode=
 if [[ $worker_runtime == opencode ]]; then
   worker_opencode=${CODEX_LOCAL_OPENCODE:-$(command -v opencode)}
   [[ -x $worker_opencode ]] || { echo "ERROR: OpenCode executable is not executable: $worker_opencode" >&2; exit 2; }
 fi
-worker_path=/home/connellwc83/.local/bin:/home/connellwc83/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+worker_path=${HOME}/.local/bin:${HOME}/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 worker_sandbox=${CODEX_LOCAL_SANDBOX:-container}
 worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.2.0}
 case "$worker_sandbox" in
@@ -294,11 +321,32 @@ if [[ $worker_role == coder || $worker_role == reviewer ]]; then
   source_remote=$(git -C "$worker_source_repo_path" remote get-url origin)
   [[ -n $source_branch ]] || { echo "ERROR: worker source checkout must have a branch" >&2; exit 65; }
   install -d -m 700 "$isolation_parent"
-  worker_isolation_root=$(mktemp -d --tmpdir="$isolation_parent")
-  worker_repo_path=$worker_isolation_root/checkout
-  git clone --quiet --no-hardlinks --no-checkout "$worker_source_repo_path" "$worker_repo_path"
-  git -C "$worker_repo_path" remote set-url origin "$source_remote"
-  git -C "$worker_repo_path" checkout --quiet -B "$source_branch" "$source_head"
+  if [[ $convergence == 1 && -n ${CODEX_LOCAL_RESUME_RUN:-} ]]; then
+    [[ $worker_role == coder ]] || { echo "ERROR: checkpoint continuation is coder-only; review a fresh exact revision" >&2; exit 2; }
+    resume_info=$(env PYTHONPATH="${CODEX_LOCAL_SOURCE:?}" python3 -m codex_local_harness.supervision \
+      --health "$health_dir" --session "${CODEX_LOCAL_SESSION_ID:-${CODEX_THREAD_ID:-}}" checkpoint "$CODEX_LOCAL_RESUME_RUN")
+    jq -e --arg repo "$worker_repository" --arg issue "$worker_issue" --arg source "$worker_source_repo_path" \
+      '.repository == $repo and (.issue | tostring) == $issue and .source == $source and .role == "coder"' <<<"$resume_info" >/dev/null || { echo "ERROR: checkpoint identity mismatch" >&2; exit 65; }
+    worker_repo_path=$(jq -r .checkout <<<"$resume_info")
+    worker_isolation_root=$(dirname -- "$worker_repo_path")
+    [[ $(realpath "$worker_repo_path") == "$(realpath "$isolation_parent")"/*/checkout ]] || { echo "ERROR: checkpoint outside isolation parent" >&2; exit 65; }
+    resumed_task=$(mktemp --tmpdir="$worker_log_dir" "$worker_run_id.task.XXXXXX")
+    env PYTHONPATH="$CODEX_LOCAL_SOURCE" python3 -m codex_local_harness.supervision \
+      --health "$health_dir" --session "${CODEX_LOCAL_SESSION_ID:-${CODEX_THREAD_ID:-}}" resume-packet "$CODEX_LOCAL_RESUME_RUN" \
+      --target "$worker_run_id" --task "$worker_task_file" --output "$resumed_task"
+    worker_task_file=$resumed_task
+    worker_task=$(cat "$worker_task_file")
+  else
+    worker_isolation_root=$(mktemp -d --tmpdir="$isolation_parent")
+    worker_repo_path=$worker_isolation_root/checkout
+    git clone --quiet --no-hardlinks --no-checkout "$worker_source_repo_path" "$worker_repo_path"
+    git -C "$worker_repo_path" remote set-url origin "$source_remote"
+    git -C "$worker_repo_path" checkout --quiet -B "$source_branch" "$source_head"
+  fi
+  if [[ $convergence == 1 ]]; then
+    exec {checkout_lock_fd}>"$worker_isolation_root/.execution.lock"
+    flock -n "$checkout_lock_fd" || { echo "ERROR: retained checkout already has an active worker" >&2; exit 75; }
+  fi
   checkout_kind=isolated-clone
   checkout_id=$(printf '%s' "$worker_repo_path" | sha256sum | cut -d' ' -f1)
 fi
@@ -313,16 +361,19 @@ if [[ $worker_role == coder ]]; then
   git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
 fi
 
-candidate_source=${CODEX_LOCAL_SOURCE:-/home/connellwc83/.local/share/codex-local-harness/runtime/current/src}
+candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
 [[ -d $candidate_source/codex_local_harness ]] || {
   echo "ERROR: installed harness runtime is missing: $candidate_source" >&2
   exit 69
 }
-lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/lifecycle.jsonl}
-workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/workflow.jsonl}
-publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/publication-failures.jsonl}
-compaction_records=${CODEX_LOCAL_COMPACTION_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/compaction.jsonl}
+lifecycle_records=${CODEX_LOCAL_LIFECYCLE_RECORDS:-$health_dir/lifecycle.jsonl}
+workflow_records=${CODEX_LOCAL_WORKFLOW_RECORDS:-$health_dir/workflow.jsonl}
+publication_failure_records=${CODEX_LOCAL_PUBLICATION_FAILURE_RECORDS:-$health_dir/publication-failures.jsonl}
+compaction_records=${CODEX_LOCAL_COMPACTION_RECORDS:-${HOME}/.local/share/codex-local-harness/health/compaction.jsonl}
 worker_operation_id=${CODEX_LOCAL_OPERATION_ID:-issue-$worker_issue}
+if [[ $convergence == 1 && -z ${CODEX_LOCAL_OPERATION_ID:-} ]]; then
+  worker_operation_id=issue-$worker_issue-$worker_run_id
+fi
 bridge_compaction_args=()
 if [[ $record_run == 1 ]]; then
   bridge_compaction_args=(--issue "$worker_issue" --compaction-records "$compaction_records")
@@ -335,6 +386,16 @@ worker_session_id=${CODEX_LOCAL_SESSION_ID:-${CODEX_THREAD_ID:-}}
 # Repository (CODEX_LOCAL_REPOSITORY)
 [[ -z $worker_repository ]] || workflow_identity_args+=(--repository "$worker_repository")
 lifecycle_checkout_args=(--checkout-kind "$checkout_kind" --checkout-id "$checkout_id")
+if [[ $convergence == 1 ]]; then
+  [[ $record_run == 1 && -n $worker_session_id ]] || {
+    echo "ERROR: candidate requires recorded execution and the calling Codex session identity" >&2; exit 2;
+  }
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.supervision \
+    --health "$health_dir" --session "$worker_session_id" admit \
+    --run-id "$worker_run_id" --repository "$worker_repository" --issue "$worker_issue" \
+    --role "$worker_role" --checkout "$worker_repo_path" --source "$worker_source_repo_path" --log "$worker_log"
+  supervision_admitted=1
+fi
 record_publication_failure() {
   local publication_phase=$1
   local publication_target=$2
@@ -361,10 +422,18 @@ if [[ $worker_role == reviewer ]]; then
     echo "ERROR: reviewer requires CODEX_LOCAL_REPOSITORY, CODEX_LOCAL_ISSUE, and CODEX_LOCAL_PR" >&2
     exit 2
   }
-  review_scratch_parent=/home/connellwc83/.local/share/opencode-orchestration/reviewer-scratch
+  review_scratch_parent=${HOME}/.local/share/opencode-orchestration/reviewer-scratch
   install -d -m 700 "$review_scratch_parent"
   review_runtime_tmp=$(mktemp -d --tmpdir="$review_scratch_parent")
-  worker_task=$("${review_cli[@]}" prepare \
+  if [[ $convergence == 1 ]]; then
+    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.review_profile \
+      "$candidate_agents/convergence-reviewer.md" \
+      "$worker_runtime_home/.config/opencode/agents/convergence-reviewer.md" \
+      "$worker_repo_path" "$review_runtime_tmp"
+  fi
+  review_prepare_args=()
+  [[ $convergence != 1 ]] || review_prepare_args+=(--investigative)
+  worker_task=$("${review_cli[@]}" prepare "${review_prepare_args[@]}" \
     --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --pr "$worker_pr" --task-file "$worker_task_file" \
     --envelope-out "$worker_envelope" --scratch-dir "$review_runtime_tmp" \
@@ -397,6 +466,29 @@ if [[ $record_run == 1 ]]; then
     record_publication_failure start workflow
   fi
 fi
+if [[ $worker_model == deepseek/deepseek-v4-flash-0731-exl3-k2 ]]; then
+  case "$worker_role" in
+    coder)
+      worker_contract='Use four bounded phases: inspect the directly relevant files, make the required edit, run the stated focused verification, then summarize and stop. Preserve the issue scope. If requirements conflict or evidence is missing, report the blocker.'
+      ;;
+    reviewer)
+      worker_contract='Review the supplied issue, patch, and evidence. For each finding, identify the failing behavior, its triggering input or state, and whether surrounding code prevents it. Report only conclusions directly supported by evidence. Distinguish observed tests from reported tests. State uncertainty and missing evidence; do not guess. Follow the supplied review result schema and stop after returning it.'
+      ;;
+    helper)
+      worker_contract='Investigate the supplied issue read-only. Separate observations, hypotheses, and conclusions. Consider alternative explanations and reject those contradicted by evidence. Return the narrowest supported conclusion, evidence references, uncertainties, and missing evidence. Do not guess when alternatives cannot be distinguished. Follow the supplied output requirements and stop after answering.'
+      ;;
+  esac
+  worker_task="$worker_contract"$'\n\n'"$worker_task"
+  # The bridge reads a file while native execution reads the string. Both
+  # receive the final prepared packet, including reviewer evidence/schema.
+  worker_task_file="$worker_runtime_home/structured-task.txt"
+  printf '%s\n' "$worker_task" >"$worker_task_file"
+fi
+if [[ $convergence == 1 && $worker_role == coder ]]; then
+  worker_task=$'Work toward the supplied functional acceptance criteria. Choose your own investigative sequence and continue while a useful next experiment remains. Repeated failures are evidence to reassess, not a reason to repeat unchanged actions. If you cannot identify a productive next step, report the specific missing fact or blocker for Codex guidance. Do not expand scope for unsolicited polish.\n\n'"$worker_task"
+  worker_task_file="$worker_runtime_home/convergence-task.txt"
+  printf '%s\n' "$worker_task" >"$worker_task_file"
+fi
 set +e
 worker_env=(env -i HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="${LOGNAME:-worker}"
   PATH="$worker_path" XDG_CONFIG_HOME="$worker_runtime_home/.config"
@@ -426,15 +518,27 @@ if [[ $worker_sandbox == container ]]; then
     --workdir "$worker_repo_path")
   [[ $worker_runtime != opencode ]] || docker_args+=(--mount "type=bind,src=$worker_opencode,dst=/usr/local/bin/opencode,readonly")
   for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
+  if [[ $convergence == 1 && $worker_role == reviewer ]]; then
+    docker_args+=(--mount "type=bind,src=$review_runtime_tmp,dst=$review_runtime_tmp")
+  fi
+  if [[ $convergence == 1 && -n ${CODEX_LOCAL_VERIFY_COMMAND:-} ]]; then
+    docker "${docker_args[@]}" "$worker_container_image" sh -lc "$CODEX_LOCAL_VERIFY_COMMAND" || {
+      echo "ERROR: verification capability check failed before inference" >&2; exit 69;
+    }
+    worker_task=$'HARNESS_OBSERVED_RUNTIME_CAPABILITY: The following command exited 0 inside this same worker container before inference. Prefer these verified runtime capabilities over host executable paths.\n'"$CODEX_LOCAL_VERIFY_COMMAND"$'\n\n'"$worker_task"
+    worker_task_file="$worker_runtime_home/verified-task.txt"
+    printf '%s\n' "$worker_task" >"$worker_task_file"
+  fi
   if [[ $worker_runtime == qwen-code ]]; then
     qwen_model=${worker_model#vllm/}
     qwen_env=()
     if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]; then
       qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)
     fi
+    [[ $convergence != 1 ]] || { worker_server_container="codex-worker-$worker_run_id"; docker_args+=(--name "$worker_server_container"); }
     timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
       docker "${docker_args[@]}" \
-      --env OPENAI_API_KEY=not-needed --env OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+      --env OPENAI_API_KEY=not-needed --env "OPENAI_BASE_URL=${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" \
       "${qwen_env[@]}" \
       "$worker_container_image" qwen --auth-type openai --approval-mode yolo --model "$qwen_model" \
       --output-format stream-json --prompt "$worker_task" >"$worker_log"
@@ -490,13 +594,16 @@ else
     "$worker_opencode" "${opencode_args[@]}" --model "$worker_model" "$worker_task" >"$worker_log"
 fi
 inference_status=$?
+if [[ $convergence == 1 && -n ${bridge_status:-} ]]; then
+  inference_status=$bridge_status
+fi
 set -e
 
 reviewer_observed_tokens=0
 reviewer_budget_reason=
 if [[ $worker_role == reviewer ]]; then
   reviewer_observed_tokens=$(jq -s '[.[] | select(.type == "step_finish") | (.part.tokens.total // 0)] | add // 0' "$worker_log")
-  if (( reviewer_observed_tokens > reviewer_token_budget )); then
+  if [[ $convergence != 1 || -n ${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-} ]] && (( reviewer_observed_tokens > reviewer_token_budget )); then
     reviewer_budget_reason=token-budget
   elif (( inference_status == 124 || inference_status == 137 )); then
     reviewer_budget_reason=wall-time-budget
@@ -530,7 +637,9 @@ if [[ $worker_role == reviewer && -n $reviewer_budget_reason && $reviewer_has_re
   workflow_status=75
 elif [[ $worker_role == reviewer && $inference_status == 0 ]]; then
   set +e
-  "${review_cli[@]}" finalize --envelope "$worker_envelope" --log "$worker_log" \
+  review_publish_args=()
+  [[ ${CODEX_LOCAL_REVIEW_PUBLISH:-1} != 0 ]] || review_publish_args+=(--no-publish)
+  "${review_cli[@]}" finalize "${review_publish_args[@]}" --envelope "$worker_envelope" --log "$worker_log" \
     --run-id "$worker_run_id" --result-out "$worker_result"
   finalize_status=$?
   set -e
@@ -551,15 +660,20 @@ if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POS
 fi
 
 if [[ $record_run == 1 ]]; then
-  legacy_ledger=${CODEX_LOCAL_LEGACY_LEDGER:-/home/connellwc83/.config/opencode/opencode-infra/ledger-record-run.sh}
-  if ! "$legacy_ledger" \
+  if [[ $convergence == 1 ]]; then
+    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.usage \
+      --log "$worker_log" --runtime "$worker_runtime" --exit-status "$inference_status" \
+      --records "$health_dir/usage.jsonl" --run-id "$worker_run_id"
+  fi
+  legacy_ledger=${CODEX_LOCAL_LEGACY_LEDGER:-${HOME}/.config/opencode/opencode-infra/ledger-record-run.sh}
+  if [[ $convergence != 1 ]] && ! "$legacy_ledger" \
     "$worker_repository" "$worker_issue" "$worker_role" "$worker_model" "$worker_log" \
     "run_id=$worker_run_id runtime=$worker_runtime mode=$worker_mode inference_status=$inference_status workflow_status=$workflow_status"; then
     echo "WARN: legacy aggregate ledger ingestion failed for run $worker_run_id" >&2
     record_publication_failure finish legacy-ledger
   fi
 
-  health_records=${CODEX_LOCAL_HEALTH_RECORDS:-/home/connellwc83/.local/share/codex-local-harness/health/runs.jsonl}
+  health_records=${CODEX_LOCAL_HEALTH_RECORDS:-$health_dir/runs.jsonl}
   task_class=${CODEX_LOCAL_TASK_CLASS:-unclassified}
   health_status=success
   failure_class=
@@ -614,6 +728,7 @@ if [[ $record_run == 1 ]]; then
     --generated-artifacts "$generated_artifacts"
     --repository "$worker_repository"
   )
+  [[ $convergence != 1 ]] || health_args+=(--canonical)
   [[ -z $worker_pr ]] || health_args+=(--pull-request "$worker_pr")
   [[ -z $failure_class ]] || health_args+=(--failure-class "$failure_class")
   (( output_status == 0 )) || health_args+=(--allow-malformed)

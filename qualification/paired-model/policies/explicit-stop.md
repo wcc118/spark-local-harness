@@ -1,0 +1,1 @@
+Once the stated acceptance criteria pass, stop immediately. Do not perform optional cleanup, refactoring, additional investigation, or repeated verification. The first successful focused verification is sufficient evidence. If blocked after two distinct approaches, stop and report the blocker and evidence.

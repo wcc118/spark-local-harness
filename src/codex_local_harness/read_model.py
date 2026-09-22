@@ -35,8 +35,8 @@ class RunView:
     codex_decision: str | None
     evidence_refs: tuple[str, ...]
     wall_seconds: float
-    local_tokens: int
-    frontier_tokens: int
+    local_tokens: int | None
+    frontier_tokens: int | None
     turns: int
     tool_calls: int
     tool_errors: int
@@ -83,10 +83,14 @@ def summarize_views(views: Iterable[RunView]) -> dict[str, Any]:
         "effective_outcome_counts": _counts(view.effective_outcome for view in items),
         "failure_counts": _counts(view.failure_class for view in items if view.failure_class),
         "confirmed_local_autonomy_rate": confirmed_autonomous / len(adjudicated) if adjudicated else None,
-        "local_tokens": sum(view.local_tokens for view in items),
-        "frontier_tokens": sum(view.frontier_tokens for view in items),
+        "local_tokens": None if any(view.local_tokens is None for view in items) else sum(view.local_tokens for view in items),
+        "known_local_tokens": sum(view.local_tokens or 0 for view in items),
+        "unknown_usage_runs": sum(view.local_tokens is None for view in items),
+        "frontier_tokens": None if any(view.frontier_tokens is None for view in items) else sum(view.frontier_tokens for view in items),
+        "known_frontier_tokens": sum(view.frontier_tokens or 0 for view in items),
+        "unknown_frontier_runs": sum(view.frontier_tokens is None for view in items),
         "correction_cycles": sum(view.correction_cycle for view in items),
-        "codex_interventions": sum(view.intervention_depth != "none" for view in items),
+        "codex_interventions": sum(view.intervention_depth not in {"none", "unknown"} for view in items),
     }
 
 
@@ -130,8 +134,8 @@ def _build_view(run_id: str, run: RunHealth | None, adjudication: Adjudication |
         codex_decision=adjudication.codex_decision if adjudication else (run.codex_decision if run else None),
         evidence_refs=adjudication.evidence_refs if adjudication else (),
         wall_seconds=wall_seconds,
-        local_tokens=run.usage.local_total if run else 0,
-        frontier_tokens=run.usage.frontier_total if run else 0,
+        local_tokens=run.local_tokens if run else None,
+        frontier_tokens=run.frontier_tokens if run else 0,
         turns=run.turns if run else 0,
         tool_calls=run.tool_calls if run else 0,
         tool_errors=run.tool_errors if run else 0,

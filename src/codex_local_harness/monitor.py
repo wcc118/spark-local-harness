@@ -53,6 +53,10 @@ class HealthPolicy:
 
 
 def assess(summary: dict[str, Any], policy: HealthPolicy = HealthPolicy()) -> dict[str, Any]:
+    if summary.get("unknown_usage_runs") or summary.get("partial_usage_runs") or summary.get("unknown_frontier_runs"):
+        return {"status": "insufficient-data", "reasons": ["incomplete-token-usage"],
+                "metrics": {"known_local_tokens": summary.get("known_local_tokens"),
+                            "unknown_usage_runs": summary.get("unknown_usage_runs", 0)}, "policy": asdict(policy)}
     runs = int(summary["runs"])
     if runs < policy.minimum_runs:
         return {
@@ -103,6 +107,9 @@ def report(
 
 
 def assess_diagnostics(summary: dict[str, Any], policy: HealthPolicy = HealthPolicy()) -> dict[str, Any]:
+    if summary.get("unknown_usage_runs") or summary.get("unknown_frontier_runs"):
+        return {"status": "insufficient-data", "reasons": ["unknown-token-usage"],
+                "metrics": {"unknown_usage_runs": summary["unknown_usage_runs"]}, "policy": asdict(policy)}
     adjudicated = int(summary["adjudicated_runs"])
     local_tokens = int(summary["local_tokens"])
     frontier_tokens = int(summary["frontier_tokens"])

@@ -203,12 +203,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repository")
     parser.add_argument("--pull-request", type=int)
     parser.add_argument("--allow-malformed", action="store_true")
+    parser.add_argument("--canonical", action="store_true")
     args = parser.parse_args(argv)
     try:
         try:
             stats = parse_log(args.log, args.runtime)
         except ValueError:
-            if not args.allow_malformed:
+            if not args.allow_malformed and not args.canonical:
                 raise
             stats = OpenCodeStats(0, 0, 0, 0, 0, 0, 0.0, None, None, "unsupported")
         health = stats.as_health(
@@ -229,6 +230,12 @@ def main(argv: list[str] | None = None) -> int:
             pull_request=args.pull_request,
             runtime=args.runtime,
         )
+        if args.canonical:
+            from dataclasses import replace
+            from ..usage import normalize
+            canonical = normalize(args.log, args.runtime, args.inference_status)
+            health = replace(health, canonical_usage=canonical, intervention_depth="unknown",
+                             tool_errors=canonical["tool_errors"], tool_calls=canonical["tool_calls"])
         append_jsonl(args.records, health)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
