@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+recipe_dir=${CODEX_LOCAL_DEEPSEEK_RECIPE_DIR:-${HOME}/deepseek-v4-flash-0731-exl3-k2-spark}
+docker_bin=${CODEX_LOCAL_DOCKER:-docker}
+curl_bin=${CODEX_LOCAL_CURL:-curl}
+meminfo=${CODEX_LOCAL_MEMINFO:-/proc/meminfo}
+production_endpoint=${CODEX_LOCAL_PRODUCTION_ENDPOINT:-http://127.0.0.1:8000}
+candidate_endpoint=${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}
+minimum_available_kib=${CODEX_LOCAL_DEEPSEEK_MIN_AVAILABLE_KIB:-94371840}
+image=${CODEX_LOCAL_DEEPSEEK_IMAGE:-ghcr.io/tpurtell/deepseek-v4-flash-0731-exl3-k2-spark@sha256:86f99e42f2061322e7bc47691e09d9ebbef22951ec8aebd7662f3d1da1a535bc}
+project=codex-deepseek-v4-candidate
+
+usage() {
+  echo "usage: codex-local-deepseek-v4 preflight | pull | start | stop | status" >&2
+  exit 2
+}
+
+compose() {
+  local overlays=()
+  if [[ ${CODEX_LOCAL_DEEPSEEK_REASONING:-1} == 1 ]]; then
+    overlays=(-f "${CODEX_LOCAL_DEEPSEEK_OVERLAY:-$(dirname -- "$0")/../config/deepseek-v4-reasoning.yaml}")
+  fi
+  RECIPE_IMAGE=$image PULL_POLICY=never HOST=127.0.0.1 PORT=8011 \
+    "$docker_bin" compose --project-name "$project" \
+      -f "$recipe_dir/compose.yaml" -f "$recipe_dir/compose.codex.yaml" "${overlays[@]}" "$@"
+}
+
+available_kib() {
+  awk '$1 == "MemAvailable:" { print $2; found=1; exit } END { if (!found) exit 1 }' "$meminfo"
+}
+
+endpoint_ready() {
+  "$curl_bin" -fsS --connect-timeout 2 --max-time 4 "$1/health" >/dev/null 2>&1
+}
+
+preflight() {
+  [[ -d $recipe_dir ]] || { echo "ERROR: pinned recipe is unavailable: $recipe_dir" >&2; return 69; }
+  [[ -f $recipe_dir/compose.codex.yaml ]] || { echo "ERROR: candidate compose overlay is unavailable" >&2; return 69; }
+  "$docker_bin" image inspect "$image" >/dev/null 2>&1 || {
+    echo "ERROR: pinned candidate image is unavailable; run pull first" >&2
+    return 69
+  }
+  if endpoint_ready "$production_endpoint"; then
+    echo "ERROR: production vLLM is active at $production_endpoint; stop it before candidate startup" >&2
+    return 75
+  fi
+  if endpoint_ready "$candidate_endpoint"; then
+    echo "ERROR: candidate endpoint is already active at $candidate_endpoint" >&2
+    return 75
+  fi
+  local available
+  available=$(available_kib) || { echo "ERROR: MemAvailable is unavailable" >&2; return 69; }
+  if (( available < minimum_available_kib )); then
+    echo "ERROR: only $available KiB available; require at least $minimum_available_kib KiB" >&2
+    return 75
+  fi
+  echo "preflight passed: MemAvailable=${available} KiB endpoint=${candidate_endpoint}"
+}
+
+case ${1:-} in
+  preflight)
+    (( $# == 1 )) || usage
+    preflight
+    ;;
+  pull)
+    (( $# == 1 )) || usage
+    "$docker_bin" pull "$image"
+    ;;
+  start)
+    (( $# == 1 )) || usage
+    preflight
+    compose up -d
+    ;;
+  stop)
+    (( $# == 1 )) || usage
+    compose down
+    ;;
+  status)
+    (( $# == 1 )) || usage
+    if endpoint_ready "$candidate_endpoint"; then
+      "$curl_bin" -fsS "$candidate_endpoint/v1/models"
+    else
+      echo '{"status":"stopped","model":null}'
+    fi
+    ;;
+  *) usage ;;
+esac

@@ -1,0 +1,30 @@
+{
+  "manifests": [
+    {
+      "manifest": "baseline.json",
+      "manifest_sha256": "b7a137fe3b73bca1d65582b2136ac7a69b76bf717b59cc28d45d6612c6688874",
+      "path": "/home/connellwc83/.local/share/codex-local-harness/qualification/issue-181/baseline",
+      "files_verified": 45
+    },
+    {
+      "manifest": "candidate-final-3.json",
+      "manifest_sha256": "5416162bfbe6268689d9ac82370f1ed37cfef3f029e5e9551f812f49582613dc",
+      "path": "/home/connellwc83/.local/share/codex-local-harness/qualification/issue-181/candidate-final-3",
+      "files_verified": 74
+    }
+  ],
+  "fixtures": {
+    "baseline": {
+      "path": "/home/connellwc83/projects/codex/issue-186-baseline",
+      "head": "d818f0eb38c8cbb6f1f4afe58f058a255cc068dd",
+      "tree": "9a37c64548bacdcdac46916ccca3d8072883ed19",
+      "clone_merge_base": "02680d747f3b22fa89781817c97e8be07e3ececc"
+    },
+    "candidate": {
+      "path": "/home/connellwc83/projects/codex/issue-186-candidate",
+      "head": "d818f0eb38c8cbb6f1f4afe58f058a255cc068dd",
+      "tree": "9a37c64548bacdcdac46916ccca3d8072883ed19",
+      "clone_merge_base": "02680d747f3b22fa89781817c97e8be07e3ececc"
+    }
+  }
+}

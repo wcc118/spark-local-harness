@@ -1,0 +1,45 @@
+{
+  "run_id": "20260919T202112Z-678875",
+  "execution_exit": 124,
+  "schema_validated_result": {
+    "schema_version": 1,
+    "verdict": "REQUEST_CHANGES",
+    "repository": "wcc118/codex-local-harness",
+    "issue": 186,
+    "pull_request": 187,
+    "reviewed_head_sha": "d818f0eb38c8cbb6f1f4afe58f058a255cc068dd",
+    "criteria": [
+      "at least two finite time/value pairs",
+      "strictly increasing times",
+      "linear interpolation in query order incl. endpoints",
+      "queries <=1e-12 outside endpoints clamp; farther finite queries return None",
+      "fewer than two points, duplicate/decreasing times, non-finite point times/values, and non-finite queries (NaN, +inf, -inf) raise ValueError",
+      "inputs not mutated",
+      "standard library only"
+    ],
+    "findings": [
+      {
+        "severity": "high",
+        "behavior": "Non-finite queries (NaN, +inf, -inf) return None instead of raising ValueError, contradicting the contract",
+        "trigger": "Any query value that is NaN, +inf, or -inf",
+        "surrounding_code": "The guard `if not math.isfinite(q): results.append(None); continue` intercepts non-finite queries before any raise path; no surrounding code prevents it. test_non_finite_query asserts result == [None], confirming the behavior and showing the suite enforces None, not ValueError, so rejection of all three non-finite queries is not enforced."
+      }
+    ],
+    "tests": [
+      {
+        "command": "git diff --check <comparison-base>..<head>",
+        "provenance": "harness-observed",
+        "outcome": "Exit code 0; patch whitespace-clean"
+      },
+      {
+        "command": "python3 -m pytest -q qualification/convergence_fixture",
+        "provenance": "task-reported",
+        "outcome": "Reported passing; not independently executed (tool-free review). Suite does not enforce non-finite-query rejection: test_non_finite_query asserts None, and no test asserts ValueError for NaN/-inf/+inf queries."
+      }
+    ],
+    "confidence": "high",
+    "summary": "Implementation and tests fail the contract's requirement that non-finite queries (NaN, +inf, -inf) raise ValueError; instead they return None, and the sole non-finite-query test asserts None. All other contract points (min two points, strictly increasing times, endpoint/tolerance clamping, interpolation order, mutation-free, stdlib-only) are satisfied by the code and covered by tests.",
+    "escalation_reason": null
+  },
+  "qualification": "Model finding inspected by Codex; execution failed, checkout deleted, no completed or published local review."
+}

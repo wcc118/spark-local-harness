@@ -10,7 +10,7 @@ import fcntl
 
 
 SCHEMA_VERSION = 1
-INTERVENTION_DEPTHS = {"none", "audit", "targeted", "takeover"}
+INTERVENTION_DEPTHS = {"unknown", "none", "audit", "targeted", "takeover"}
 TOKEN_PROVENANCE = {"observed", "unsupported", "estimated", "not-applicable"}
 
 
@@ -75,6 +75,20 @@ class RunHealth:
     repository: str | None = None
     pull_request: int | None = None
     schema_version: int = SCHEMA_VERSION
+    canonical_usage: dict[str, Any] | None = None
+
+    @property
+    def local_tokens(self) -> int | None:
+        if self.canonical_usage is None:
+            return self.usage.local_total
+        return (self.canonical_usage.get("total_including_cache")
+                if self.canonical_usage.get("coverage") == "complete" else None)
+
+    @property
+    def frontier_tokens(self) -> int | None:
+        # Candidate assessments are separate session intervals, not inferred
+        # per-worker attribution. Legacy records retain their historical values.
+        return None if self.canonical_usage is not None else self.usage.frontier_total
 
     def __post_init__(self) -> None:
         required = (self.run_id, self.role, self.runtime, self.model, self.profile, self.task_class, self.status)
@@ -112,9 +126,10 @@ class RunHealth:
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
-        result["usage"]["local_total"] = self.usage.local_total
-        result["usage"]["frontier_total"] = self.usage.frontier_total
-        result["usage"]["total"] = self.usage.total
+        result["usage"]["local_total"] = self.local_tokens
+        result["usage"]["frontier_total"] = self.frontier_tokens
+        result["usage"]["total"] = (self.local_tokens + self.frontier_tokens
+                                    if self.local_tokens is not None and self.frontier_tokens is not None else None)
         return result
 
     @classmethod
@@ -173,7 +188,9 @@ def read_jsonl(path: Path) -> tuple[RunHealth, ...]:
 
 def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
     items = tuple(records)
-    local_tokens = sum(item.usage.local_total for item in items)
+    local_tokens = sum(item.local_tokens or 0 for item in items)
+    unknown_usage = sum(item.local_tokens is None for item in items)
+    unknown_frontier = sum(item.frontier_tokens is None for item in items)
     frontier_tokens = sum(item.usage.frontier_total for item in items)
     total_tokens = local_tokens + frontier_tokens
     locally_autonomous = sum(
@@ -186,9 +203,14 @@ def summarize(records: Iterable[RunHealth]) -> dict[str, Any]:
         "status_counts": _counts(item.status for item in items),
         "outcome_counts": _counts(item.outcome for item in items),
         "failure_counts": _counts(item.failure_class for item in items if item.failure_class),
-        "local_tokens": local_tokens,
-        "frontier_tokens": frontier_tokens,
-        "frontier_token_share": frontier_tokens / total_tokens if total_tokens else 0.0,
+        "local_tokens": None if unknown_usage else local_tokens,
+        "known_local_tokens": local_tokens,
+        "unknown_usage_runs": unknown_usage,
+        "partial_usage_runs": sum(bool(item.canonical_usage) and item.canonical_usage["coverage"] == "partial" for item in items),
+        "unknown_frontier_runs": unknown_frontier,
+        "frontier_tokens": None if unknown_frontier else frontier_tokens,
+        "known_frontier_tokens": frontier_tokens,
+        "frontier_token_share": None if unknown_frontier or unknown_usage else (frontier_tokens / total_tokens if total_tokens else 0.0),
         "local_autonomy_rate": locally_autonomous / len(items) if items else 0.0,
         "codex_targeted_runs": sum(item.intervention_depth == "targeted" for item in items),
         "codex_takeovers": sum(item.intervention_depth == "takeover" for item in items),

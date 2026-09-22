@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+export CODEX_LOCAL_CONVERGENCE=1
+export CODEX_LOCAL_SOURCE=${CODEX_LOCAL_SOURCE:-$script_dir/../src}
+export CODEX_LOCAL_WORKER_CONFIG=${CODEX_LOCAL_WORKER_CONFIG:-$script_dir/../config/workers-vllm.json}
+export PYTHONPATH="$CODEX_LOCAL_SOURCE"
+exec python3 -m codex_local_harness.supervision launch -- "$script_dir/codex-local-worker-v4" "$@"

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+completion_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
+exec env PYTHONPATH="$completion_source" python3 -m codex_local_harness.completion "$@"
