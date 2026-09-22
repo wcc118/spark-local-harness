@@ -219,7 +219,7 @@ def test_releasable_unit_file_names():
     unit_dir = DEPLOYMENT_DIR
     service_files = list(unit_dir.glob("*.service"))
     service_names = {f.name for f in service_files}
-    expected = {"dashboard-backend.service", "socat-lan-proxy.service"}
+    expected = {"dashboard-backend.service", "socat-lan-proxy.service", "vision-mcp-backend.service"}
     assert service_names == expected
 
 
