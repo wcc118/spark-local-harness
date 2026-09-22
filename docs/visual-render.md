@@ -298,17 +298,18 @@ When enabled (default), it writes a `.checks.json` file for each page and viewpo
     "viewport_height": 800,
     "page_height_ratio": 2.5,
     "unavailable_count": 5,
-    "contrast_unknown": 2
+    "contrast_unknown": 2,
+    "truncated": false
   },
   "summary": {
-    "contrast": 3,
     "clipped-text": 1,
-    "page-overflow-x": 0,
-    "missing-accessible-name": 2,
-    "placeholder-text": 1,
+    "contrast": 3,
     "implausible-timestamp": 0,
-    "tiny-text": 4,
-    "repeated-unavailable": 1
+    "missing-accessible-name": 2,
+    "page-overflow-x": 0,
+    "placeholder-text": 1,
+    "repeated-unavailable": 1,
+    "tiny-text": 4
   },
   "findings": [
     {
@@ -319,8 +320,7 @@ When enabled (default), it writes a `.checks.json` file for each page and viewpo
       "text": "Low contrast heading text...",
       "detail": "contrast ratio 3.20 (threshold: 4.5)"
     }
-  ],
-  "truncated": false
+  ]
 }
 ```
 
@@ -365,7 +365,10 @@ records `checks: false`.
 
 ### Limits and Edge Cases
 
-- Maximum 200 findings; additional findings are truncated with `truncated: true`
+- The `findings` list is capped at 200 (`stats.truncated` is `true` when more existed); the `summary` counts always cover the whole page
+- Text checks (contrast, placeholder, timestamp, tiny text) use an element's own text nodes, so a container does not repeat its children's findings; `repeated-unavailable` reports only the deepest container
+- `html`, `head`, `script`, `style`, `title`, `meta`, `link`, `noscript` and `template` are ignored
+- Backgrounds are composited from the outermost layer inward, so the innermost opaque layer wins
 - Skips non-rendered elements (`display:none`, `visibility:hidden`, `opacity:0`, zero-size)
 - Skips elements inside masked regions (mask selectors use `visibility:hidden`)
 - Contrast unknown when background involves images or gradients

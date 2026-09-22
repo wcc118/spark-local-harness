@@ -1405,7 +1405,7 @@ class TestChecksOutput:
         page = tmp_path / "clipped.html"
         page.write_text(
             "<!DOCTYPE html><html><body>"
-            "<div style='width:100px;overflow:hidden'>"
+            "<div style='width:100px;overflow:hidden;white-space:nowrap'>"
             "This is very long text that will be clipped"
             "</div>"
             "</body></html>"
@@ -1463,9 +1463,9 @@ class TestChecksOutput:
         page = tmp_path / "missing-name.html"
         page.write_text(
             "<!DOCTYPE html><html><body>"
-            "<button id='no-name'>Click me</button>"
-            "<a href='#'>Link</a>"
-            "<img src='test.png' alt=''>"
+            "<button id='no-name'></button>"
+            "<a href='#' style='display:inline-block;width:20px;height:20px'></a>"
+            "<img src='data:image/gif;base64,R0lGODlhAQABAAAAACw='>"
             "</body></html>"
         )
         out = tmp_path / "out"
@@ -1483,7 +1483,7 @@ class TestChecksOutput:
 
         # Should find missing accessible name issues
         missing_findings = [f for f in checks["findings"] if f["check"] == "missing-accessible-name"]
-        assert len(missing_findings) >= 2, "Expected at least 2 missing-accessible-name findings (button and link)"
+        assert len(missing_findings) == 3, "Expected findings for the empty button, the empty link and the img without alt"
 
     def test_missing_accessible_name_control(self, tmp_path: Path):
         """Test that elements with accessible names pass."""
@@ -1879,8 +1879,10 @@ class TestChecksStructure:
             "page_height_ratio",
             "unavailable_count",
             "contrast_unknown",
+            "truncated",
         }
         assert set(checks["stats"].keys()) == required_fields
+        assert checks["stats"]["truncated"] is False
 
     def test_findings_in_document_order(self, tmp_path: Path):
         """Test that findings are in document order."""
@@ -1953,8 +1955,10 @@ class TestChecksStructure:
         assert checks_path.exists()
         checks = json.loads(checks_path.read_text())
 
-        assert checks.get("truncated", False) is True
+        assert checks["stats"]["truncated"] is True
         assert len(checks["findings"]) == 200
+        # The summary keeps counting past the cap; only the findings list is capped
+        assert checks["summary"]["contrast"] == 250
 
     def test_summary_keys_sorted(self, tmp_path: Path):
         """Test that summary keys are sorted alphabetically."""
@@ -1983,3 +1987,78 @@ class TestChecksStructure:
 
         keys = list(checks["summary"].keys())
         assert keys == sorted(keys), "Summary keys should be sorted alphabetically"
+
+
+class TestChecksRegressions:
+    """Bugs found by running the checks against a real dashboard."""
+
+    def _checks(self, tmp_path: Path, html: str) -> dict:
+        skip_reason = skip_if_playwright_missing()
+        if skip_reason:
+            pytest.skip(skip_reason)
+        page = tmp_path / "reg.html"
+        page.write_text(html)
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = {
+            "pages": [{"name": "reg", "url": f"file://{page}"}],
+            "viewports": [{"name": "1280x800", "width": 1280, "height": 800}],
+            "timeout_ms": 30000,
+        }
+        render(spec, out)
+        return json.loads((out / "reg" / "1280x800.checks.json").read_text())
+
+    def test_nested_backgrounds_use_the_innermost_opaque_layer(self, tmp_path: Path):
+        # White page, dark card, light text: fine. Using the outermost (white) background would flag it.
+        checks = self._checks(
+            tmp_path,
+            "<!DOCTYPE html><html><body style='background:#ffffff'>"
+            "<div style='background:#111111;padding:10px'><p style='color:#eeeeee'>Readable on dark</p></div>"
+            "</body></html>",
+        )
+        assert checks["summary"]["contrast"] == 0
+
+    def test_semi_transparent_layers_are_composited(self, tmp_path: Path):
+        # Dark body with a faint white overlay stays dark; light grey text is readable.
+        checks = self._checks(
+            tmp_path,
+            "<!DOCTYPE html><html><body style='background:#0b1020'>"
+            "<div style='background:rgba(255,255,255,0.04)'><p style='color:#9aa6c3'>Muted but readable</p></div>"
+            "</body></html>",
+        )
+        assert checks["summary"]["contrast"] == 0
+
+    def test_nested_text_is_named_and_not_duplicated_on_ancestors(self, tmp_path: Path):
+        checks = self._checks(
+            tmp_path,
+            "<!DOCTYPE html><html><body>"
+            "<button><span>Save</span></button>"
+            "<div><section><p>undefined</p></section></div>"
+            "</body></html>",
+        )
+        assert checks["summary"]["missing-accessible-name"] == 0
+        placeholders = [f for f in checks["findings"] if f["check"] == "placeholder-text"]
+        assert len(placeholders) == 1
+        assert checks["summary"]["placeholder-text"] == 1
+
+    def test_repeated_unavailable_reports_only_the_deepest_container(self, tmp_path: Path):
+        checks = self._checks(
+            tmp_path,
+            "<!DOCTYPE html><html><body><main><section><div id='panel'>"
+            "<p>Unavailable</p><p>Unavailable</p><p>Unavailable</p><p>Unavailable</p>"
+            "</div></section></main></body></html>",
+        )
+        repeated = [f for f in checks["findings"] if f["check"] == "repeated-unavailable"]
+        assert len(repeated) == 1
+        assert "div#panel" in repeated[0]["selector"]
+        assert checks["stats"]["unavailable_count"] == 4
+
+    def test_style_and_script_text_is_ignored(self, tmp_path: Path):
+        checks = self._checks(
+            tmp_path,
+            "<!DOCTYPE html><html><head><style>.x{color:red} /* undefined undefined undefined */</style></head>"
+            "<body><p>Fine</p><script>var s = 'Unavailable Unavailable Unavailable';</script></body></html>",
+        )
+        assert checks["summary"]["placeholder-text"] == 0
+        assert checks["summary"]["repeated-unavailable"] == 0
+        assert checks["stats"]["unavailable_count"] == 0

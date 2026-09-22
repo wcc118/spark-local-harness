@@ -24,58 +24,6 @@ class MutationError extends Error {
   }
 }
 
-// Contrast computation helpers (run inside page.evaluate)
-const contrastCode = `
-const parse = (c) => { const m = c.match(/^rgba?\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)$/); return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null; };
-const over = (top, bottom) => { const a = top[3]; return [0, 1, 2].map((i) => top[i] * a + bottom[i] * (1 - a)).concat([1]); };
-const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
-const ratio = (a, b) => { const [hi, lo] = lum(a) >= lum(b) ? [lum(a), lum(b)] : [lum(b), lum(a)]; return (hi + 0.05) / (lo + 0.05); };
-const getEffectiveBackground = (el) => {
-  let current = el;
-  const colors = [];
-  while (current && current !== document.documentElement) {
-    const style = window.getComputedStyle(current);
-    const bgColor = style.backgroundColor;
-    const bgImage = style.backgroundImage;
-    if (bgImage && bgImage !== 'none') return null; // Cannot compute
-    const parsed = parse(bgColor);
-    if (parsed && parsed[3] !== 0) {
-      colors.push(parsed);
-    }
-    current = current.parentElement;
-  }
-  // Default to white if no background found
-  if (colors.length === 0) return [255, 255, 255, 1];
-  // Composite from top to bottom
-  let result = [255, 255, 255, 1];
-  for (const c of colors) {
-    result = over(c, result);
-  }
-  return result;
-};
-const getAncestorPath = (el) => {
-  const path = [];
-  let current = el;
-  let depth = 0;
-  while (current && current !== document.documentElement && depth < 5) {
-    const tag = current.tagName.toLowerCase();
-    const id = current.id ? '#' + current.id : '';
-    let selector = tag + id;
-    if (!id && current.classList.length > 0) {
-      selector += '.' + current.classList[0];
-    }
-    if (current.parentElement) {
-      const siblings = Array.from(current.parentElement.children).filter(c => c.tagName === current.tagName);
-      const idx = siblings.indexOf(current);
-      if (idx > 0) selector += ':nth-of-type(' + (idx + 1) + ')';
-    }
-    path.unshift(selector);
-    current = current.parentElement;
-    depth++;
-  }
-  return path.join(' > ');
-};
-`;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -259,9 +207,57 @@ function validateMutation(mutation) {
 async function runChecks(page, viewport, masks) {
   const maskSelector = masks.length > 0 ? masks.join(',') : null;
 
-  const result = await page.evaluate(({ vpWidth, vpHeight, maskSelector, contrastCode }) => {
-    // Inject contrast helpers
-    eval(contrastCode);
+  const result = await page.evaluate(({ vpWidth, vpHeight, maskSelector, FINDINGS_MAX }) => {
+    // Contrast and path helpers (defined in the page context)
+    const parse = (c) => { const m = c.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/); return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null; };
+    const over = (top, bottom) => { const a = top[3]; return [0, 1, 2].map((i) => top[i] * a + bottom[i] * (1 - a)).concat([1]); };
+    const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+    const ratio = (a, b) => { const [hi, lo] = lum(a) >= lum(b) ? [lum(a), lum(b)] : [lum(b), lum(a)]; return (hi + 0.05) / (lo + 0.05); };
+    const getEffectiveBackground = (el) => {
+      let current = el;
+      const colors = [];
+      while (current && current !== document.documentElement) {
+        const style = window.getComputedStyle(current);
+        const bgColor = style.backgroundColor;
+        const bgImage = style.backgroundImage;
+        if (bgImage && bgImage !== 'none') return null; // Cannot compute
+        const parsed = parse(bgColor);
+        if (parsed && parsed[3] !== 0) {
+          colors.push(parsed);
+        }
+        current = current.parentElement;
+      }
+      // Default to white if no background found
+      if (colors.length === 0) return [255, 255, 255, 1];
+      // Composite from the outermost layer inward: colors were collected innermost first
+      let result = [255, 255, 255, 1];
+      for (let i = colors.length - 1; i >= 0; i--) {
+        result = over(colors[i], result);
+      }
+      return result;
+    };
+    const getAncestorPath = (el) => {
+      const path = [];
+      let current = el;
+      let depth = 0;
+      while (current && current !== document.documentElement && depth < 5) {
+        const tag = current.tagName.toLowerCase();
+        const id = current.id ? '#' + current.id : '';
+        let selector = tag + id;
+        if (!id && current.classList.length > 0) {
+          selector += '.' + current.classList[0];
+        }
+        if (current.parentElement) {
+          const siblings = Array.from(current.parentElement.children).filter(c => c.tagName === current.tagName);
+          const idx = siblings.indexOf(current);
+          if (idx > 0) selector += ':nth-of-type(' + (idx + 1) + ')';
+        }
+        path.unshift(selector);
+        current = current.parentElement;
+        depth++;
+      }
+      return path.join(' > ');
+    };
 
     const elements = document.querySelectorAll('*');
     const findings = [];
@@ -278,7 +274,7 @@ async function runChecks(page, viewport, masks) {
     let elementsExamined = 0;
     let pageHeight = document.documentElement.scrollHeight;
     let viewportHeight = vpHeight;
-    let unavailableCount = 0;
+    const unavailableCount = (document.body.innerText.match(/Unavailable/gi) || []).length;
     let contrastUnknown = 0;
     let pageOverflowX = false;
 
@@ -313,7 +309,32 @@ async function runChecks(page, viewport, masks) {
     const yearsAgoPattern = /\b(\d{2,}) years? ago\b/i;
 
     // Iterate through all elements
+    const SKIP_TAGS = new Set(['HTML', 'HEAD', 'SCRIPT', 'STYLE', 'TITLE', 'META', 'LINK', 'NOSCRIPT', 'TEMPLATE']);
+
+    // Elements whose visible text repeats 'Unavailable' three or more times, keeping only
+    // the deepest containers so ancestors do not repeat the same finding.
+    const unavailableDeepest = new Map();
+    {
+      const candidates = [];
+      for (const el of elements) {
+        if (SKIP_TAGS.has(el.tagName)) continue;
+        if (maskSelector) {
+          try { if (el.closest(maskSelector)) continue; } catch (e) { /* invalid selector reported elsewhere */ }
+        }
+        const inner = el.innerText;
+        if (!inner) continue;
+        const count = (inner.match(/Unavailable/gi) || []).length;
+        if (count >= 3) candidates.push({ el, count });
+      }
+      for (const c of candidates) {
+        if (!candidates.some((o) => o.el !== c.el && c.el.contains(o.el))) {
+          unavailableDeepest.set(c.el, c.count);
+        }
+      }
+    }
+
     for (const el of elements) {
+      if (SKIP_TAGS.has(el.tagName)) continue;
       const style = window.getComputedStyle(el);
 
       // Skip non-rendered elements
@@ -343,8 +364,16 @@ async function runChecks(page, viewport, masks) {
       // Get ancestor path for selector
       const selector = getAncestorPath(el);
 
-      // Get text content (visible)
-      const text = el.textContent ? el.textContent.trim() : null;
+      // Own text: this element's direct text nodes only (descendants are examined on their own)
+      const ownText = Array.from(el.childNodes)
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.nodeValue)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const text = ownText.length > 0 ? ownText : null;
+      // Rendered text of the whole subtree, used only where containers matter
+      const subtreeText = el.innerText ? el.innerText.trim() : '';
 
       // 1. Contrast check
       if (text && text.length > 0) {
@@ -382,7 +411,7 @@ async function runChecks(page, viewport, masks) {
       }
 
       // 2. Clipped text check
-      if (text && text.length > 0) {
+      if (subtreeText.length > 0) {
         const overflowX = style.overflowX;
         const overflowY = style.overflowY;
         const textOverflow = style.textOverflow;
@@ -412,7 +441,7 @@ async function runChecks(page, viewport, masks) {
             severity: 'warning',
             selector: selector,
             box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
-            text: text.slice(0, 80),
+            text: subtreeText.slice(0, 80),
             detail: 'text overflow hidden'
           });
         }
@@ -454,7 +483,16 @@ async function runChecks(page, viewport, masks) {
           }
         } else {
           if (el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby') ||
-              el.title || (text && text.length > 0) || el.value) {
+              el.title || (el.textContent && el.textContent.trim().length > 0) || el.value ||
+              el.querySelector('img[alt]:not([alt=""]), svg title, [aria-label]')) {
+            hasAccessibleName = true;
+          }
+        }
+
+        // Check for a wrapping label
+        if (!hasAccessibleName) {
+          const wrapping = el.closest('label');
+          if (wrapping && wrapping.textContent && wrapping.textContent.trim()) {
             hasAccessibleName = true;
           }
         }
@@ -554,33 +592,23 @@ async function runChecks(page, viewport, masks) {
         }
       }
 
-      // 7. Repeated unavailable check
-      if (text && text.length > 0) {
-        const count = (text.match(/Unavailable/gi) || []).length;
-        if (count > 0) {
-          unavailableCount += count;
-          // Check if count >= 3 in this element
-          if (count >= 3) {
-            summary['repeated-unavailable']++;
-            findings.push({
-              check: 'repeated-unavailable',
-              severity: 'info',
-              selector: selector,
-              box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
-              text: text.slice(0, 80),
-              detail: `contains 'Unavailable' ${count} times`
-            });
-          }
-        }
+      // 7. Repeated unavailable check (deepest containers only)
+      if (unavailableDeepest.has(el)) {
+        summary['repeated-unavailable']++;
+        findings.push({
+          check: 'repeated-unavailable',
+          severity: 'info',
+          selector: selector,
+          box: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+          text: subtreeText.slice(0, 80),
+          detail: `contains 'Unavailable' ${unavailableDeepest.get(el)} times`
+        });
       }
 
-      // Stop if we have enough findings
-      if (findings.length >= FINDINGS_MAX) {
-        break;
-      }
     }
 
-    const truncated = findings.length >= FINDINGS_MAX;
+    // Counts in the summary always cover the whole page; only the findings list is capped
+    const truncated = findings.length > FINDINGS_MAX;
     if (truncated) {
       findings.length = FINDINGS_MAX;
     }
@@ -597,13 +625,13 @@ async function runChecks(page, viewport, masks) {
         viewport_height: viewportHeight,
         page_height_ratio: pageHeightRatio,
         unavailable_count: unavailableCount,
-        contrast_unknown: contrastUnknown
+        contrast_unknown: contrastUnknown,
+        truncated: truncated
       },
-      summary: summary,
-      findings: findings,
-      truncated: truncated
+      summary: Object.fromEntries(Object.entries(summary).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
+      findings: findings
     };
-  }, { vpWidth: viewport.width, vpHeight: viewport.height, maskSelector: maskSelector, contrastCode: contrastCode });
+  }, { vpWidth: viewport.width, vpHeight: viewport.height, maskSelector: maskSelector, FINDINGS_MAX: FINDINGS_MAX });
 
   return result;
 }
