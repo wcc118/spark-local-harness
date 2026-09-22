@@ -1,0 +1,36 @@
+[Unit]
+Description=Codex Local Harness - Vision-review MCP server (loopback-only, issue #205)
+Documentation=https://github.com/wcc118/codex-local-harness/blob/main/qualification/vision/README.md
+After=network.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=%h/.local/share/codex-local-harness/runtime/current/src
+Environment=LMSTUDIO_BASE_URL=http://100.96.174.120:1234/v1
+ExecStart=/usr/bin/python3 -m codex_local_harness.vision_mcp_server \
+    --host 127.0.0.1 \
+    --port 8790 \
+    --transport streamable-http \
+    --max-calls 5
+# Security hardening. MemoryDenyWriteExecute is deliberately omitted here
+# (unlike dashboard-backend.service): the uvicorn/starlette/anyio stack this
+# server depends on was not verified compatible with it, and an untested W^X
+# restriction risks a silent crash-loop rather than a real hardening gain.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectControlGroups=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codex-vision-mcp
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

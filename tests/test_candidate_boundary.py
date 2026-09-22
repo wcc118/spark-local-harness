@@ -39,7 +39,7 @@ def test_candidate_worker_has_valid_shell_syntax_and_new_source_boundary():
     assert "CODEX_LOCAL_MAX_TASK_CHARS" in content
     assert "pass issue references and bounded evidence instead of transcripts" in content
     assert ".agent.reviewer.steps = 4" in content
-    assert '.agent.reviewer.permission = {"*": "deny"}' in content
+    assert '.agent.reviewer.permission = {"*": "deny", "vision-review_review_screenshot": "allow"}' in content
     assert '"*": "deny",\n          "git status*"' not in content
     assert '"external_directory": "deny", "bash": "deny", "read": "deny"' not in content
     assert "CODEX_LOCAL_SESSION_BRIDGE" in content

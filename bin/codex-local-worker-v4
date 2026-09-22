@@ -229,7 +229,7 @@ jq '.mcp.github.enabled = false
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
       })
-    | .agent.reviewer.permission = {"*": "deny"}
+    | .agent.reviewer.permission = {"*": "deny", "vision-review_review_screenshot": "allow"}
     | .agent.reviewer.steps = 4
     | .compaction = { "auto": true, "prune": true, "reserved": 16000 }
     | .provider.vllm.models."nvidia/Qwen3.5-122B-A10B-NVFP4" = {

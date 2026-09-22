@@ -7,6 +7,9 @@ name = "codex-local-harness"
 version = "0.4.0"
 description = "Deterministic boundary around local OpenCode workers"
 requires-python = ">=3.11"
+dependencies = [
+    "mcp==2.2.0",
+]
 
 [project.scripts]
 codex-review-transaction = "codex_local_harness.review:main"
@@ -23,6 +26,7 @@ codex-harness-checkpoint = "codex_local_harness.checkpoint_cli:main"
 codex-harness-compaction = "codex_local_harness.compaction_cli:main"
 codex-local-worker-v5 = "codex_local_harness.v5_runner:main"
 codex-harness-benchmark = "codex_local_harness.benchmark_cli:main"
+codex-local-vision-mcp = "codex_local_harness.vision_mcp_server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
