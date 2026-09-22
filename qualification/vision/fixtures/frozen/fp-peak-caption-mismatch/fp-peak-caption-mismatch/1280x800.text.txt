@@ -1,0 +1,14 @@
+root_bending_shear response
+3.4
+0.0
+value
+0
+2
+4
+Time [s]
+Field	Value	Unit
+Peak value	3.319678	dimensionless
+Peak time	0.874000	s
+Damping ratio	0.040000	—
+
+Peak value 3.319678 occurs at t = 2.410 s. Axis maximum reflects the recorded peak.

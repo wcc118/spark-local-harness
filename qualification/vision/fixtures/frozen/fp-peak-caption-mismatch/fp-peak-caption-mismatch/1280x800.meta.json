@@ -1,0 +1,28 @@
+{
+  "sha256_png": "b2c34f9749b44e80ea22cf61d055766112209f2e76c4e0f97e7af0e7c6e09214",
+  "playwright_version": "1.63.0",
+  "browser_version": "153.0.8010.12",
+  "launch_args": [
+    "--font-render-hinting=none",
+    "--disable-gpu",
+    "--force-color-profile=srgb",
+    "--hide-scrollbars"
+  ],
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "masks": [],
+  "mutations": [
+    {
+      "id": "caption",
+      "selector": "#caption",
+      "op": "set-text",
+      "index": 0,
+      "matched": 1
+    }
+  ],
+  "url": "file:///home/connellwc83/.local/share/codex-local-harness/worktrees/issue-195-s3/qualification/vision/pages/flight-panel.html",
+  "blocked_urls": [],
+  "checks": true
+}

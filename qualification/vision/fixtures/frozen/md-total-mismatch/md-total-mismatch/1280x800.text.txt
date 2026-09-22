@@ -1,0 +1,13 @@
+Load summary — three stations
+Series A (measured)
+40
+0
+St. 1
+St. 2
+St. 3
+Station	Force [kN]
+Station 1	12.0
+Station 2	30.0
+Station 3	18.0
+Total [kN]
+72.0

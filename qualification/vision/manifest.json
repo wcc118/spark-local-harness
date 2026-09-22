@@ -1,0 +1,445 @@
+{
+  "schema_version": 1,
+  "viewport": {
+    "name": "1280x800",
+    "width": 1280,
+    "height": 800
+  },
+  "frozen": [
+    {
+      "id": "md-clean",
+      "page": "mini-dashboard.html",
+      "category": "clean",
+      "model_only": false,
+      "mutations": [],
+      "defects": [],
+      "description": "Clean baseline: bar chart, legend, table and total are all mutually consistent."
+    },
+    {
+      "id": "md-total-mismatch",
+      "page": "mini-dashboard.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "total",
+          "selector": "#total-value",
+          "op": "set-text",
+          "value": "72.0"
+        }
+      ],
+      "defects": [
+        {
+          "id": "total-mismatch",
+          "region_hint": "Total value at the bottom of the card",
+          "description": "The Total reads 72.0 kN but the three table rows (12.0 + 30.0 + 18.0) sum to 60.0 kN.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "72",
+            "sum",
+            "add up",
+            "60.0",
+            "60 kn",
+            "don't match",
+            "does not match",
+            "doesn't match",
+            "inconsist"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "md-unit-mismatch",
+      "page": "mini-dashboard.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "unit",
+          "selector": "#total-unit",
+          "op": "set-text",
+          "value": "[N]"
+        }
+      ],
+      "defects": [
+        {
+          "id": "unit-mismatch",
+          "region_hint": "Unit label next to 'Total'",
+          "description": "The Total is labelled [N] but the table column header says 'Force [kN]' for the same quantity.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "[n]",
+            " n ",
+            "kn",
+            "unit"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "md-axis-max-wrong",
+      "page": "mini-dashboard.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "axis",
+          "selector": "#axis-max-label",
+          "op": "set-text",
+          "value": "80"
+        }
+      ],
+      "defects": [
+        {
+          "id": "axis-max-wrong",
+          "region_hint": "Y-axis top label of the bar chart",
+          "description": "The chart's y-axis top is labelled 80, but Station 2's bar reaches the very top of the chart while the table says Station 2 is only 30.0 -- the axis label is inconsistent with the plotted bar heights.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "80",
+            "axis",
+            "inconsist",
+            "y-axis",
+            "y axis"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "md-legend-color-swap",
+      "page": "mini-dashboard.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "reveal-legend-b",
+          "selector": "#legend-b",
+          "op": "set-style",
+          "value": "display:flex"
+        },
+        {
+          "id": "bar2-color",
+          "selector": "#bar-2",
+          "op": "set-style",
+          "value": "fill:#e07a1f"
+        }
+      ],
+      "defects": [
+        {
+          "id": "legend-color-swap",
+          "region_hint": "Station 2's bar in the chart",
+          "description": "The legend maps blue to 'Series A (measured)' and orange to 'Series B (predicted)'. Station 2's bar is rendered in orange (matching the Series B swatch) even though its row in the table is an ordinary station entry like the other two -- the bar color contradicts what the legend says orange means.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "legend",
+            "orange",
+            "series b",
+            "color",
+            "colour"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "md-row-misalignment",
+      "page": "mini-dashboard.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "shift",
+          "selector": "#value-2",
+          "op": "set-style",
+          "value": "top:-16px"
+        }
+      ],
+      "defects": [
+        {
+          "id": "row-misalignment",
+          "region_hint": "The '30.0' value in the table",
+          "description": "The value 30.0 is shifted upward so it visually overlaps the Station 1 row instead of lining up with the Station 2 label, even though it is still inside the correct table cell in the markup.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "misalign",
+            "overlap",
+            "shift",
+            "wrong row",
+            "out of place",
+            "30.0"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fp-clean",
+      "page": "flight-panel.html",
+      "category": "clean",
+      "model_only": false,
+      "mutations": [],
+      "defects": [],
+      "description": "Clean baseline: caption, table and chart geometry are mutually consistent."
+    },
+    {
+      "id": "fp-peak-caption-mismatch",
+      "page": "flight-panel.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "caption",
+          "selector": "#caption",
+          "op": "set-text",
+          "value": "Peak value 3.319678 occurs at t = 2.410 s. Axis maximum reflects the recorded peak."
+        }
+      ],
+      "defects": [
+        {
+          "id": "peak-caption-mismatch",
+          "region_hint": "Caption below the table",
+          "description": "The caption says the peak occurs at t = 2.410 s, but the table's 'Peak time' row says 0.874000 s for the same peak.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "2.41",
+            "0.874",
+            "caption",
+            "footnote",
+            "time"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fp-unit-axis-mismatch",
+      "page": "flight-panel.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "xaxis",
+          "selector": "#x-axis-title",
+          "op": "set-text",
+          "value": "Time [ms]"
+        }
+      ],
+      "defects": [
+        {
+          "id": "unit-axis-mismatch",
+          "region_hint": "X-axis title below the chart",
+          "description": "The chart's x-axis is titled 'Time [ms]', but the table's Field/Unit row for Peak time gives the unit as 's' (seconds) for the same time quantity.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "ms",
+            "second",
+            " s ",
+            "unit"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fp-chart-position-mismatch",
+      "page": "flight-panel.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "peaktime",
+          "selector": "#peak-time",
+          "op": "set-text",
+          "value": "3.500000"
+        }
+      ],
+      "defects": [
+        {
+          "id": "chart-position-mismatch",
+          "region_hint": "Peak time row in the table, and the visual peak of the line chart",
+          "description": "The table says Peak time is 3.500000 s (near the right edge of the 0-4 s axis), but the visually tallest point of the line chart is clearly in the left third of the plot, near t = 1.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "3.5",
+            "0.874",
+            "position",
+            "left",
+            "peak time",
+            "doesn't match",
+            "does not match",
+            "inconsist"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fp-axis-max-implausible",
+      "page": "flight-panel.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "ymax",
+          "selector": "#y-max-label",
+          "op": "set-text",
+          "value": "0.3"
+        }
+      ],
+      "defects": [
+        {
+          "id": "axis-max-implausible",
+          "region_hint": "Y-axis top label of the line chart",
+          "description": "The chart's y-axis top is labelled 0.3, but the table states the Peak value is 3.319678 -- more than ten times the stated axis maximum.",
+          "deterministic_detectable": false,
+          "match_keywords": [
+            "0.3",
+            "3.3",
+            "3.32",
+            "axis",
+            "exceed",
+            "larger than"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sc-clean",
+      "page": "status-cards.html",
+      "category": "clean",
+      "model_only": false,
+      "mutations": [],
+      "defects": [],
+      "description": "Clean baseline: readable text, labelled icon buttons, plausible timestamps, no placeholder text."
+    },
+    {
+      "id": "sc-defects",
+      "page": "status-cards-defects.html",
+      "category": "deterministic",
+      "model_only": false,
+      "mutations": [],
+      "defects": [
+        {
+          "id": "implausible-timestamp-1",
+          "region_hint": "Active units tile, 'updated' line",
+          "description": "Timestamp reads '56 years ago'.",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "implausible-timestamp-2",
+          "region_hint": "Pending checks tile, 'updated' line",
+          "description": "Timestamp shows an epoch-zero ISO date (1970-01-01).",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "low-contrast",
+          "region_hint": "Last sync tile, small text below the value",
+          "description": "Dark grey text on the dark card background is very low contrast.",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "tiny-text",
+          "region_hint": "Active units tile, build fingerprint line",
+          "description": "Text rendered well below 10px.",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "clipped-text",
+          "region_hint": "Handling note panel",
+          "description": "The note text is clipped by a fixed-height, overflow-hidden, no-wrap container.",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "missing-accessible-name",
+          "region_hint": "The two small icon buttons",
+          "description": "Both icon buttons have no visible label and no accessible name.",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "repeated-unavailable",
+          "region_hint": "Selected unit detail panel",
+          "description": "The word 'Unavailable' repeats four times in one panel.",
+          "deterministic_detectable": true
+        },
+        {
+          "id": "placeholder-text",
+          "region_hint": "Bottom of the page",
+          "description": "Unresolved template placeholder text '{{summary_placeholder}}'.",
+          "deterministic_detectable": true
+        }
+      ]
+    },
+    {
+      "id": "numeric-reading",
+      "page": "numeric-reading.html",
+      "category": "numeric-reading",
+      "model_only": false,
+      "mutations": [],
+      "defects": [],
+      "numeric_fields": [
+        {
+          "label": "Damping ratio",
+          "value": "0.037500"
+        },
+        {
+          "label": "Root cut shear",
+          "value": "-9.652658e-4 N"
+        },
+        {
+          "label": "Root cut moment",
+          "value": "9.385793e-4 N m"
+        },
+        {
+          "label": "Conditional coverage lower bound",
+          "value": "0.9700534"
+        },
+        {
+          "label": "Retained mandatory events",
+          "value": "39"
+        },
+        {
+          "label": "Calibration violations",
+          "value": "2 / 256"
+        }
+      ]
+    }
+  ],
+  "dev": [
+    {
+      "id": "dev-md-legend-text-swap",
+      "page": "mini-dashboard.html",
+      "category": "model-only",
+      "model_only": true,
+      "mutations": [
+        {
+          "id": "legend-text",
+          "selector": ".legend-item",
+          "op": "set-text",
+          "value": "Series A (measured)",
+          "index": 0
+        },
+        {
+          "id": "legend-text-2",
+          "selector": ".legend-item",
+          "op": "set-text",
+          "value": "Series B (predicted)",
+          "index": 1
+        }
+      ],
+      "defects": [],
+      "description": "Dev-only sanity fixture for prompt iteration; not part of the frozen scored set."
+    },
+    {
+      "id": "dev-sc-clean-repeat",
+      "page": "status-cards.html",
+      "category": "clean",
+      "model_only": false,
+      "mutations": [],
+      "defects": [],
+      "description": "Dev-only repeat of a clean page, used only to iterate on the false-positive rate of the judge prompt."
+    }
+  ],
+  "external": [
+    {
+      "id": "flight-loads-external",
+      "source": "wcc118/flight-loads results/envelope-browser-final/dashboard.png",
+      "category": "external",
+      "note": "EXCLUDED from the scored frozen set after testing: at its native resolution (1425x4476, ~4374 prompt tokens) the model consumed its full reasoning budget (tested up to 3200 completion tokens) without ever emitting an answer, on 2 of 2 tries. Kept on disk at fixtures/excluded/flight-loads-external/ for reference. Only viewport-sized (1280x800-class) screenshots were tested as tractable for this model; a full, un-cropped page screenshot is not."
+    }
+  ]
+}

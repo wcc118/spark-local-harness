@@ -1,0 +1,42 @@
+{
+  "baseline_a_summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "category": "model-only",
+  "defects": [
+    {
+      "description": "The chart's y-axis top is labelled 80, but Station 2's bar reaches the very top of the chart while the table says Station 2 is only 30.0 -- the axis label is inconsistent with the plotted bar heights.",
+      "deterministic_detectable": false,
+      "id": "axis-max-wrong",
+      "match_keywords": [
+        "80",
+        "axis",
+        "inconsist",
+        "y-axis",
+        "y axis"
+      ],
+      "region_hint": "Y-axis top label of the bar chart"
+    }
+  ],
+  "description": "",
+  "id": "md-axis-max-wrong",
+  "model_only": true,
+  "mutations_applied": [
+    {
+      "id": "axis",
+      "op": "set-text",
+      "selector": "#axis-max-label",
+      "value": "80"
+    }
+  ],
+  "numeric_fields": [],
+  "page": "mini-dashboard.html",
+  "png_sha256": "41b8aff6515e9877ceb7ff5d267c9af5acebf9b9dacaedbed9dbc32e2d84e498"
+}

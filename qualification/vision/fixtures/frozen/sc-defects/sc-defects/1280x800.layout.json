@@ -1,0 +1,22 @@
+{
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "elements": [
+    {
+      "tag": "p",
+      "id": null,
+      "classes": [
+        "note"
+      ],
+      "box": {
+        "x": 20,
+        "y": 176,
+        "width": 336,
+        "height": 56
+      },
+      "text": "Handling note: escalate if the count above changes by more than five units withi"
+    }
+  ]
+}

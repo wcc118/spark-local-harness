@@ -1,0 +1,36 @@
+{
+  "baseline_a_summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "category": "model-only",
+  "defects": [],
+  "description": "Dev-only sanity fixture for prompt iteration; not part of the frozen scored set.",
+  "id": "dev-md-legend-text-swap",
+  "model_only": true,
+  "mutations_applied": [
+    {
+      "id": "legend-text",
+      "index": 0,
+      "op": "set-text",
+      "selector": ".legend-item",
+      "value": "Series A (measured)"
+    },
+    {
+      "id": "legend-text-2",
+      "index": 1,
+      "op": "set-text",
+      "selector": ".legend-item",
+      "value": "Series B (predicted)"
+    }
+  ],
+  "numeric_fields": [],
+  "page": "mini-dashboard.html",
+  "png_sha256": "ae0a6a00f44b4333721558ba00e0413a10946c0ab5650a2864c5b6c9c50d835a"
+}

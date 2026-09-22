@@ -1,0 +1,43 @@
+{
+  "baseline_a_summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "category": "model-only",
+  "defects": [
+    {
+      "description": "The value 30.0 is shifted upward so it visually overlaps the Station 1 row instead of lining up with the Station 2 label, even though it is still inside the correct table cell in the markup.",
+      "deterministic_detectable": false,
+      "id": "row-misalignment",
+      "match_keywords": [
+        "misalign",
+        "overlap",
+        "shift",
+        "wrong row",
+        "out of place",
+        "30.0"
+      ],
+      "region_hint": "The '30.0' value in the table"
+    }
+  ],
+  "description": "",
+  "id": "md-row-misalignment",
+  "model_only": true,
+  "mutations_applied": [
+    {
+      "id": "shift",
+      "op": "set-style",
+      "selector": "#value-2",
+      "value": "top:-16px"
+    }
+  ],
+  "numeric_fields": [],
+  "page": "mini-dashboard.html",
+  "png_sha256": "930307e8e7adbd46df01cb203d47b5372e58d5687a7b75c549b708b820119984"
+}

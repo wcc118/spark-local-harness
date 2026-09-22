@@ -1,0 +1,28 @@
+{
+  "sha256_png": "930307e8e7adbd46df01cb203d47b5372e58d5687a7b75c549b708b820119984",
+  "playwright_version": "1.63.0",
+  "browser_version": "153.0.8010.12",
+  "launch_args": [
+    "--font-render-hinting=none",
+    "--disable-gpu",
+    "--force-color-profile=srgb",
+    "--hide-scrollbars"
+  ],
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "masks": [],
+  "mutations": [
+    {
+      "id": "shift",
+      "selector": "#value-2",
+      "op": "set-style",
+      "index": 0,
+      "matched": 1
+    }
+  ],
+  "url": "file:///home/connellwc83/.local/share/codex-local-harness/worktrees/issue-195-s3/qualification/vision/pages/mini-dashboard.html",
+  "blocked_urls": [],
+  "checks": true
+}

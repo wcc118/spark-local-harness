@@ -1,0 +1,48 @@
+{
+  "baseline_a_summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "category": "model-only",
+  "defects": [
+    {
+      "description": "The legend maps blue to 'Series A (measured)' and orange to 'Series B (predicted)'. Station 2's bar is rendered in orange (matching the Series B swatch) even though its row in the table is an ordinary station entry like the other two -- the bar color contradicts what the legend says orange means.",
+      "deterministic_detectable": false,
+      "id": "legend-color-swap",
+      "match_keywords": [
+        "legend",
+        "orange",
+        "series b",
+        "color",
+        "colour"
+      ],
+      "region_hint": "Station 2's bar in the chart"
+    }
+  ],
+  "description": "",
+  "id": "md-legend-color-swap",
+  "model_only": true,
+  "mutations_applied": [
+    {
+      "id": "reveal-legend-b",
+      "op": "set-style",
+      "selector": "#legend-b",
+      "value": "display:flex"
+    },
+    {
+      "id": "bar2-color",
+      "op": "set-style",
+      "selector": "#bar-2",
+      "value": "fill:#e07a1f"
+    }
+  ],
+  "numeric_fields": [],
+  "page": "mini-dashboard.html",
+  "png_sha256": "8070388549db703729c4c210e9660a5492d4ae1816409e922d4980c32c464bfa"
+}

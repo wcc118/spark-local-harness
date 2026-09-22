@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "stats": {
+    "elements_examined": 34,
+    "page_height": 800,
+    "viewport_height": 800,
+    "page_height_ratio": 1,
+    "unavailable_count": 0,
+    "contrast_unknown": 0,
+    "truncated": false
+  },
+  "summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "findings": []
+}

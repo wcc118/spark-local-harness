@@ -1,0 +1,46 @@
+{
+  "baseline_a_summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "category": "model-only",
+  "defects": [
+    {
+      "description": "The Total reads 72.0 kN but the three table rows (12.0 + 30.0 + 18.0) sum to 60.0 kN.",
+      "deterministic_detectable": false,
+      "id": "total-mismatch",
+      "match_keywords": [
+        "72",
+        "sum",
+        "add up",
+        "60.0",
+        "60 kn",
+        "don't match",
+        "does not match",
+        "doesn't match",
+        "inconsist"
+      ],
+      "region_hint": "Total value at the bottom of the card"
+    }
+  ],
+  "description": "",
+  "id": "md-total-mismatch",
+  "model_only": true,
+  "mutations_applied": [
+    {
+      "id": "total",
+      "op": "set-text",
+      "selector": "#total-value",
+      "value": "72.0"
+    }
+  ],
+  "numeric_fields": [],
+  "page": "mini-dashboard.html",
+  "png_sha256": "0f126e0120dc664a63da929522aadfa48b9b847bd494fc1f48c6889a06ef2921"
+}

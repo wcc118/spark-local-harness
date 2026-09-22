@@ -1,0 +1,42 @@
+{
+  "baseline_a_summary": {
+    "clipped-text": 0,
+    "contrast": 0,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 0,
+    "page-overflow-x": 0,
+    "placeholder-text": 0,
+    "repeated-unavailable": 0,
+    "tiny-text": 0
+  },
+  "category": "model-only",
+  "defects": [
+    {
+      "description": "The caption says the peak occurs at t = 2.410 s, but the table's 'Peak time' row says 0.874000 s for the same peak.",
+      "deterministic_detectable": false,
+      "id": "peak-caption-mismatch",
+      "match_keywords": [
+        "2.41",
+        "0.874",
+        "caption",
+        "footnote",
+        "time"
+      ],
+      "region_hint": "Caption below the table"
+    }
+  ],
+  "description": "",
+  "id": "fp-peak-caption-mismatch",
+  "model_only": true,
+  "mutations_applied": [
+    {
+      "id": "caption",
+      "op": "set-text",
+      "selector": "#caption",
+      "value": "Peak value 3.319678 occurs at t = 2.410 s. Axis maximum reflects the recorded peak."
+    }
+  ],
+  "numeric_fields": [],
+  "page": "flight-panel.html",
+  "png_sha256": "b2c34f9749b44e80ea22cf61d055766112209f2e76c4e0f97e7af0e7c6e09214"
+}
