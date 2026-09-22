@@ -15,7 +15,9 @@ gate decision itself is recorded as a comment on #195, not here.
   external network or fonts). `mini-dashboard.html` and `flight-panel.html`
   are mutated by the manifest to seed defects; `status-cards.html` /
   `status-cards-defects.html` and `numeric-reading.html` are used as-is.
-- `fixtures/frozen/<id>/` -- built by `build_fixtures.py`: the rendered
+- `fixtures/` (gitignored, not committed -- deterministic build output, regenerate with
+  `build_fixtures.py`; see step 1 below) --
+  `frozen/<id>/`: built by `build_fixtures.py`: the rendered
   screenshot, `.checks.json` (deterministic baseline A), `.meta.json`, and
   `ground_truth.json` (the scored ground truth for that fixture, including a
   copy of `baseline_a_summary` for convenience).

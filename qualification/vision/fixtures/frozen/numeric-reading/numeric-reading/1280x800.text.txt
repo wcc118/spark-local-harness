@@ -1,8 +1,0 @@
-Case parameters
-Field	Value
-Damping ratio	0.037500
-Root cut shear	-9.652658e-4 N
-Root cut moment	9.385793e-4 N m
-Conditional coverage lower bound	0.9700534
-Retained mandatory events	39
-Calibration violations	2 / 256
