@@ -1,7 +1,7 @@
 """Tests for the Phase 1 vision-gate tooling (qualification/vision/).
 
 Covers the pure logic that does not require a browser or the 3090: manifest
-integrity, schema validation and fence-unwrapping in judge.py, and the
+integrity, schema validation and fence-unwrapping in vision_judge.py, and the
 keyword/numeric matching and gate arithmetic in score.py. Rendering itself is
 covered by tests/test_visual_render.py; this file does not re-test it.
 """
@@ -28,8 +28,13 @@ def _load(name: str, path: Path):
 
 
 @pytest.fixture(scope="module")
-def judge():
-    return _load("vision_judge", VISION_DIR / "judge.py")
+def vision_judge():
+    spec = importlib.util.spec_from_file_location("codex_local_harness.vision_judge", VISION_DIR / ".." / ".." / "src" / "codex_local_harness" / "vision_judge.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["codex_local_harness.vision_judge"] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(scope="module")
@@ -87,58 +92,58 @@ def test_dev_fixtures_are_disjoint_from_frozen_ids(manifest):
     assert frozen_ids.isdisjoint(dev_ids)
 
 
-# --- judge.py: schema validation and fence unwrapping -----------------------
+# --- vision_judge.py: schema validation and fence unwrapping -----------------------
 
 
-def test_unwrap_fence_strips_a_single_json_fence(judge):
+def test_unwrap_fence_strips_a_single_json_fence(vision_judge):
     text = '```json\n{"a": 1}\n```'
-    assert judge.unwrap_fence(text) == '{"a": 1}'
+    assert vision_judge.unwrap_fence(text) == '{"a": 1}'
 
 
-def test_unwrap_fence_leaves_unfenced_text_alone(judge):
+def test_unwrap_fence_leaves_unfenced_text_alone(vision_judge):
     text = '{"a": 1}'
-    assert judge.unwrap_fence(text) == text
+    assert vision_judge.unwrap_fence(text) == text
 
 
-def test_validate_schema_accepts_a_well_formed_reply(judge):
+def test_validate_schema_accepts_a_well_formed_reply(vision_judge):
     obj = {
         "findings": [{"description": "x", "region": "y", "severity": "low"}],
         "numeric_readings": [{"label": "a", "value": "1"}],
     }
-    assert judge.validate_schema(obj) is None
+    assert vision_judge.validate_schema(obj) is None
 
 
-def test_validate_schema_accepts_empty_lists(judge):
+def test_validate_schema_accepts_empty_lists(vision_judge):
     obj = {"findings": [], "numeric_readings": []}
-    assert judge.validate_schema(obj) is None
+    assert vision_judge.validate_schema(obj) is None
 
 
-def test_validate_schema_rejects_non_object(judge):
-    assert judge.validate_schema([1, 2, 3]) is not None
+def test_validate_schema_rejects_non_object(vision_judge):
+    assert vision_judge.validate_schema([1, 2, 3]) is not None
 
 
-def test_validate_schema_rejects_missing_key(judge):
-    assert judge.validate_schema({"findings": []}) is not None
+def test_validate_schema_rejects_missing_key(vision_judge):
+    assert vision_judge.validate_schema({"findings": []}) is not None
 
 
-def test_validate_schema_rejects_bad_severity(judge):
+def test_validate_schema_rejects_bad_severity(vision_judge):
     obj = {"findings": [{"description": "x", "region": "y", "severity": "critical"}], "numeric_readings": []}
-    assert judge.validate_schema(obj) is not None
+    assert vision_judge.validate_schema(obj) is not None
 
 
-def test_validate_schema_rejects_non_string_field(judge):
+def test_validate_schema_rejects_non_string_field(vision_judge):
     obj = {"findings": [{"description": 1, "region": "y", "severity": "low"}], "numeric_readings": []}
-    assert judge.validate_schema(obj) is not None
+    assert vision_judge.validate_schema(obj) is not None
 
 
-def test_validate_schema_rejects_missing_finding_key(judge):
+def test_validate_schema_rejects_missing_finding_key(vision_judge):
     obj = {"findings": [{"description": "x", "severity": "low"}], "numeric_readings": []}
-    assert judge.validate_schema(obj) is not None
+    assert vision_judge.validate_schema(obj) is not None
 
 
-def test_validate_schema_rejects_bad_numeric_reading(judge):
+def test_validate_schema_rejects_bad_numeric_reading(vision_judge):
     obj = {"findings": [], "numeric_readings": [{"label": "a"}]}
-    assert judge.validate_schema(obj) is not None
+    assert vision_judge.validate_schema(obj) is not None
 
 
 # --- score.py: matching and gate arithmetic ---------------------------------
