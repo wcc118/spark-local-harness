@@ -269,6 +269,113 @@ The `.meta.json` file records the applied mutations with matched counts:
 
 Note: Values are not recorded in meta.json for security and determinism.
 
+## Checks
+
+The render tool can perform deterministic in-page accessibility and visual quality checks.
+When enabled (default), it writes a `.checks.json` file for each page and viewport.
+
+### Check Types
+
+| Check ID | Severity | Description |
+|----------|----------|-------------|
+| `contrast` | warning | Text contrast below WCAG thresholds (4.5:1 for normal text, 3.0:1 for large text) |
+| `clipped-text` | warning | Text overflow hidden or truncated with ellipsis |
+| `page-overflow-x` | warning | Page width exceeds viewport width + 1px |
+| `missing-accessible-name` | warning | Interactive elements without accessible names |
+| `placeholder-text` | error | Text matching placeholder patterns (undefined, null, TODO, etc.) |
+| `implausible-timestamp` | error | Epoch-zero timestamps or ≥20 years ago |
+| `tiny-text` | info | Font size below 10px |
+| `repeated-unavailable` | info | "Unavailable" appears ≥3 times in an element |
+
+### Output Schema
+
+```json
+{
+  "version": 1,
+  "stats": {
+    "elements_examined": 150,
+    "page_height": 2000,
+    "viewport_height": 800,
+    "page_height_ratio": 2.5,
+    "unavailable_count": 5,
+    "contrast_unknown": 2,
+    "truncated": false
+  },
+  "summary": {
+    "clipped-text": 1,
+    "contrast": 3,
+    "implausible-timestamp": 0,
+    "missing-accessible-name": 2,
+    "page-overflow-x": 0,
+    "placeholder-text": 1,
+    "repeated-unavailable": 1,
+    "tiny-text": 4
+  },
+  "findings": [
+    {
+      "check": "contrast",
+      "severity": "warning",
+      "selector": "div.container > p.title:nth-of-type(1)",
+      "box": { "x": 10, "y": 100, "width": 800, "height": 40 },
+      "text": "Low contrast heading text...",
+      "detail": "contrast ratio 3.20 (threshold: 4.5)"
+    }
+  ]
+}
+```
+
+### Stats Fields
+
+| Field | Description |
+|-------|-------------|
+| `elements_examined` | Count of visible elements analyzed |
+| `page_height` | Document scrollHeight |
+| `viewport_height` | Viewport height from spec |
+| `page_height_ratio` | page_height / viewport_height (2 decimal places) |
+| `unavailable_count` | Total occurrences of "Unavailable" in page text |
+| `contrast_unknown` | Elements with non-computable backgrounds (images/gradients) |
+
+### Findings Fields
+
+| Field | Description |
+|-------|-------------|
+| `check` | Check ID |
+| `severity` | `warning`, `error`, or `info` |
+| `selector` | Short stable path (tag, id, classes, nth-of-type) |
+| `box` | Bounding rectangle {x, y, width, height} |
+| `text` | First 80 characters of text content (or null) |
+| `detail` | Human-readable explanation |
+
+### Checks Option
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `checks` | boolean | `true` | Enable or disable checks |
+
+When `checks: false`, no `.checks.json` file is written. The `.meta.json` still
+records `checks: false`.
+
+```json
+{
+  "pages": [{ ... }],
+  "viewports": [{ ... }],
+  "checks": false
+}
+```
+
+### Limits and Edge Cases
+
+- The `findings` list is capped at 200 (`stats.truncated` is `true` when more existed); the `summary` counts always cover the whole page
+- Text checks (contrast, placeholder, timestamp, tiny text) use an element's own text nodes, so a container does not repeat its children's findings; `repeated-unavailable` reports only the deepest container
+- `html`, `head`, `script`, `style`, `title`, `meta`, `link`, `noscript` and `template` are ignored
+- Backgrounds are composited from the outermost layer inward, so the innermost opaque layer wins
+- Skips non-rendered elements (`display:none`, `visibility:hidden`, `opacity:0`, zero-size)
+- Skips elements inside masked regions (mask selectors use `visibility:hidden`)
+- Contrast unknown when background involves images or gradients
+- Contrast unknown when color syntax is not `rgb(...)`/`rgba(...)`
+- Summary keys are sorted alphabetically
+- Findings are in document order
+
 ## Determinism Recipe for Live Pages
 
 Live dashboards change between renders. To make them deterministic:

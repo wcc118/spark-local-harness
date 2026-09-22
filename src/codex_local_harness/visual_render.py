@@ -168,6 +168,11 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
             if not validate_selector(mask):
                 errors.append(f"Invalid mask selector: {mask}")
 
+    # Validate checks if present (must be boolean)
+    if 'checks' in spec:
+        if not isinstance(spec['checks'], bool):
+            errors.append(f"'checks' must be boolean, got {type(spec['checks']).__name__}")
+
     # Validate mutations if present
     if 'mutations' in spec and not isinstance(spec['mutations'], list):
         errors.append("'mutations' must be a list")
