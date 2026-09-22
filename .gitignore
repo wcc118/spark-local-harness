@@ -13,3 +13,6 @@ health-data/
 *.env.*
 !.env.example
 
+
+# Phase 1 vision-gate: derived, regenerable via build_fixtures.py (see qualification/vision/README.md)
+qualification/vision/fixtures/

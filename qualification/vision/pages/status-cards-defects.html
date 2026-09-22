@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fleet status</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 20px; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0b1020; color: #eef2ff; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  .grid { display: flex; gap: 12px; flex-wrap: wrap; }
+  .tile { background: #141a30; border: 1px solid #232b4a; border-radius: 8px; padding: 14px; width: 170px; }
+  .tile-label { font-size: 11px; color: #9aa6c3; text-transform: uppercase; letter-spacing: 0.04em; }
+  .tile-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .updated { font-size: 11px; color: #6b7280; margin-top: 6px; }
+  .tiny { font-size: 8px; color: #6b7280; margin-top: 2px; }
+  .low-contrast { font-size: 13px; color: #23283a; margin-top: 8px; }
+  .note { width: 320px; height: 40px; overflow: hidden; font-size: 13px; padding: 8px; background: #141a30; border-radius: 6px; margin-top: 12px; white-space: nowrap; }
+  .toolbar { display: flex; gap: 8px; margin-top: 16px; }
+  .icon-btn { width: 28px; height: 28px; border-radius: 6px; background: #232b4a; border: none; }
+  .panel { margin-top: 16px; padding: 10px; background: #141a30; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>Fleet status</h1>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label">Active units</div>
+      <div class="tile-value">14</div>
+      <div class="updated">56 years ago</div>
+      <div class="tiny">build fingerprint 9f2c-final-v2</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Pending checks</div>
+      <div class="tile-value">3</div>
+      <div class="updated">1970-01-01T00:00:01+00:00</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Last sync</div>
+      <div class="tile-value">08:41</div>
+      <div class="low-contrast">internal build reference only, not for display</div>
+    </div>
+  </div>
+  <p class="note">Handling note: escalate if the count above changes by more than five units within a rolling ten-minute window without a corresponding maintenance record entry and full audit trail reference.</p>
+  <div class="toolbar">
+    <button class="icon-btn"></button>
+    <button class="icon-btn"></button>
+  </div>
+  <div class="panel">Selected unit detail: Unavailable. Firmware: Unavailable. Last maintenance: Unavailable. Operator: Unavailable.</div>
+  <p>{{summary_placeholder}}</p>
+</body>
+</html>

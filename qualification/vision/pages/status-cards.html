@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fleet status</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 20px; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0b1020; color: #eef2ff; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  .grid { display: flex; gap: 12px; flex-wrap: wrap; }
+  .tile { background: #141a30; border: 1px solid #232b4a; border-radius: 8px; padding: 14px; width: 170px; }
+  .tile-label { font-size: 11px; color: #9aa6c3; text-transform: uppercase; letter-spacing: 0.04em; }
+  .tile-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .updated { font-size: 11px; color: #9aa6c3; margin-top: 6px; }
+  .note { width: 320px; height: auto; font-size: 13px; padding: 8px; background: #141a30; border-radius: 6px; margin-top: 12px; line-height: 1.4; }
+  .toolbar { display: flex; gap: 8px; margin-top: 16px; }
+  .icon-btn { width: 28px; height: 28px; border-radius: 6px; background: #232b4a; border: none; }
+  .panel { margin-top: 16px; padding: 10px; background: #141a30; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>Fleet status</h1>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label">Active units</div>
+      <div class="tile-value" id="active-units">14</div>
+      <div class="updated" id="units-updated">2 minutes ago</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Pending checks</div>
+      <div class="tile-value" id="pending-checks">3</div>
+      <div class="updated" id="checks-updated">30 seconds ago</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Last sync</div>
+      <div class="tile-value" id="last-sync">08:41</div>
+      <div class="updated" id="sync-updated">Just now</div>
+    </div>
+  </div>
+  <p class="note" id="note-field">Handling note: escalate if the count above changes by more than five units within a rolling ten-minute window without a corresponding maintenance record entry.</p>
+  <div class="toolbar">
+    <button class="icon-btn" id="refresh-btn" aria-label="Refresh"></button>
+    <button class="icon-btn" id="export-btn" aria-label="Export"></button>
+  </div>
+  <div class="panel" id="detail-panel">Selected unit detail: model, firmware version, last maintenance date, and assigned operator are shown here once a unit is selected.</div>
+</body>
+</html>

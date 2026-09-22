@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Response history</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 24px; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #fff; color: #1a1d29; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  .card { border: 1px solid #dfe3ea; border-radius: 8px; padding: 20px; max-width: 620px; }
+  svg { display: block; }
+  .axis-label { font-size: 11px; fill: #555b66; }
+  .axis-title { font-size: 12px; fill: #333; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 16px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eef0f3; }
+  th { color: #6b7280; font-weight: 600; }
+  .cap { font-size: 12px; color: #6b7280; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>root_bending_shear response</h1>
+  <div class="card">
+    <svg width="480" height="200" viewBox="0 0 480 200">
+      <line x1="50" y1="20" x2="50" y2="160" stroke="#c7ccd6" stroke-width="1"/>
+      <line x1="50" y1="160" x2="450" y2="160" stroke="#c7ccd6" stroke-width="1"/>
+      <text class="axis-label" id="y-max-label" x="10" y="24">3.4</text>
+      <text class="axis-label" x="10" y="164">0.0</text>
+      <text class="axis-title" x="4" y="12">value</text>
+      <text class="axis-label" x="46" y="176">0</text>
+      <text class="axis-label" x="220" y="176">2</text>
+      <text class="axis-label" id="x-max-label" x="430" y="176">4</text>
+      <text class="axis-title" id="x-axis-title" x="220" y="192">Time [s]</text>
+      <polyline id="trace" fill="none" stroke="#2f6fed" stroke-width="2"
+        points="50,150 90,128 130,23 170,100 210,64 250,105 290,74 330,110 370,85 410,115 450,95"/>
+    </svg>
+    <table>
+      <thead><tr><th>Field</th><th>Value</th><th>Unit</th></tr></thead>
+      <tbody>
+        <tr><td>Peak value</td><td id="peak-value">3.319678</td><td id="peak-unit">dimensionless</td></tr>
+        <tr><td>Peak time</td><td id="peak-time">0.874000</td><td>s</td></tr>
+        <tr><td>Damping ratio</td><td id="damping">0.040000</td><td>&mdash;</td></tr>
+      </tbody>
+    </table>
+    <p class="cap" id="caption">Peak value 3.319678 occurs at t = 0.874 s. Axis maximum reflects the recorded peak.</p>
+  </div>
+</body>
+</html>
