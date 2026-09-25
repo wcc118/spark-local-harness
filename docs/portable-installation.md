@@ -19,7 +19,7 @@ git clone https://github.com/wcc118/codex-local-harness.git
 cd codex-local-harness
 git checkout harness-convergence-2026-09-19
 # Build the execution container separately from the model servers.
-docker build -t codex-local-worker:0.2.0 docker/worker
+docker build -t codex-local-worker:0.3.0 docker/worker
 bin/install-harness install
 bin/install-harness verify
 ```
@@ -31,6 +31,31 @@ qualified local image ID is recorded in `config/portable-release.json`; use
 when bit-identical container reproduction is required. The installer verifies
 all packaged runtime files against the committed manifest. It does not install
 Docker, download model weights, provision model servers, or authenticate clients.
+
+The 0.3.0 image adds a native build toolchain (`build-essential`, `gfortran`),
+the `libgfortran5`/`libX11` runtime libraries and NumPy 2.x/Matplotlib, so
+workers can compile and run repository engines and scientific test suites.
+The container mounts `/tmp` without exec permission; compile into the worker home.
+
+### Read-only tool mounts
+
+Host-built tools can be exposed to workers read-only through
+`~/.config/codex-local/sandbox-mounts.json` (override with
+`CODEX_LOCAL_SANDBOX_MOUNTS`):
+
+```json
+{"schema": 1,
+ "readonly_mounts": [
+   {"source": "/home/USER/.local/share/flight-loads/engines",
+    "target": "~/.local/share/flight-loads/engines"}]}
+```
+
+Sources must be existing, symlink-free directories that are not the home
+directory, an ancestor of it, credentials or configuration (`.ssh`, `.config`,
+`.codex`, `.claude`, `.aws`, `.docker`, ...), harness state, or system paths.
+Targets must lie inside `~/.local/share/` of the worker home. Every mount is
+read-only. Any invalid entry stops the worker before a container starts. A
+missing file means no extra mounts. Remove the file to roll back.
 
 The default install assumes separately provisioned compatible model endpoints
 and disables automatic model switching. Configure
