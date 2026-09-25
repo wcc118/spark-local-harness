@@ -279,7 +279,7 @@ if [[ $worker_runtime == opencode ]]; then
 fi
 worker_path=${HOME}/.local/bin:${HOME}/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 worker_sandbox=${CODEX_LOCAL_SANDBOX:-container}
-worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.2.0}
+worker_container_image=${CODEX_LOCAL_CONTAINER_IMAGE:-codex-local-worker:0.3.0}
 case "$worker_sandbox" in
   container)
     command -v docker >/dev/null || { echo "ERROR: Docker is required for worker confinement" >&2; exit 69; }
@@ -517,6 +517,23 @@ if [[ $worker_sandbox == container ]]; then
     --mount "type=bind,src=$worker_runtime_home,dst=$worker_runtime_home"
     --workdir "$worker_repo_path")
   [[ $worker_runtime != opencode ]] || docker_args+=(--mount "type=bind,src=$worker_opencode,dst=/usr/local/bin/opencode,readonly")
+  # Operator-declared read-only tool mounts (validated; see sandbox_mounts.py).
+  sandbox_mounts_config=${CODEX_LOCAL_SANDBOX_MOUNTS:-$HOME/.config/codex-local/sandbox-mounts.json}
+  if [[ -e $sandbox_mounts_config ]]; then
+    sandbox_mounts=$(env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.sandbox_mounts \
+      --config "$sandbox_mounts_config" --home "$HOME" --worker-home "$worker_runtime_home") || {
+      echo "ERROR: refusing to start worker with an invalid sandbox mount configuration" >&2; exit 65;
+    }
+    while IFS= read -r sandbox_mount; do
+      [[ -n $sandbox_mount ]] || continue
+      # Pre-create the mount point as the invoking user; otherwise Docker
+      # creates it (and missing parents such as ~/.local/share) owned by root,
+      # which blocks the worker's own XDG data directory and home cleanup.
+      sandbox_target=${sandbox_mount#*,dst=}
+      mkdir -p -- "${sandbox_target%,readonly}"
+      docker_args+=(--mount "$sandbox_mount")
+    done <<<"$sandbox_mounts"
+  fi
   for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
   if [[ $convergence == 1 && $worker_role == reviewer ]]; then
     docker_args+=(--mount "type=bind,src=$review_runtime_tmp,dst=$review_runtime_tmp")
