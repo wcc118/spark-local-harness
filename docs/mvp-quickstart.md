@@ -141,7 +141,7 @@ Reviewers running inside a container receive a dedicated tmpfs mount at `/tmp` t
 - **isolated** — Each worker container gets its own fresh tmpfs, separate from the host
 - **lexical-only** — Path normalization is applied lexically before allowance checks; host symlinks beneath `/tmp` do not change path interpretation
 
-This tmpfs is enabled only for qualified investigative reviews with the `--container-tmpfs` flag (which implies `--investigative`).
+This tmpfs is enabled only for qualified investigative reviews with both `--investigative` and `--container-tmpfs` flags.
 
 ### Path behavior
 
@@ -149,8 +149,8 @@ This tmpfs is enabled only for qualified investigative reviews with the `--conta
 |----------|-----------------|------------------------|
 | Read/write `/tmp/base_pr.json` | Rejected | Allowed |
 | Subpath `/tmp/scratch/file` | Rejected | Allowed |
-| Traversal `/tmp/../home/...` | Rejected | Rejected (resolves to host) |
-| Host symlink `/tmp/link -> /host/path` | Rejected | Rejected (resolves to host) |
+| Traversal `/tmp/../home/...` | Rejected | Rejected (normpath → `/home/...` outside `/tmp`) |
+| Host symlink `/tmp/link -> /host/path` | Rejected | Allowed (lexical path `/tmp/link` accepted) |
 | Checkout path | Allowed | Allowed |
 | Scratch directory | Allowed | Allowed |
 | Runtime home | Allowed | Allowed |
@@ -172,8 +172,8 @@ The `codex-local-worker-v4` entry point enables container tmpfs for convergence 
 ```bash
 # Convergence reviewer (qualified investigative)
 bin/codex-local-worker-v4 convergence-reviewer \
-  --container-tmpfs \
   --investigative \
+  --container-tmpfs \
   ...
 ```
 
@@ -181,11 +181,15 @@ Manual CLI invocation:
 
 ```bash
 PYTHONPATH=src \
-codex-local-reviewer \
+python3 -m codex_local_harness.review prepare \
   --checkout /path/to/repo \
+  --repository wcc118/example \
+  --issue 1 \
+  --pr 1 \
   --investigative \
   --container-tmpfs \
-  --task-file review.md
+  --task-file review.md \
+  --envelope-out /tmp/envelope.json
 ```
 
 ### Implementation details

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -636,6 +637,14 @@ def test_tool_scope_accepts_container_tmpfs_enabled(tmp_path):
     audit_tool_scope(log, bound)
 
 
+def test_tool_scope_accepts_nonexistent_tmp_path_qualified(tmp_path):
+    """Nonexistent /tmp path (e.g., CLI argument) accepted with container_tmpfs."""
+    log = tmp_path / "run.jsonl"
+    write_tool_log(log, "bash", {"command": "cat /tmp/nonexistent-profile.json"})
+    bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
+    audit_tool_scope(log, bound)
+
+
 def test_tool_scope_accepts_subpaths_under_container_tmpfs(tmp_path):
     """Subpaths under /tmp are allowed with container_tmpfs=True."""
     log = tmp_path / "run.jsonl"
@@ -662,6 +671,29 @@ def test_tool_scope_accepts_lexical_tmp_with_container_tmpfs(tmp_path):
     write_tool_log(log, "bash", {"command": "cat /tmp/././foo"})
     bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
     audit_tool_scope(log, bound)
+
+
+def test_tool_scope_accepts_host_symlink_to_tmp_with_container_tmpfs(tmp_path):
+    """Host symlink under /tmp pointing outside /tmp is allowed (lexical path check)."""
+    import os as sys_os
+    log = tmp_path / "run.jsonl"
+    # Create a real symlink in /tmp pointing to a location outside /tmp and outside checkout
+    # The symlink target need not exist; we're testing lexical path acceptance
+    symlink_path = Path("/tmp/codex_test_symlink_" + tmp_path.name)
+    try:
+        # Clean up any existing symlink from previous runs
+        if symlink_path.exists() or symlink_path.is_symlink():
+            symlink_path.unlink()
+        # Create symlink pointing outside /tmp (to /tmp parent directory)
+        symlink_path.symlink_to(tmp_path.parent)
+        # The command uses the symlink path, which lexically starts with /tmp/
+        write_tool_log(log, "bash", {"command": f"ls {symlink_path}"})
+        bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
+        audit_tool_scope(log, bound)
+    finally:
+        # Cleanup
+        if symlink_path.exists() or symlink_path.is_symlink():
+            symlink_path.unlink()
 
 
 def test_tool_scope_accepts_checkout_paths_with_container_tmpfs(tmp_path):
@@ -708,11 +740,28 @@ def test_tool_scope_rejects_non_container_tmpfs_paths(tmp_path):
     with pytest.raises(ReviewError, match="outside checkout"):
         audit_tool_scope(log, bound)
 
-
 def test_tool_scope_rejects_prohibited_commands_with_container_tmpfs(tmp_path):
     """Prohibited commands are still rejected with container_tmpfs enabled."""
     log = tmp_path / "run.jsonl"
     write_tool_log(log, "bash", {"command": "gh pr review 11 --approve"})
+    bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
+    with pytest.raises(ReviewError, match="prohibited command"):
+        audit_tool_scope(log, bound)
+
+
+def test_tool_scope_rejects_git_push_with_container_tmpfs(tmp_path):
+    """git push is rejected even with container_tmpfs enabled."""
+    log = tmp_path / "run.jsonl"
+    write_tool_log(log, "bash", {"command": "git push origin HEAD"})
+    bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
+    with pytest.raises(ReviewError, match="prohibited command"):
+        audit_tool_scope(log, bound)
+
+
+def test_tool_scope_rejects_deletion_command_with_container_tmpfs(tmp_path):
+    """Deletion commands (rm -rf) are rejected even with container_tmpfs enabled."""
+    log = tmp_path / "run.jsonl"
+    write_tool_log(log, "bash", {"command": "rm -rf /tmp/base_pr.json"})
     bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
     with pytest.raises(ReviewError, match="prohibited command"):
         audit_tool_scope(log, bound)
@@ -754,6 +803,42 @@ def test_envelope_rejects_container_tmpfs_without_investigative():
         )
 
 
+def test_envelope_rejects_string_container_tmpfs_with_investigative():
+    """Envelope rejects string container_tmpfs with investigative=True."""
+    with pytest.raises(ReviewError, match="Container tmpfs requires"):
+        Envelope(
+            schema_version=1,
+            repository="test/repo",
+            issue=1,
+            pull_request=1,
+            checkout="/checkout",
+            branch="main",
+            head_sha="a" * 40,
+            base_sha="b" * 40,
+            base_branch="main",
+            investigative=True,
+            container_tmpfs="true",  # String instead of bool
+        )
+
+
+def test_envelope_rejects_integer_container_tmpfs_with_investigative():
+    """Envelope rejects integer container_tmpfs with investigative=True."""
+    with pytest.raises(ReviewError, match="Container tmpfs requires"):
+        Envelope(
+            schema_version=1,
+            repository="test/repo",
+            issue=1,
+            pull_request=1,
+            checkout="/checkout",
+            branch="main",
+            head_sha="a" * 40,
+            base_sha="b" * 40,
+            base_branch="main",
+            investigative=True,
+            container_tmpfs=1,  # Integer instead of bool
+        )
+
+
 def test_envelope_allows_container_tmpfs_with_investigative():
     """Envelope allows container_tmpfs with investigative=True."""
     env = Envelope(
@@ -788,6 +873,26 @@ def test_envelope_container_tmpfs_defaults_to_false():
         investigative=False,
     )
     assert env.container_tmpfs is False
+
+
+def test_envelope_defaults_to_false_for_missing_container_tmpfs_field():
+    """Legacy serialized envelope without container_tmpfs field defaults to False."""
+    # Simulate a legacy envelope without container_tmpfs field
+    legacy_dict = {
+        "schema_version": 1,
+        "repository": "test/repo",
+        "issue": 1,
+        "pull_request": 1,
+        "checkout": "/checkout",
+        "branch": "main",
+        "head_sha": "a" * 40,
+        "base_sha": "b" * 40,
+        "base_branch": "main",
+        "investigative": False,
+    }
+    env = Envelope(**legacy_dict)
+    assert env.container_tmpfs is False
+    assert env.investigative is False
 
 
 def test_prepare_prompt_documents_container_tmpfs_when_enabled(tmp_path):
@@ -835,3 +940,78 @@ def test_cli_requires_investigative_for_container_tmpfs(tmp_path):
     ])
     # CLI returns 1 on error
     assert result == 1
+
+
+def test_review_profile_render_container_tmpfs_enabled(tmp_path):
+    """review_profile adds /tmp rules when container_tmpfs=True."""
+    from codex_local_harness.review_profile import render
+
+    template_content = """\
+---
+permission:
+  "*": deny
+  bash: allow
+---
+text content
+"""
+    checkout = tmp_path / "checkout"
+    scratch = tmp_path / "scratch"
+    checkout.mkdir()
+    scratch.mkdir()
+
+    # Without container_tmpfs - /tmp should NOT be allowed
+    agent = render(template_content, checkout, scratch, container_tmpfs=False)
+    rules = json.loads([line for line in agent.splitlines() if line.startswith("  external_directory:")][0].split(":", 1)[1])
+    assert "/tmp" not in rules
+    assert "/tmp/*" not in rules
+    assert str(checkout) in rules
+    assert str(scratch) in rules
+
+    # With container_tmpfs - /tmp should be allowed
+    agent = render(template_content, checkout, scratch, container_tmpfs=True)
+    rules = json.loads([line for line in agent.splitlines() if line.startswith("  external_directory:")][0].split(":", 1)[1])
+    assert rules["/tmp"] == "allow"
+    assert rules["/tmp/*"] == "allow"
+    assert str(checkout) in rules
+    assert str(scratch) in rules
+
+
+def test_review_profile_cli_accepts_container_tmpfs_flag(tmp_path):
+    """review_profile CLI accepts --container-tmpfs flag."""
+    template_content = """\
+---
+permission:
+  "*": deny
+  bash: allow
+---
+text content
+"""
+    template = tmp_path / "template.md"
+    template.write_text(template_content)
+
+    output = tmp_path / "output.md"
+    checkout = tmp_path / "checkout"
+    scratch = tmp_path / "scratch"
+    checkout.mkdir()
+    scratch.mkdir()
+
+    # Compute checkout root from __file__ dynamically to avoid hardcoded paths
+    # The test file is at tests/test_review.py, so checkout root is two levels up
+    checkout_root = Path(__file__).resolve().parents[1]
+
+    # Test CLI invocation using subprocess with PYTHONPATH set
+    import subprocess
+    import sys
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(checkout_root / "src")
+    result = subprocess.run(
+        [sys.executable, "-m", "codex_local_harness.review_profile",
+         str(template), str(output), str(checkout), str(scratch), "--container-tmpfs"],
+        env=env,
+        cwd=str(checkout_root),
+        capture_output=True,
+        text=True
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    rendered = output.read_text()
+    assert "/tmp" in rendered
