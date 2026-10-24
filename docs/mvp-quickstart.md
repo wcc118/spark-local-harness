@@ -131,6 +131,69 @@ Health data is stored in `~/.local/share/codex-local-harness/health/`. Backups f
 ~/.local/share/codex-local-harness/backups/YYYYMMDDTHHMMSSZ-$(DESCRIPTION)
 ```
 
+## Reviewer Temp Directory Isolation
+
+### Container-only tmpfs capability
+
+Reviewers running inside a container receive a dedicated tmpfs mount at `/tmp` that is:
+
+- **noexec** — Temporary scripts or executables cannot run; use the supplied scratch directory for test fixtures
+- **isolated** — Each worker container gets its own fresh tmpfs, separate from the host
+- **lexical-only** — Path normalization is applied lexically before allowance checks; host symlinks beneath `/tmp` do not change path interpretation
+
+This tmpfs is enabled only for qualified investigative reviews with the `--container-tmpfs` flag (which implies `--investigative`).
+
+### Path behavior
+
+| Scenario | Default envelope | container_tmpfs enabled |
+|----------|-----------------|------------------------|
+| Read/write `/tmp/base_pr.json` | Rejected | Allowed |
+| Subpath `/tmp/scratch/file` | Rejected | Allowed |
+| Traversal `/tmp/../home/...` | Rejected | Rejected (resolves to host) |
+| Host symlink `/tmp/link -> /host/path` | Rejected | Rejected (resolves to host) |
+| Checkout path | Allowed | Allowed |
+| Scratch directory | Allowed | Allowed |
+| Runtime home | Allowed | Allowed |
+| `~/.local/bin/...` | Allowed | Allowed |
+
+### Audit scope rules
+
+The `audit_tool_scope` function implements these rules:
+
+1. **Lexical normalization**: Uses `posixpath.normpath()` on the raw path string before allowance checks
+2. **Container tmpfs paths**: Any path that lexically equals `/tmp` or starts with `/tmp/` is allowed only when `container_tmpfs=True`
+3. **No resolution of host symlinks**: Container tmpfs paths are NOT resolved against the host filesystem; symlink traversal is only applied to non-`/tmp` paths
+4. **Legacy fallback**: Serialized envelopes without `container_tmpfs` field default to `False`
+
+### Usage in worker configuration
+
+The `codex-local-worker-v4` entry point enables container tmpfs for convergence reviewers:
+
+```bash
+# Convergence reviewer (qualified investigative)
+bin/codex-local-worker-v4 convergence-reviewer \
+  --container-tmpfs \
+  --investigative \
+  ...
+```
+
+Manual CLI invocation:
+
+```bash
+PYTHONPATH=src \
+codex-local-reviewer \
+  --checkout /path/to/repo \
+  --investigative \
+  --container-tmpfs \
+  --task-file review.md
+```
+
+### Implementation details
+
+- **review.py**: Envelope has `container_tmpfs: bool = False` with validation requiring `investigative=True`
+- **review_profile.py**: Template rendering adds `/tmp` and `/tmp/*` rules when `container_tmpfs=True`
+- **bin/codex-local-worker-v4**: Propagates scratch environment and mounts scratch directory for reviewer
+
 ## Known Limitations
 
 ### Reviewer tempfile detection
