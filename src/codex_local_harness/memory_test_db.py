@@ -56,7 +56,7 @@ def cleanup(run_id):
     key = identity(run_id)
     name = 'codex-memory-test-' + key
     if owned('container', name, key):
-        docker('container', 'rm', '--force', name)
+        docker('container', 'rm', '--force', '--volumes', name)
     if owned('network', name, key):
         docker('network', 'rm', name)
 
@@ -79,6 +79,8 @@ def start(run_id, profile: Path):
                '--security-opt', 'no-new-privileges', '--user', '65534:65534',
                '--memory', '512m', '--cpus', '1', '--pids-limit', '128',
                '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=64m',
+               '--tmpfs', '/data:rw,nosuid,nodev,noexec,size=64m',
+               '--tmpfs', '/logs:rw,nosuid,nodev,noexec,size=16m',
                '--env', 'SURREAL_USER', '--env', 'SURREAL_PASS', IMAGE,
                'start', '--bind', '0.0.0.0:8000', '--no-banner', '--log', 'warn',
                '--query-timeout', '20s', '--transaction-timeout', '20s',
