@@ -8,12 +8,15 @@ project labels preserve origin without isolating knowledge.
 
 Tools:
 - `search_memory`: search active and disputed knowledge; opt into history when useful.
-- `get_memory`: inspect sources, attribution, relationships and corrections.
+- `get_memory`: inspect sources, attribution, relationships, corrections and attributed use reports.
 - `record_memory`: record a reusable finding, decision, preference, hypothesis or review
   observation, with a source and applicable conditions. Supply a request_id and reuse
   it only for a retry of the identical contribution.
 - `correct_memory`: add contrary evidence/proposed correction linked to an earlier
   memory. The original is preserved and marked disputed. No approval gate is required.
+- `record_memory_use`: report actual lesson use as helpful/unhelpful/misleading/uncertain,
+  with evidence and limits. Append-only attributed report, not proof or a vote; does not
+  change the lesson. Retry identical content with the same request_id.
 - `resolve_memory`: Codex/frontier only; reconcile evidence by superseding an old claim
   with an active replacement and recording the rationale. History remains inspectable.
 

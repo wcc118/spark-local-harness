@@ -79,8 +79,9 @@ def test_effective_opencode_permissions(tmp_path):
         expected = {'memory_search_memory': 'allow', 'memory_get_memory': 'allow',
                     'memory_record_memory': 'deny' if role == 'helper' else 'allow',
                     'memory_correct_memory': 'deny' if role == 'helper' else 'allow',
+                    'memory_record_memory_use': 'deny' if role == 'helper' else 'allow',
                     'memory_resolve_memory': 'deny', 'edit': 'deny'}
         for name, action in expected.items():
             matching = [r['action'] for r in rules if fnmatch.fnmatchcase(name, r['permission'])]
             assert matching[-1] == action, (role, name, matching)
-        assert (o/'agents/reviewer.md').read_text().count('memory_record_memory:') == 1
+        assert (o/'agents/reviewer.md').read_text().count('memory_record_memory_use:') == 1
