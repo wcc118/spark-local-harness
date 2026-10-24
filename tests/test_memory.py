@@ -34,7 +34,7 @@ def test_helper_remains_read_only(tmp_path):
     o=runtime(tmp_path);configure(tmp_path,'http://127.0.0.1:9602/mcp','reader','helper')
     assert 'memory_record_memory: deny' in (o/'agents/reviewer.md').read_text()
     q=json.loads((tmp_path/'.qwen/settings.json').read_text())
-    assert q['mcpServers']['memory']['includeTools']==['search_memory','get_memory']
+    assert q['mcpServers']['memory']['includeTools']==['search_memory','get_memory','discover_topics']
 
 
 def test_missing_or_unavailable_memory_is_optional(tmp_path,capsys):

@@ -172,7 +172,7 @@ class MemoryIntegration(unittest.TestCase):
     def test_api_has_no_delete_sql_or_role_spoof(self):
         token=self.worker()
         names={t['name'] for t in self.rpc(token,'tools/list',{})['result']['tools']}
-        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory'})
+        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory','discover_topics','enrich_memory'})
         self.assertEqual(self.client.post('/mcp',json={}).status_code,401)
         self.assertEqual(self.client.post('/sessions',headers={'Authorization':'Bearer '+token},json={'role':'frontier'}).status_code,401)
         self.assertEqual(self.client.post('/sessions',headers={'Authorization':'Bearer test-issuer'},json={'role':'frontier','run_id':'x'}).status_code,400)
@@ -180,6 +180,172 @@ class MemoryIntegration(unittest.TestCase):
         ident=self.value(r)['memory']['id']
         self.assertIn('REMOVE TABLE',self.value(self.call(token,'get_memory',memory_id=ident))['memory']['text'])
         self.assertTrue(self.call(token,'get_memory',memory_id='memory:x; DELETE memory;')['isError'])
+
+    def test_discover_topics_basic_and_case_insensitive(self):
+        coder=self.worker()
+        # Add a memory with a topic first
+        self.value(self.call(coder,'record_memory',text='Test finding',source='test',request_id='base-topic',topics=['Performance']))
+        # Discover all topics
+        result=self.value(self.call(coder,'discover_topics'))
+        self.assertIn('topics',result)
+        self.assertTrue(len(result['topics'])>=1)
+        topic_names={t['name'] for t in result['topics']}
+        self.assertIn('Performance',topic_names)
+        # Case-insensitive search
+        result_lower=self.value(self.call(coder,'discover_topics',query='performance'))
+        self.assertIn('Performance',[t['name'] for t in result_lower['topics']])
+        # Empty query returns all
+        result_empty=self.value(self.call(coder,'discover_topics',query=''))
+        self.assertEqual(len(result_empty['topics']),len(result['topics']))
+        # Limit validation
+        result_limited=self.value(self.call(coder,'discover_topics',limit=1))
+        self.assertLessEqual(len(result_limited['topics']),1)
+
+    def test_discover_topics_helper_allowed(self):
+        helper=self.worker('helper')
+        result=self.value(self.call(helper,'discover_topics'))
+        self.assertIn('topics',result)
+        names={t['name'] for t in result['topics']}
+        self.assertTrue(len(names)>=0) # May be empty or populated from previous tests
+
+    def test_discover_topics_invalid_limit_and_empty_query(self):
+        coder=self.worker()
+        r=self.call(coder,'discover_topics',limit=0)
+        self.assertTrue(r['isError'])
+        r=self.call(coder,'discover_topics',limit=101)
+        self.assertTrue(r['isError'])
+        r=self.call(coder,'discover_topics',limit=True)
+        self.assertTrue(r['isError'])
+        r=self.call(coder,'discover_topics',query='x'*101)
+        self.assertTrue(r['isError'])
+
+    def test_discover_topics_excludes_missing_topics(self):
+        coder=self.worker()
+        # Query for non-existent topic
+        result=self.value(self.call(coder,'discover_topics',query='nonexistent-topic-x'))
+        self.assertEqual(result['topics'],[])
+
+    def test_enrich_memory_adds_topics_and_audit_event(self):
+        coder=self.worker()
+        reviewer=self.worker('reviewer')
+        # Create initial memory
+        args=dict(text='Original finding',source='initial source',request_id='original',topics=['topic-a'],project='project-x',conditions='v1')
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        self.assertEqual(first['memory']['topics'],['topic-a'])
+        # Enrich with additional topics
+        enrich_result=self.value(self.call(reviewer,'enrich_memory',memory_id=ident,topics=['topic-b','topic-c'],explanation='Adding related topics',source='reviewer analysis',request_id='enrich-1'))
+        self.assertEqual(enrich_result['memory']['id'],ident)
+        # Topics should be unioned
+        updated_topics=sorted(enrich_result['memory']['topics'])
+        self.assertEqual(updated_topics,['topic-a','topic-b','topic-c'])
+        # Event should have action=enrich
+        events=enrich_result.get('events',[])
+        enrich_events=[e for e in events if e.get('action')=='enrich']
+        self.assertTrue(len(enrich_events)>=1)
+        event=enrich_events[-1]
+        self.assertEqual(event['topics'],['topic-b','topic-c'])
+        self.assertEqual(event['explanation'],'Adding related topics')
+        self.assertEqual(event['source'],'reviewer analysis')
+        self.assertEqual(event['role'],'reviewer')
+        # Search by new topic
+        found=self.value(self.call(reviewer,'search_memory',query='Original',topics=['topic-b']))
+        self.assertIn(ident,[m['id'] for m in found['memories']])
+
+    def test_enrich_memory_idempotent_replay_and_rejection(self):
+        coder=self.worker()
+        args=dict(text='Replay test',source='test',request_id='replay-base',topics=['initial'])
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        # First enrichment
+        enrich1=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['added'],explanation='First enrichment',source='test',request_id='enrich-replay'))
+        self.assertEqual(enrich1['memory']['id'],ident)
+        self.assertIn('added',enrich1['memory']['topics'])
+        # Replay with same request_id should return replayed=True
+        enrich2=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['added'],explanation='First enrichment',source='test',request_id='enrich-replay'))
+        self.assertTrue(enrich2['replayed'])
+        self.assertEqual(enrich2['memory']['id'],ident)
+        self.assertIn('added',enrich2['memory']['topics'])
+        # Different content with same request_id should fail
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics=['different'],explanation='First enrichment',source='test',request_id='enrich-replay')
+        self.assertTrue(r['isError'])
+        # Different content with same request_id should fail - even with same topics
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics=['added'],explanation='Different explanation',source='test',request_id='enrich-replay')
+        self.assertTrue(r['isError'])
+
+    def test_enrich_memory_deduplication_of_overlap_topics(self):
+        coder=self.worker()
+        args=dict(text='Overlap test',source='test',request_id='overlap-base',topics=['topic-a'])
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        # Enrich with overlapping topic
+        enrich1=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['topic-a','topic-b'],explanation='Add b',source='test',request_id='enrich-overlap-1'))
+        # Topics should be deduplicated (no duplicates)
+        self.assertEqual(enrich1['memory']['topics'],['topic-a','topic-b'])
+        # Enrich again with just the already-present topic
+        enrich2=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['topic-a'],explanation='Add a again',source='test',request_id='enrich-overlap-2'))
+        # Should not create duplicate concerns edge or event
+        self.assertEqual(enrich2['memory']['topics'],['topic-a'])
+
+    def test_enrich_memory_helper_denied_no_side_effect(self):
+        helper=self.worker('helper')
+        coder=self.worker()
+        args=dict(text='Helper denial target',source='test',request_id='helper-target',topics=['target-topic'])
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        before_topics=sorted(first['memory']['topics'])
+        before_events=self.value(self.call(coder,'get_memory',memory_id=ident))['events']
+        # Helper cannot enrich
+        r=self.call(helper,'enrich_memory',memory_id=ident,topics=['new-topic'],explanation='test',source='test',request_id='helper-enrich')
+        self.assertTrue(r['isError'])
+        # No side effects
+        after=self.value(self.call(coder,'get_memory',memory_id=ident))
+        self.assertEqual(sorted(after['memory']['topics']),before_topics)
+        self.assertEqual(len(after['events']),len(before_events))
+
+    def test_enrich_memory_rejects_missing_empty_invalid_topics(self):
+        coder=self.worker()
+        # Create a memory first
+        args=dict(text='Target',source='test',request_id='target',topics=['original'])
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        # Missing target
+        r=self.call(coder,'enrich_memory',memory_id='memory:nonexistent',topics=['x'],explanation='test',source='test',request_id='bad-target')
+        self.assertTrue(r['isError'])
+        # Empty topics
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics=[],explanation='test',source='test',request_id='empty-topics')
+        self.assertTrue(r['isError'])
+        # Invalid topic format
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics=['x'*101],explanation='test',source='test',request_id='long-topic')
+        self.assertTrue(r['isError'])
+        # Invalid topics type
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics='not-a-list',explanation='test',source='test',request_id='bad-type')
+        self.assertTrue(r['isError'])
+        # Empty explanation
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics=['x'],explanation='',source='test',request_id='empty-explanation')
+        self.assertTrue(r['isError'])
+        # Empty source
+        r=self.call(coder,'enrich_memory',memory_id=ident,topics=['x'],explanation='test',source='',request_id='empty-source')
+        self.assertTrue(r['isError'])
+
+    def test_enrich_memory_preserves_original_text_source_status(self):
+        coder=self.worker()
+        # Create with specific text/source/status
+        args=dict(text='Original content that must persist',source='original source that persists',request_id='preserve-base',topics=['topic-a'],project='project-y')
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        original_text=first['memory']['text']
+        original_source=first['memory']['source']
+        original_status=first['memory']['status']
+        original_project=first['memory']['project']
+        # Enrich
+        self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['topic-b'],explanation='Add topic',source='enrich source',request_id='enrich-preserve'))
+        # Original fields preserved
+        inspected=self.value(self.call(coder,'get_memory',memory_id=ident))
+        self.assertEqual(inspected['memory']['text'],original_text)
+        self.assertEqual(inspected['memory']['source'],original_source)
+        self.assertEqual(inspected['memory']['status'],original_status)
+        self.assertEqual(inspected['memory']['project'],original_project)
 
 
 if __name__=='__main__':unittest.main()

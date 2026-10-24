@@ -605,3 +605,15 @@ def test_memory_record_use_is_allowed_in_tool_scope(tmp_path):
     log = tmp_path / "memory-log.jsonl"
     log.write_text(json.dumps({"type": "tool_use", "part": {"tool": "memory_record_memory_use", "state": {"status": "completed", "input": {"memory_id": "memory:abc123", "outcome": "helpful", "explanation": "Validated in run", "source": "worker observation", "request_id": "use-1"}}}}) + "\n")
     audit_tool_scope(log, envelope(tmp_path))
+
+
+def test_discover_topics_is_allowed_in_tool_scope(tmp_path):
+    log = tmp_path / "memory-log.jsonl"
+    log.write_text(json.dumps({"type": "tool_use", "part": {"tool": "memory_discover_topics", "state": {"status": "completed", "input": {"query": "performance", "limit": 10}}}}) + "\n")
+    audit_tool_scope(log, envelope(tmp_path))
+
+
+def test_enrich_memory_is_allowed_in_tool_scope(tmp_path):
+    log = tmp_path / "memory-log.jsonl"
+    log.write_text(json.dumps({"type": "tool_use", "part": {"tool": "memory_enrich_memory", "state": {"status": "completed", "input": {"memory_id": "memory:abc123", "topics": ["performance", "memory"], "explanation": "Added performance topic", "source": "worker observation", "request_id": "enrich-1"}}}}) + "\n")
+    audit_tool_scope(log, envelope(tmp_path))

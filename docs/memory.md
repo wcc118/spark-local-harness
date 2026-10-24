@@ -5,6 +5,13 @@ reviewer paths. It does not choose searches or inject retrieved answers into pac
 Agents choose retrieval, assess evidence and applicability, and record lessons from
 investigation, review and feedback. Codex can contribute and reconcile too.
 
+Issue #220 adds discover_topics and enrich_memory tools for optional agent-directed
+discovery and additive metadata enrichment. Discover_topics lets agents identify
+existing topic names with optional case-insensitive substring matching. Enrich_memory
+adds topic edges and audit events to existing memories without changing text, source
+or status. Both tools are read/write appropriate based on role and contribute to
+structured metadata without affecting claim integrity.
+
 The separate local memory deployment lives in `~/projects/memory`. Service source
 is reviewed in `integrations/memory/`; the deployment directory retains its own local
 Git history. Database storage and all credentials remain outside this repository.
@@ -27,13 +34,14 @@ of the author's source/evidence claims. Runtime homes are private and contain be
 credentials: do not publish them. Deleting a token's file does not revoke a token;
 rotating the service signing key revokes all worker tokens.
 
-Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory, record_memory_use.
-Helper tools: search_memory, get_memory. Codex additionally has resolve_memory.
-No routine client receives arbitrary SQL or a deletion tool from this service.
-The user/admin can still manage the underlying database directly. These MCP boundaries
-are not a sandbox against the workstation owner or an unrestricted host shell.
+Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory,
+record_memory_use, discover_topics, enrich_memory. Helper tools: search_memory,
+get_memory, discover_topics. Codex additionally has resolve_memory. No routine
+client receives arbitrary SQL or a deletion tool from this service. The user/admin
+can still manage the underlying database directly. These MCP boundaries are not
+a sandbox against the workstation owner or an unrestricted host shell.
 
-The reviewer tool-scope audit explicitly recognizes the five worker memory operations:
+The reviewer tool-scope audit explicitly recognizes the seven worker memory operations:
 source paths in a finding are data, not filesystem access. Repository permissions,
 publication boundaries, exact-head review and the result schema remain unchanged.
 Other memory tool names, including reconciliation, remain prohibited in worker reviews.
@@ -51,6 +59,17 @@ lesson is imposed. A reviewer may write a memory while code remains read-only.
 Use exclude_issue="OWNER/REPO#N" to avoid current-issue claims during independent
 review. Full-text and literal matching are available; no semantic embeddings or
 weight updates are performed.
+
+Discover_topics allows optional agent-directed discovery of existing topic names
+with case-insensitive substring matching. Use this to identify existing topics
+before enrichment or to audit the topic namespace. Limit validation constrains
+result set size; no quota or mandatory report is imposed.
+
+Enrich_memory adds topic edges and audit events with attributed source/explanation.
+Preserves original text, source, status and project. No removal, text rewrite,
+alias normalization, semantic link inference or schema migration. Similar labels
+need not mean the same thing; inspect applicability before reuse. Idempotent
+replay with request_id prevents duplicate concerns edges or events.
 
 Record writes are idempotent within an authenticated actor/run using request_id.
 Corrections add a linked claim and mark an active original disputed; historical

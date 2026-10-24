@@ -23,15 +23,19 @@ Record reusable discoveries, review observations and lessons from feedback with
 source references and applicability. correct_memory adds evidence linked to an
 existing claim; it does not erase history. record_memory_use reports actual lesson
 use as helpful/unhelpful/misleading/uncertain; this append-only report does not
-change the lesson text or status. Use a stable request_id when retrying the same
-contribution. You may write memory even when the repository is read-only.
-Do not delete memories, reconcile disputes, or access another role's credentials.
-For an independent review, prefer established lessons and exclude the current
-issue when searching; do not treat the coder's claims as proof of correctness.
-Memory failure or no relevant result does not block the engineering task. Briefly
-report useful memory IDs read/created/challenged and any failed writes in your
-final summary. No lesson needs to be invented and no frontier approval is needed
-for a contribution. Preserve the required final result schema.
+change the lesson text or status. discover_topics lets you identify existing topic
+names with optional case-insensitive substring matching. enrich_memory adds topic
+edges and audit events to existing memories without changing text/source/status.
+No removal, text rewrite, alias normalization, semantic link inference or schema
+migration. Use a stable request_id when retrying the same contribution. You may
+write memory even when the repository is read-only. Do not delete memories,
+reconcile disputes, or access another role's credentials. For an independent
+review, prefer established lessons and exclude the current issue when searching;
+do not treat the coder's claims as proof of correctness. Memory failure or no
+relevant result does not block the engineering task. Briefly report useful memory
+IDs read/created/challenged and any failed writes in your final summary. No lesson
+needs to be invented and no frontier approval is needed for a contribution.
+Preserve the required final result schema.
 '''
 
 
@@ -108,7 +112,7 @@ def prepare(config_path: Path, runtime_home: Path, role: str, run_id: str, repos
         configure(runtime_home, endpoint, token, role)
         guidance = GUIDANCE
         if role == 'helper':
-            guidance = 'SHARED MEMORY: Search and inspect relevant historical knowledge using memory tools. Choose your own queries and assess applicability. Your helper identity is read-only; report candidate lessons to the caller. Memory unavailability does not block your investigation.\n'
+            guidance = 'SHARED MEMORY: Search and inspect relevant historical knowledge using memory tools. Choose your own queries and assess applicability. Your helper identity is read-only; report candidate lessons to the caller. Use discover_topics to identify existing topic names with optional case-insensitive substring matching. Memory unavailability does not block your investigation.\n'
         if repository and issue:
             guidance += f'Current issue reference: {repository}#{issue}. For current-issue exclusion, use exclude_issue="{repository}#{issue}".\n'
         (runtime_home / 'memory-guidance.txt').write_text(guidance)
