@@ -453,6 +453,23 @@ if [[ $worker_role == coder && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   worker_task=$'HARNESS DELIVERY BOUNDARY: Work only in the local checkout. Do not push, use gh, create a PR, comment, or change labels. Commit the verified implementation on a clean local issue branch; the deterministic harness owns all remote publication.\n\n'"$worker_task"
 fi
 
+# Local feedback is not publication authority. The final host check is unchanged.
+case "${CODEX_LOCAL_DELIVERY_FEEDBACK:-1}" in
+  0) ;;
+  1)
+    if [[ $worker_role == coder && $worker_runtime == qwen-code && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
+      if feedback_base=$(git -C "$worker_repo_path" merge-base origin/main HEAD) && \
+        env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.delivery_feedback install \
+          --runtime-home "$worker_runtime_home" --checkout "$worker_repo_path" --base "$feedback_base"; then
+        worker_task=$'LOCAL DELIVERY FEEDBACK: A native Stop hook reports uncommitted changes and committed-diff whitespace errors before you finish. Use its evidence to repair your own work. If a genuine blocker remains, begin your final response with ESCALATE: and explain it. This feedback never authorizes publication; final host postflight remains authoritative.\n\n'"$worker_task"
+      else
+        echo "WARN: local delivery feedback setup failed; final host postflight remains authoritative" >&2
+      fi
+    fi
+    ;;
+  *) echo "ERROR: CODEX_LOCAL_DELIVERY_FEEDBACK must be 0 or 1" >&2; exit 64 ;;
+esac
+
 # Optional role-scoped memory. The issuer credential stays outside the sandbox;
 # only a run-specific contributor/reader token reaches the worker.
 memory_source=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../src" && pwd)
