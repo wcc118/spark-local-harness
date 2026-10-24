@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import posixpath
 import subprocess
 import sys
 import tempfile
@@ -92,6 +93,11 @@ class Envelope:
     scratch_dir: str | None = None
     runtime_home: str | None = None
     investigative: bool = False
+    container_tmpfs: bool = False
+
+    def __post_init__(self):
+        if type(self.container_tmpfs) is not bool or (self.container_tmpfs and not self.investigative):
+            raise ReviewError('Container tmpfs requires an explicitly qualified investigative review')
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -211,8 +217,11 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         f"{RESULT_PREFIX}. Tracked generated artifacts listed in the envelope are potential "
         "coder findings; never delete, regenerate, or repair them. Test execution is configured "
         "not to write bytecode or pytest caches. If temporary scripts or files are needed, write "
-        f"them only below the harness-owned scratch directory {envelope.scratch_dir}; never use "
-        f"another /tmp or external path. The disposable runtime home {envelope.runtime_home} is "
+        f"them below the harness-owned scratch directory {envelope.scratch_dir}. "
+        + ("This qualified container also provides isolated /tmp tmpfs for temporary data; "
+           "it is noexec, so use the supplied scratch directory for executable fixtures. "
+           if envelope.container_tmpfs else "Do not use another /tmp or external path. ")
+        + f"The disposable runtime home {envelope.runtime_home} is "
         "also harness-owned and may contain interpreter or package-manager runtime files only.\n\n"
         f"The required complete result schema is {RESULT_SCHEMA}. Copy every field exactly once, "
         "substitute the immutable identity, and do not rename fields.\n\n"
@@ -398,7 +407,13 @@ def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
         values = [str(value) for value in inputs.values() if isinstance(value, str)]
         for value in values:
             for match in absolute_path.findall(value):
-                candidate = Path(match.rstrip(".,:)]}" )).resolve(strict=False)
+                raw_path = match.rstrip(".,:)]}" )
+                # Container /tmp is a distinct tmpfs. Host symlink resolution does
+                # not describe it. Normalize traversal lexically before allowance.
+                lexical = posixpath.normpath(raw_path)
+                if envelope.container_tmpfs and (lexical == '/tmp' or lexical.startswith('/tmp/')):
+                    continue
+                candidate = Path(raw_path).resolve(strict=False)
                 harness_roots = [
                     Path(path).resolve()
                     for path in (envelope.scratch_dir, envelope.runtime_home)
@@ -598,6 +613,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--scratch-dir", type=Path)
     prepare.add_argument("--runtime-home", type=Path)
     prepare.add_argument("--investigative", action="store_true")
+    prepare.add_argument("--container-tmpfs", action="store_true")
 
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--envelope", type=Path, required=True)
@@ -614,13 +630,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
+            if args.container_tmpfs and not args.investigative:
+                raise ReviewError('--container-tmpfs requires --investigative')
             envelope = build_envelope(
                 args.checkout, args.repository, args.issue, args.pr,
                 scratch_dir=args.scratch_dir, runtime_home=args.runtime_home,
             )
             if args.investigative:
                 from dataclasses import replace
-                envelope = replace(envelope, investigative=True)
+                envelope = replace(envelope, investigative=True, container_tmpfs=args.container_tmpfs)
             packet = build_reviewer_evidence_packet(
                 Path(envelope.checkout), envelope.repository, envelope.issue,
                 envelope.pull_request, envelope.base_sha, envelope.head_sha,
