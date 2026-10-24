@@ -553,7 +553,7 @@ if [[ $worker_sandbox == container ]]; then
     XDG_CACHE_HOME="$worker_runtime_home/.cache" LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}"
     NO_COLOR=1 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS="-p no:cacheprovider")
   if [[ $worker_memory_test_db == 1 ]]; then
-    container_env+=(MEMORY_TEST_PROFILE="$worker_runtime_home/memory-test-db.json")
+    container_env+=(MEMORY_TEST_PROFILE="$worker_runtime_home/memory-test-db.json" MEMORY_INTEGRATION=1)
   fi
   docker_args=(run --rm --network host --read-only --cap-drop ALL
     --security-opt no-new-privileges --pids-limit 512 --user "$(id -u):$(id -g)"
