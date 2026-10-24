@@ -52,6 +52,27 @@ def bounded(value, name, maximum=16000, required=True):
     return value.strip()
 
 
+def declared_work_context(value):
+    """Validate author-supplied context; never merge it into a Principal."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or not value or set(value) - {'repository', 'issue', 'session_id'}:
+        raise MemoryError('declared_context must contain repository, issue and/or session_id only')
+    context = {key: bounded(item, 'declared_context.' + key, 200)
+               for key, item in sorted(value.items())}
+    repository_pattern = r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+    if 'repository' in context and not re.fullmatch(repository_pattern, context['repository']):
+        raise MemoryError('declared_context.repository must be OWNER/REPO')
+    if 'issue' in context:
+        if not re.fullmatch(repository_pattern + r'#[1-9][0-9]*', context['issue']):
+            raise MemoryError('declared_context.issue must be OWNER/REPO#N')
+        if 'repository' in context and context['issue'].rsplit('#', 1)[0] != context['repository']:
+            raise MemoryError('declared_context repository and issue must agree')
+    # Omission leaves old fingerprints byte-for-byte compatible. Context is a
+    # separate author claim, not authenticated attribution or an authorization.
+    return {'declared_context': context}
+
+
 def record_id(value):
     if not isinstance(value, str) or not ID.fullmatch(value):
         raise MemoryError('Expected a memory record ID returned by this service')
@@ -124,11 +145,12 @@ class MemoryStore:
             AND (text @0@ $q OR string::contains(string::lowercase(text), string::lowercase($q)))
             AND ($project = '' OR project = $project)
             AND (array::len($topics) = 0 OR array::any(topics, |$t| $t IN $topics))
-            AND ($exclude = '' OR issue = NONE OR issue != $exclude)
+            AND ($exclude = '' OR ((issue = NONE OR issue != $exclude)
+                AND (declared_context.issue = NONE OR declared_context.issue != $exclude)))
             ORDER BY relevance DESC LIMIT $limit;''',
             {'q': query, 'project': project, 'topics': topics, 'history': include_history,
              'exclude': bounded(exclude_issue, 'exclude_issue', 200, False), 'limit': limit})[0]
-        return {'memories': rows, 'hint': 'Disputed records are unresolved evidence. Inspect links before applying. Project filters are optional.'}
+        return {'memories': rows, 'hint': 'Disputed records are unresolved evidence. Inspect links before applying. Project filters are optional. declared_context is author-supplied, not authenticated task attribution.'}
 
     @staticmethod
     def topics(values):
@@ -145,7 +167,7 @@ class MemoryStore:
             ORDER BY name ASC LIMIT $limit;''', {'q': query, 'limit': limit})[0]
         return {'topics': rows, 'hint': 'Existing names are suggestions, not a fixed taxonomy. Inspect applicability; similar names need not mean the same thing.'}
 
-    def enrich(self, principal, memory_id, topics, explanation, source, request_id):
+    def enrich(self, principal, memory_id, topics, explanation, source, request_id, declared_context=None):
         """Add topic metadata and audit its source without replacing a claim."""
         if principal.role not in {'coder', 'reviewer', 'frontier'}:
             raise MemoryError('This identity has read-only memory access')
@@ -157,6 +179,8 @@ class MemoryStore:
         source = bounded(source, 'source', 4000)
         request_id = bounded(request_id, 'request_id', 200)
         payload = dict(memory_id=memory_id, topics=topics, explanation=explanation, source=source)
+        context = declared_work_context(declared_context)
+        payload.update(context)
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         key = hashlib.sha256(json.dumps([principal.__dict__, request_id, 'enrich'], sort_keys=True).encode()).hexdigest()[:32]
         event_id = 'memory_event:' + key
@@ -173,7 +197,7 @@ class MemoryStore:
                          added_topics=[topic for topic in topics if topic not in record.get('topics', [])],
                          explanation=explanation, source=source, fingerprint=fingerprint,
                          actor=principal.actor, role=principal.role, run_id=principal.run_id,
-                         repository=principal.repository, issue=principal.issue)
+                         repository=principal.repository, issue=principal.issue, **context)
             params = dict(id=memory_id, topics=topics, event=event, event_id=event_id)
             statements = ['BEGIN TRANSACTION;',
                           'UPDATE type::record($id) SET topics=array::union(topics, $topics);']
@@ -204,7 +228,7 @@ class MemoryStore:
             related.extend(self.db.query('SELECT * FROM type::record($id);', {'id': ident})[0])
         return {'memory': record, 'relations': edges[0], 'related': related, 'events': edges[1]}
 
-    def write(self, principal, text, source, request_id, topics=None, project='', kind='finding', conditions='', target=None, relation=None):
+    def write(self, principal, text, source, request_id, topics=None, project='', kind='finding', conditions='', target=None, relation=None, declared_context=None):
         if principal.role not in {'coder','reviewer','frontier'}:
             raise MemoryError('This identity has read-only memory access')
         text = bounded(text, 'text')
@@ -217,6 +241,8 @@ class MemoryStore:
             raise MemoryError('Invalid memory kind')
         payload = dict(text=text, source=source, topics=topics, project=project, kind=kind, conditions=conditions,
                        target=target, relation=relation)
+        context = declared_work_context(declared_context)
+        payload.update(context)
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         key = hashlib.sha256(json.dumps([principal.__dict__,request_id],sort_keys=True).encode()).hexdigest()[:32]
         ident = 'memory:' + key
@@ -230,7 +256,7 @@ class MemoryStore:
                 self.get_record(target)
             data = dict(text=text, source=source, topics=topics, kind=kind, status='active', conditions=conditions,
                         actor=principal.actor, role=principal.role, run_id=principal.run_id,
-                        repository=principal.repository, issue=principal.issue, fingerprint=fingerprint)
+                        repository=principal.repository, issue=principal.issue, fingerprint=fingerprint, **context)
             if project:
                 data['project'] = project
             params = {'id': ident, 'data': data}
@@ -251,12 +277,12 @@ class MemoryStore:
                 statements += ['RELATE (type::record($id))->challenges->(type::record($target));',
                                "UPDATE type::record($target) SET status='disputed' WHERE status='active';"]
             params['event'] = dict(action=relation or 'record', actor=principal.actor, role=principal.role,
-                                   run_id=principal.run_id, issue=principal.issue, source=source)
-            statements += ['CREATE memory_event SET action=$event.action, actor=$event.actor, role=$event.role, run_id=$event.run_id, issue=$event.issue, source=$event.source, target=type::record($id), created_at=time::now();', 'COMMIT TRANSACTION;']
+                                   run_id=principal.run_id, issue=principal.issue, source=source, **context)
+            statements += ['CREATE memory_event SET action=$event.action, actor=$event.actor, role=$event.role, run_id=$event.run_id, issue=$event.issue, source=$event.source, declared_context=$event.declared_context, target=type::record($id), created_at=time::now();', 'COMMIT TRANSACTION;']
             self.db.query('\n'.join(statements), params)
             return {'memory': self.get_record(ident), 'replayed': False}
 
-    def record_use(self, principal, memory_id, outcome, explanation, source, request_id):
+    def record_use(self, principal, memory_id, outcome, explanation, source, request_id, declared_context=None):
         """Append an attributed observation; reporting use never promotes a claim."""
         if principal.role not in {'coder', 'reviewer', 'frontier'}:
             raise MemoryError('This identity has read-only memory access')
@@ -267,6 +293,8 @@ class MemoryStore:
         source = bounded(source, 'source', 4000)
         request_id = bounded(request_id, 'request_id', 200)
         payload = dict(memory_id=memory_id, outcome=outcome, explanation=explanation, source=source)
+        context = declared_work_context(declared_context)
+        payload.update(context)
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         key = hashlib.sha256(json.dumps([principal.__dict__, request_id, 'use'], sort_keys=True).encode()).hexdigest()[:32]
         event_id = 'memory_event:' + key
@@ -280,7 +308,7 @@ class MemoryStore:
             event = dict(action='use', outcome=outcome, explanation=explanation, source=source,
                          evidence_kind='agent_report', fingerprint=fingerprint,
                          actor=principal.actor, role=principal.role, run_id=principal.run_id,
-                         repository=principal.repository, issue=principal.issue)
+                         repository=principal.repository, issue=principal.issue, **context)
             self.db.query('''BEGIN TRANSACTION;
                 CREATE type::record($event_id) CONTENT $event;
                 UPDATE type::record($event_id) SET target=type::record($target), created_at=time::now();
@@ -289,7 +317,7 @@ class MemoryStore:
             return {'event': self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0][0],
                     'replayed': False}
 
-    def resolve(self, principal, target_id, replacement_id, rationale, request_id):
+    def resolve(self, principal, target_id, replacement_id, rationale, request_id, declared_context=None):
         if principal.role != 'frontier':
             raise MemoryError('Only the frontier reconciliation identity may supersede memories')
         record_id(target_id); record_id(replacement_id)
@@ -298,7 +326,11 @@ class MemoryStore:
         if target_id == replacement_id:
             raise MemoryError('A memory cannot supersede itself')
         key = hashlib.sha256(json.dumps([principal.__dict__,request_id,'resolve'],sort_keys=True).encode()).hexdigest()[:32]
-        fingerprint = hashlib.sha256(json.dumps([target_id,replacement_id,rationale]).encode()).hexdigest()
+        context = declared_work_context(declared_context)
+        payload = [target_id, replacement_id, rationale]
+        if context:
+            payload.append(context)
+        fingerprint = hashlib.sha256(json.dumps(payload).encode()).hexdigest()
         event_id = 'memory_event:' + key
         with self.lock:
             previous = self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0]
@@ -310,18 +342,18 @@ class MemoryStore:
             if target['status'] == 'superseded' or replacement['status'] not in {'active', 'disputed'}:
                 raise MemoryError('Target must not already be superseded; replacement must be active or disputed')
             event = dict(action='supersede', actor=principal.actor, role=principal.role, rationale=rationale,
-                         fingerprint=fingerprint, run_id=principal.run_id, issue=principal.issue)
+                         fingerprint=fingerprint, run_id=principal.run_id, issue=principal.issue, **context)
             self.db.query('''BEGIN TRANSACTION;
                 UPDATE type::record($target) SET status='superseded';
                 UPDATE type::record($replacement) SET status='active';
                 RELATE (type::record($replacement))->supersedes->(type::record($target));
-                CREATE type::record($event_id) SET action=$event.action, actor=$event.actor, role=$event.role, rationale=$event.rationale, fingerprint=$event.fingerprint, run_id=$event.run_id, issue=$event.issue, target=type::record($target), replacement=type::record($replacement), created_at=time::now();
+                CREATE type::record($event_id) SET action=$event.action, actor=$event.actor, role=$event.role, rationale=$event.rationale, fingerprint=$event.fingerprint, run_id=$event.run_id, issue=$event.issue, declared_context=$event.declared_context, target=type::record($target), replacement=type::record($replacement), created_at=time::now();
                 COMMIT TRANSACTION;''', dict(target=target_id,replacement=replacement_id,event_id=event_id,event=event))
             return {'target': self.get_record(target_id), 'replacement': replacement_id, 'replayed': False}
 
 
 def build_server(store):
-    server = MCPServer(name='memory', version='1.0.0', instructions='Shared cross-project lessons. Choose your own searches; inspect evidence and conditions. Record useful findings. No SQL or deletion tool. Memory failures do not block your task.')
+    server = MCPServer(name='memory', version='1.0.0', instructions='Optional declared_context on writes is author-supplied task metadata, never authenticated identity. Shared cross-project lessons. Choose your own searches; inspect evidence and conditions. Record useful findings. No SQL or deletion tool. Memory failures do not block your task.')
 
     @server.tool()
     def search_memory(query: str, project: str = '', topics: list[str] | None = None, include_history: bool = False, limit: int = 8, exclude_issue: str = '') -> dict:
@@ -339,29 +371,29 @@ def build_server(store):
         return store.discover_topics(query, limit)
 
     @server.tool()
-    def enrich_memory(memory_id: str, topics: list[str], explanation: str, source: str, request_id: str) -> dict:
+    def enrich_memory(memory_id: str, topics: list[str], explanation: str, source: str, request_id: str, declared_context: dict[str, str] | None = None) -> dict:
         """Add justified topics and graph links to an existing lesson with an audit trail. Preserves original text/source/status; no removal. Reuse request_id only for the identical retry."""
-        return store.enrich(CURRENT.get(), memory_id, topics, explanation, source, request_id)
+        return store.enrich(CURRENT.get(), memory_id, topics, explanation, source, request_id, declared_context)
 
     @server.tool()
-    def record_memory(text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', kind: str = 'finding', conditions: str = '') -> dict:
+    def record_memory(text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', kind: str = 'finding', conditions: str = '', declared_context: dict[str, str] | None = None) -> dict:
         """Record reusable knowledge with evidence and applicability. Caller attribution is authenticated. Reuse request_id only to retry the identical write."""
-        return store.write(CURRENT.get(), text, source, request_id, topics, project, kind, conditions)
+        return store.write(CURRENT.get(), text, source, request_id, topics, project, kind, conditions, declared_context=declared_context)
 
     @server.tool()
-    def correct_memory(target_id: str, text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', conditions: str = '') -> dict:
+    def correct_memory(target_id: str, text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', conditions: str = '', declared_context: dict[str, str] | None = None) -> dict:
         """Add contrary evidence or a proposed correction. Preserve the original and mark it disputed; no approval is required to contribute."""
-        return store.write(CURRENT.get(), text, source, request_id, topics, project, 'correction', conditions, record_id(target_id), 'challenge')
+        return store.write(CURRENT.get(), text, source, request_id, topics, project, 'correction', conditions, record_id(target_id), 'challenge', declared_context=declared_context)
 
     @server.tool()
-    def record_memory_use(memory_id: str, outcome: str, explanation: str, source: str, request_id: str) -> dict:
+    def record_memory_use(memory_id: str, outcome: str, explanation: str, source: str, request_id: str, declared_context: dict[str, str] | None = None) -> dict:
         """Report actual lesson use as helpful/unhelpful/misleading/uncertain, with evidence and limits. Append-only attributed report, not proof or a vote; does not change the lesson. Retry identical content with the same request_id."""
-        return store.record_use(CURRENT.get(), memory_id, outcome, explanation, source, request_id)
+        return store.record_use(CURRENT.get(), memory_id, outcome, explanation, source, request_id, declared_context)
 
     @server.tool()
-    def resolve_memory(target_id: str, replacement_id: str, rationale: str, request_id: str) -> dict:
+    def resolve_memory(target_id: str, replacement_id: str, rationale: str, request_id: str, declared_context: dict[str, str] | None = None) -> dict:
         """Frontier reconciliation only: supersede an outdated claim with a supported active/disputed replacement. Preserves history; never deletes."""
-        return store.resolve(CURRENT.get(), target_id, replacement_id, rationale, request_id)
+        return store.resolve(CURRENT.get(), target_id, replacement_id, rationale, request_id, declared_context)
 
     return server
 
