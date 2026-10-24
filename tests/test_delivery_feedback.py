@@ -983,7 +983,3 @@ def test_git_command_runs_correctly(tmp_path: Path) -> None:
     assert str(repo.resolve()) in result.stdout
     # text=True means stdout is str, not bytes
     assert isinstance(result.stdout, str)
-
-
-
-
