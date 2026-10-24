@@ -96,7 +96,7 @@ class Envelope:
     container_tmpfs: bool = False
 
     def __post_init__(self):
-        if type(self.container_tmpfs) is not bool or (self.container_tmpfs and not self.investigative):
+        if type(self.container_tmpfs) is not bool or (self.container_tmpfs and self.investigative is not True):
             raise ReviewError('Container tmpfs requires an explicitly qualified investigative review')
 
     def as_dict(self) -> dict[str, Any]:
