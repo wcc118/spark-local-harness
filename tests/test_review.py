@@ -476,7 +476,8 @@ def test_prepare_prompt_contains_immutable_identity(tmp_path):
     assert SHA in prompt
     assert RESULT_PREFIX in prompt
     assert "Inspect the harness-observed exact-head diff" in prompt
-    assert "evidence boundary is intentionally tool-free" in prompt
+    assert "repository evidence boundary is packet-only" in prompt
+    assert "Configured shared-memory tools may be used" in prompt
     assert '\"harness-observed\", \"reviewer-observed\", or \"task-reported\"' in prompt
     assert '"reviewed_head_sha":"40-char SHA"' in prompt
     assert "Copy every field exactly once" in prompt
@@ -588,3 +589,13 @@ def test_investigative_packet_does_not_advertise_host_executables(tmp_path, monk
     assert review.main(["prepare", "--investigative", "--checkout", str(tmp_path),
                         "--repository", REPO, "--issue", "7", "--pr", "11",
                         "--task-file", str(task), "--envelope-out", str(tmp_path / "env.json")]) == 0
+
+
+def test_memory_contribution_sources_are_not_filesystem_access(tmp_path):
+    log = tmp_path / "memory-log.jsonl"
+    log.write_text(json.dumps({"type": "tool_use", "part": {"tool": "memory_record_memory", "state": {"status": "completed", "input": {"source": "/home/other/project/source.py", "text": "A sourced finding"}}}}) + "\n")
+    audit_tool_scope(log, envelope(tmp_path))
+    for tool in ["memory_resolve_memory", "memory_delete_memory", "memory_query"]:
+        log.write_text(json.dumps({"type": "tool_use", "part": {"tool": tool, "state": {"status": "completed", "input": {}}}}) + "\n")
+        with pytest.raises(ReviewError, match="prohibited memory tool"):
+            audit_tool_scope(log, envelope(tmp_path))

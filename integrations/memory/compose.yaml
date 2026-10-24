@@ -1,0 +1,24 @@
+name: household-memory
+services:
+  database:
+    image: surrealdb/surrealdb:v3.3.4@sha256:649a60a3b9c0177d9923c938e1c2563e48cde2a9d06ac2c0519714be719b02af
+    user: "${MEMORY_UID}:${MEMORY_GID}"
+    command: [start, --bind, "0.0.0.0:8000", --no-banner, "rocksdb:/data/knowledge"]
+    environment:
+      SURREAL_USER: ${SURREAL_USER}
+      SURREAL_PASS: ${SURREAL_PASS}
+    ports:
+      - "127.0.0.1:9600:8000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, /surreal, is-ready, --endpoint, "http://127.0.0.1:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  browser:
+    image: surrealdb/surrealist@sha256:0e1f8374316119d1edac3b478e0ce3605b278aaa7138b3b419dcf805ead4be23
+    ports:
+      - "127.0.0.1:9601:8080"
+    restart: unless-stopped

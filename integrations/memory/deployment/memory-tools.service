@@ -1,0 +1,16 @@
+[Unit]
+Description=Shared local memory MCP tools
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/connellwc83/projects/memory
+ExecStart=/home/connellwc83/projects/memory/.venv/bin/python /home/connellwc83/projects/memory/memory_service.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
