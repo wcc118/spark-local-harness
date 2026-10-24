@@ -140,23 +140,18 @@ class MemoryIntegration(unittest.TestCase):
             cls.client.__enter__()
             cls._client_created = True
         except Exception as e:
-            # Ensure cleanup runs even if setup fails partway through
-            try:
-                if cls._client_created:
-                    cls.client.__exit__(None, None, None)
-            except Exception:
-                pass
-            try:
-                if cls._db_manager:
-                    cls._db_manager.__exit__(None, None, None)
-            except Exception:
-                pass
-            try:
-                if cls._legacy_db_name:
-                    admin_query(f'REMOVE DATABASE {cls._legacy_db_name};')
-            except Exception:
-                pass
-            raise RuntimeError(f'Test setup failed: {e}')
+            cleanup_errors = []
+            for label, cleanup in (
+                ('client', lambda: cls.client.__exit__(None, None, None) if cls._client_created else None),
+                ('disposable DB', lambda: cls._db_manager.__exit__(None, None, None) if cls._db_manager else None),
+                ('legacy DB', lambda: admin_query(f'REMOVE DATABASE {cls._legacy_db_name};') if cls._legacy_db_name else None),
+            ):
+                try:
+                    cleanup()
+                except Exception as cleanup_error:
+                    cleanup_errors.append(f'{label}: {cleanup_error}')
+            detail = '; cleanup failures: ' + '; '.join(cleanup_errors) if cleanup_errors else ''
+            raise RuntimeError(f'Test setup failed: {e}{detail}') from e
 
     @classmethod
     def tearDownClass(cls):
