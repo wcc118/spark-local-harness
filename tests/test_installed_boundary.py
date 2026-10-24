@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import pytest
 import subprocess
 from pathlib import Path
 
@@ -27,17 +26,11 @@ def run(argv, **kwargs):
 
 
 def test_project_worker_has_valid_shell_syntax():
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     completed = run(["bash", "-n", str(PROJECT_WORKER)])
     assert completed.returncode == 0, completed.stderr
 
 
 def test_reviewer_runtime_disables_checkout_cache_writes():
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     worker = PROJECT_WORKER.read_text(encoding="utf-8")
     assert "PYTHONDONTWRITEBYTECODE=1" in worker
     assert 'PYTEST_ADDOPTS="-p no:cacheprovider"' in worker
@@ -49,18 +42,7 @@ def test_reviewer_runtime_disables_checkout_cache_writes():
     assert 'reviewer-scratch' in worker
 
 
-def test_reviewer_runtime_sets_tmpdir_to_scratch():
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
-    worker = PROJECT_WORKER.read_text(encoding="utf-8")
-    assert 'TMPDIR="$review_runtime_tmp"' in worker
-
-
 def test_installed_worker_matches_a_qualified_project_copy():
-    """Host-only test for installed worker - unavailable without installation."""
-    if not INSTALLED_WORKER.exists():
-        pytest.skip("Installed worker at /home/connellwc83/.local/bin/codex-local-worker unavailable")
     release = json.loads(RELEASE_MANIFEST.read_text(encoding="utf-8"))
     installed_digest = hashlib.sha256(INSTALLED_WORKER.read_bytes()).hexdigest()
     assert installed_digest in release["qualified_worker_sha256"]
@@ -72,9 +54,6 @@ def test_candidate_worker_does_not_require_self_promotion():
 
 
 def test_critic_uses_same_sterile_inference_boundary():
-    """Host-only test for old project critic - unavailable in current checkout."""
-    if not PROJECT_CRITIC.exists():
-        pytest.skip("Old project critic at /home/connellwc83/projects/codex/local-harness unavailable")
     critic = PROJECT_CRITIC.read_text(encoding="utf-8")
     assert 'env -i HOME="$critic_runtime_home"' in critic
     assert 'XDG_CONFIG_HOME="$critic_runtime_home/.config"' in critic
@@ -83,16 +62,10 @@ def test_critic_uses_same_sterile_inference_boundary():
 
 
 def test_installed_critic_matches_qualified_project_copy():
-    """Host-only test for installed critic - unavailable without installation."""
-    if not INSTALLED_CRITIC.exists():
-        pytest.skip("Installed critic at /home/connellwc83/.local/bin/codex-local-critic unavailable")
     assert INSTALLED_CRITIC.read_bytes() == PROJECT_CRITIC.read_bytes()
 
 
 def test_reviewer_fails_before_inference_without_transaction_identity(tmp_path):
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     env = os.environ.copy()
     for name in ("CODEX_LOCAL_REPOSITORY", "CODEX_LOCAL_ISSUE", "CODEX_LOCAL_PR"):
         env.pop(name, None)
@@ -103,9 +76,6 @@ def test_reviewer_fails_before_inference_without_transaction_identity(tmp_path):
 
 
 def test_candidate_coder_postflight_is_opt_in_and_deterministic():
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     worker = PROJECT_WORKER.read_text(encoding="utf-8")
     assert "CODEX_LOCAL_CODER_POSTFLIGHT" in worker
     assert "codex_local_harness.coder" in worker
@@ -114,9 +84,6 @@ def test_candidate_coder_postflight_is_opt_in_and_deterministic():
 
 
 def test_worker_inference_uses_sterile_allowlisted_environment():
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     worker = PROJECT_WORKER.read_text(encoding="utf-8")
     assert "worker_runtime_home=$(mktemp -d" in worker
     assert 'worker_env=(env -i HOME="$worker_runtime_home"' in worker
@@ -128,9 +95,6 @@ def test_worker_inference_uses_sterile_allowlisted_environment():
 
 
 def test_worker_does_not_pass_ambient_secret_to_inference(tmp_path):
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     fake = tmp_path / "fake-opencode"
     fake.write_text(
         "#!/bin/sh\n"
@@ -167,18 +131,12 @@ def test_worker_does_not_pass_ambient_secret_to_inference(tmp_path):
 
 
 def test_coder_prompt_assigns_publication_to_deterministic_harness():
-    """Host-only test for installed coder prompt - unavailable without installation."""
-    if not CODER_PROMPT.exists():
-        pytest.skip("Installed coder prompt at /home/connellwc83/.config/opencode/agents/coder.md unavailable")
     prompt = CODER_PROMPT.read_text(encoding="utf-8")
     assert "Do not push, create a pull request, comment on an issue, or change labels" in prompt
     assert "deterministic harness publisher" in prompt
 
 
 def test_dry_run_reports_exact_route_without_inference(tmp_path):
-    """Host-only test for old project worker - unavailable in current checkout."""
-    if not PROJECT_WORKER.exists():
-        pytest.skip("Old project worker at /home/connellwc83/projects/codex/local-harness unavailable")
     env = os.environ.copy()
     env["CODEX_LOCAL_DRY_RUN"] = "1"
     env["CODEX_LOCAL_WORKER_CONFIG"] = str(QUALIFIED_ROUTES)
@@ -190,9 +148,6 @@ def test_dry_run_reports_exact_route_without_inference(tmp_path):
 
 
 def test_reviewer_configuration_denies_direct_durable_writes():
-    """Host-only test for installed opencode config - unavailable without installation."""
-    if not OPENCODE_CONFIG.exists():
-        pytest.skip("OpenCode config at /home/connellwc83/.config/opencode/opencode.json unavailable")
     config = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
     permission = config["agent"]["reviewer"]["permission"]
     assert permission["edit"] == "deny"
@@ -210,17 +165,11 @@ def test_reviewer_configuration_denies_direct_durable_writes():
 
 
 def test_coder_configuration_denies_subagent_delegation():
-    """Host-only test for installed opencode config - unavailable without installation."""
-    if not OPENCODE_CONFIG.exists():
-        pytest.skip("OpenCode config at /home/connellwc83/.config/opencode/opencode.json unavailable")
     config = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
     assert config["agent"]["coder"]["permission"]["task"] == "deny"
 
 
 def test_reviewer_prompt_assigns_publication_to_deterministic_harness():
-    """Host-only test for installed reviewer prompt - unavailable without installation."""
-    if not REVIEWER_PROMPT.exists():
-        pytest.skip("Installed reviewer prompt at /home/connellwc83/.config/opencode/agents/reviewer.md unavailable")
     prompt = REVIEWER_PROMPT.read_text(encoding="utf-8")
     assert "no durable-state ownership" in prompt
     assert "REVIEW_RESULT_JSON=" in prompt
@@ -229,9 +178,6 @@ def test_reviewer_prompt_assigns_publication_to_deterministic_harness():
 
 
 def test_state_transition_ownership_is_not_contradictory():
-    """Host-only test for installed orchestrator prompt - unavailable without installation."""
-    if not ORCHESTRATOR_PROMPT.exists():
-        pytest.skip("Installed orchestrator prompt at /home/connellwc83/.config/opencode/agents/orchestrator.md unavailable")
     prompt = ORCHESTRATOR_PROMPT.read_text(encoding="utf-8")
     assert "owned by the deterministic publisher" in prompt
     assert "owned by Reviewer" not in prompt

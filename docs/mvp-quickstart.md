@@ -131,72 +131,24 @@ Health data is stored in `~/.local/share/codex-local-harness/health/`. Backups f
 ~/.local/share/codex-local-harness/backups/YYYYMMDDTHHMMSSZ-$(DESCRIPTION)
 ```
 
-## Reviewer Temp Directory Isolation
+## Reviewer temporary files
 
-### Container-only tmpfs capability
+Container workers have an isolated `/tmp` tmpfs. Qualified investigative reviews
+also declare `container_tmpfs` in their immutable review envelope and final role
+permissions, allowing temporary data there. Default and legacy envelopes retain
+their previous scope. The flag describes permission/audit context; it does not
+create the mount or qualify an arbitrary host process as a container.
 
-Reviewers running inside a container receive a dedicated tmpfs mount at `/tmp` that is:
+The host audit normalizes these container paths lexically. Host symlinks beneath
+`/tmp` do not describe the separate container filesystem. Traversal outside
+`/tmp`, forbidden commands and repository publication restrictions still apply.
+Actual filesystem confinement comes from the container mounts, not lexical audit.
 
-- **noexec** — Temporary scripts or executables cannot run; use the supplied scratch directory for test fixtures
-- **isolated** — Each worker container gets its own fresh tmpfs, separate from the host
-- **lexical-only** — Path normalization is applied lexically before allowance checks; host symlinks beneath `/tmp` do not change path interpretation
-
-This tmpfs is enabled only for qualified investigative reviews with both `--investigative` and `--container-tmpfs` flags.
-
-### Path behavior
-
-| Scenario | Default envelope | container_tmpfs enabled |
-|----------|-----------------|------------------------|
-| Read/write `/tmp/base_pr.json` | Rejected | Allowed |
-| Subpath `/tmp/scratch/file` | Rejected | Allowed |
-| Traversal `/tmp/../home/...` | Rejected | Rejected (normpath → `/home/...` outside `/tmp`) |
-| Host symlink `/tmp/link -> /host/path` | Rejected | Allowed (lexical path `/tmp/link` accepted) |
-| Checkout path | Allowed | Allowed |
-| Scratch directory | Allowed | Allowed |
-| Runtime home | Allowed | Allowed |
-| `~/.local/bin/...` | Allowed | Allowed |
-
-### Audit scope rules
-
-The `audit_tool_scope` function implements these rules:
-
-1. **Lexical normalization**: Uses `posixpath.normpath()` on the raw path string before allowance checks
-2. **Container tmpfs paths**: Any path that lexically equals `/tmp` or starts with `/tmp/` is allowed only when `container_tmpfs=True`
-3. **No resolution of host symlinks**: Container tmpfs paths are NOT resolved against the host filesystem; symlink traversal is only applied to non-`/tmp` paths
-4. **Legacy fallback**: Serialized envelopes without `container_tmpfs` field default to `False`
-
-### Usage in worker configuration
-
-The `codex-local-worker-v4` entry point enables container tmpfs for convergence reviewers:
-
-```bash
-# Convergence reviewer (qualified investigative)
-bin/codex-local-worker-v4 convergence-reviewer \
-  --investigative \
-  --container-tmpfs \
-  ...
-```
-
-Manual CLI invocation:
-
-```bash
-PYTHONPATH=src \
-python3 -m codex_local_harness.review prepare \
-  --checkout /path/to/repo \
-  --repository wcc118/example \
-  --issue 1 \
-  --pr 1 \
-  --investigative \
-  --container-tmpfs \
-  --task-file review.md \
-  --envelope-out /tmp/envelope.json
-```
-
-### Implementation details
-
-- **review.py**: Envelope has `container_tmpfs: bool = False` with validation requiring `investigative=True`
-- **review_profile.py**: Template rendering adds `/tmp` and `/tmp/*` rules when `container_tmpfs=True`
-- **bin/codex-local-worker-v4**: Propagates scratch environment and mounts scratch directory for reviewer
+`TMPDIR`, coverage and Python cache settings point to the supplied reviewer
+scratch directory, mounted in both reviewer modes. Use that directory for
+executable fixtures: `/tmp` is noexec, which blocks direct execution (an
+interpreter can still read a script). The checkout remains read-only. The normal
+reviewer entry point supplies these settings; no manual flags are needed.
 
 ## Known Limitations
 

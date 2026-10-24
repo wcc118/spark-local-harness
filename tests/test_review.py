@@ -674,26 +674,23 @@ def test_tool_scope_accepts_lexical_tmp_with_container_tmpfs(tmp_path):
 
 
 def test_tool_scope_accepts_host_symlink_to_tmp_with_container_tmpfs(tmp_path):
-    """Host symlink under /tmp pointing outside /tmp is allowed (lexical path check)."""
-    import os as sys_os
-    log = tmp_path / "run.jsonl"
-    # Create a real symlink in /tmp pointing to a location outside /tmp and outside checkout
-    # The symlink target need not exist; we're testing lexical path acceptance
-    symlink_path = Path("/tmp/codex_test_symlink_" + tmp_path.name)
-    try:
-        # Clean up any existing symlink from previous runs
-        if symlink_path.exists() or symlink_path.is_symlink():
-            symlink_path.unlink()
-        # Create symlink pointing outside /tmp (to /tmp parent directory)
-        symlink_path.symlink_to(tmp_path.parent)
-        # The command uses the symlink path, which lexically starts with /tmp/
-        write_tool_log(log, "bash", {"command": f"ls {symlink_path}"})
+    """A separate container tmpfs must not inherit host symlink interpretation."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="review-host-link-", dir="/tmp") as folder:
+        symlink_path = Path(folder) / "link"
+        symlink_path.symlink_to("/home/nonexistent-review-audit-target")
+        log = tmp_path / "run.jsonl"
+        write_tool_log(log, "bash", {"command": f"cat {symlink_path}"})
         bound = Envelope(**{**envelope(tmp_path).as_dict(), "investigative": True, "container_tmpfs": True})
         audit_tool_scope(log, bound)
-    finally:
-        # Cleanup
-        if symlink_path.exists() or symlink_path.is_symlink():
-            symlink_path.unlink()
+        with pytest.raises(ReviewError, match="outside checkout"):
+            audit_tool_scope(log, envelope(tmp_path))
+
+
+@pytest.mark.parametrize("value", ["false", "true", 1, None])
+def test_tmpfs_requires_literal_investigative_true(tmp_path, value):
+    with pytest.raises(ReviewError, match="Container tmpfs requires"):
+        Envelope(**{**envelope(tmp_path).as_dict(), "investigative": value, "container_tmpfs": True})
 
 
 def test_tool_scope_accepts_checkout_paths_with_container_tmpfs(tmp_path):
@@ -964,16 +961,20 @@ text content
     rules = json.loads([line for line in agent.splitlines() if line.startswith("  external_directory:")][0].split(":", 1)[1])
     assert "/tmp" not in rules
     assert "/tmp/*" not in rules
-    assert str(checkout) in rules
-    assert str(scratch) in rules
+    assert rules["*"] == "deny"
+    for root in (checkout, scratch):
+        assert rules[str(root)] == "allow"
+        assert rules[str(root) + "/*"] == "allow"
 
     # With container_tmpfs - /tmp should be allowed
     agent = render(template_content, checkout, scratch, container_tmpfs=True)
     rules = json.loads([line for line in agent.splitlines() if line.startswith("  external_directory:")][0].split(":", 1)[1])
     assert rules["/tmp"] == "allow"
     assert rules["/tmp/*"] == "allow"
-    assert str(checkout) in rules
-    assert str(scratch) in rules
+    assert rules["*"] == "deny"
+    for root in (checkout, scratch):
+        assert rules[str(root)] == "allow"
+        assert rules[str(root) + "/*"] == "allow"
 
 
 def test_review_profile_cli_accepts_container_tmpfs_flag(tmp_path):
