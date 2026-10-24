@@ -246,14 +246,14 @@ def test_check_insufficient_whitespace_locations_raises(tmp_path: Path) -> None:
     (repo / "value.txt").write_text(content.rstrip() + "  \n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "value.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "add whitespace"], check=True, capture_output=True)
-    
+
     # Now test with an invalid SHA to trigger the ValueError path for unparseable diff
     with pytest.raises(ValueError, match="invalid comparison base"):
         inspect(repo, "invalid")
-    
+
     with pytest.raises(ValueError, match="invalid comparison base"):
         inspect(repo, "a" * 39)  # too short
-    
+
     with pytest.raises(ValueError, match="invalid comparison base"):
         inspect(repo, "g" * 40)  # invalid hex
 
@@ -465,7 +465,7 @@ def test_check_standalone_runner_non_dict_json(tmp_path: Path) -> None:
 
 def test_check_escalate_prefix_does_not_bypass_final_host_rejection(tmp_path: Path) -> None:
     """Final host finalize_coder still rejects dirty state even if local feedback is ESCALATE/bypassed.
-    
+
     Uses actual temporary Git cases proving ESCALATE prefix returns systemMessage
     but final host postflight can still reject dirty/whitespace state.
     """
@@ -475,14 +475,14 @@ def test_check_escalate_prefix_does_not_bypass_final_host_rejection(tmp_path: Pa
     (repo / "value.txt").write_text(content.rstrip() + "  \n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "value.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "add whitespace"], check=True, capture_output=True)
-    
+
     # With ESCALATE prefix, check should return systemMessage (not block)
     result = check(repo, base_sha, {"hook_event_name": "Stop", "last_assistant_message": "ESCALATE: critical issue"})
     assert "systemMessage" in result
     assert "Coder reported escalation" in result["systemMessage"]
     # Should not have a block decision (feedback is bypassed)
     assert result.get("decision") is None
-    
+
     # Now test with dirty state and ESCALATE (use a fresh repo path to avoid collision)
     repo2_path = tmp_path / "test_repo2"
     repo2_path.mkdir(exist_ok=True)
@@ -491,7 +491,7 @@ def test_check_escalate_prefix_does_not_bypass_final_host_rejection(tmp_path: Pa
     assert "systemMessage" in result2
     assert "Coder reported escalation" in result2["systemMessage"]
     # Should not block - feedback is bypassed, but final host will still check
-    
+
     # Verify final host would still reject (this is a conceptual test:
     # the final host's finalize_coder runs independently and will catch these)
     # We cannot actually invoke the host here, but the pattern is:
@@ -501,17 +501,17 @@ def test_check_escalate_prefix_does_not_bypass_final_host_rejection(tmp_path: Pa
 def test_check_standalone_runner_preserves_worktree_state(tmp_path: Path) -> None:
     """Standalone check preserves worktree state - no modification during inspection."""
     repo, base_sha = make_git_repo(tmp_path, clean=True)
-    
+
     # Add trailing whitespace
     content = (repo / "value.txt").read_text(encoding="utf-8")
     (repo / "value.txt").write_text(content.rstrip() + "  \n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "value.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "whitespace"], check=True, capture_output=True)
-    
+
     # Record state before
     before_status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
     before_head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    
+
     # Run standalone check
     runtime_home = tmp_path / "runtime"
     runtime_home.mkdir()
@@ -520,7 +520,7 @@ def test_check_standalone_runner_preserves_worktree_state(tmp_path: Path) -> Non
     settings_file = settings_path / "settings.json"
     settings_file.write_text(json.dumps({"existing": "settings"}), encoding="utf-8")
     install(runtime_home, repo, base_sha)
-    
+
     checker = runtime_home / "delivery-feedback.py"
     payload = {"hook_event_name": "Stop", "last_assistant_message": ""}
     result = subprocess.run(
@@ -529,13 +529,13 @@ def test_check_standalone_runner_preserves_worktree_state(tmp_path: Path) -> Non
         capture_output=True,
         text=True,
     )
-    
+
     # Verify check ran successfully
     assert result.returncode == 0
     output = json.loads(result.stdout)
     assert output.get("decision") == "block"
     assert "trailing whitespace" in output.get("reason", "")
-    
+
     # State should be unchanged
     after_status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
     after_head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
@@ -545,15 +545,15 @@ def test_check_standalone_runner_preserves_worktree_state(tmp_path: Path) -> Non
 
 def test_check_standalone_runner_with_publish_flag_fails_on_dirty(tmp_path: Path) -> None:
     """Standalone check with publish flag still fails on dirty state (final host preflight).
-    
+
     Uses publish=True to exercise host whitespace preflight; intercepts any
     remote/publication operation and fails if attempted. Does not mock rejection.
     """
     repo, base_sha = make_git_repo(tmp_path, clean=False)
-    
+
     # Record that no push/publish occurred
     initial_remotes = subprocess.check_output(["git", "-C", str(repo), "remote"], text=True)
-    
+
     runtime_home = tmp_path / "runtime"
     runtime_home.mkdir()
     settings_path = runtime_home / ".qwen"
@@ -561,7 +561,7 @@ def test_check_standalone_runner_with_publish_flag_fails_on_dirty(tmp_path: Path
     settings_file = settings_path / "settings.json"
     settings_file.write_text(json.dumps({"existing": "settings"}), encoding="utf-8")
     install(runtime_home, repo, base_sha)
-    
+
     checker = runtime_home / "delivery-feedback.py"
     payload = {"hook_event_name": "Stop", "last_assistant_message": ""}
     result = subprocess.run(
@@ -570,12 +570,12 @@ def test_check_standalone_runner_with_publish_flag_fails_on_dirty(tmp_path: Path
         capture_output=True,
         text=True,
     )
-    
+
     # Check should block due to dirty state
     assert result.returncode == 0
     output = json.loads(result.stdout)
     assert output.get("decision") == "block"
-    
+
     # Verify no remote operation occurred (publish flag was exercised conceptually)
     after_remotes = subprocess.check_output(["git", "-C", str(repo), "remote"], text=True)
     assert initial_remotes == after_remotes  # No remote added
@@ -583,7 +583,7 @@ def test_check_standalone_runner_with_publish_flag_fails_on_dirty(tmp_path: Path
 
 def test_main_escalate_with_whitespace_preserves_host_authority(tmp_path: Path) -> None:
     """main() with ESCALATE prefix and whitespace still allows final host authority.
-    
+
     Tests that ESCALATE prefix returns systemMessage but final host will
     independently recheck whitespace.
     """
@@ -593,7 +593,7 @@ def test_main_escalate_with_whitespace_preserves_host_authority(tmp_path: Path) 
     (repo / "value.txt").write_text(content.rstrip() + "  \n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "value.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "whitespace"], check=True, capture_output=True)
-    
+
     runtime_home = tmp_path / "runtime"
     runtime_home.mkdir()
     settings_path = runtime_home / ".qwen"
@@ -601,7 +601,7 @@ def test_main_escalate_with_whitespace_preserves_host_authority(tmp_path: Path) 
     settings_file = settings_path / "settings.json"
     settings_file.write_text(json.dumps({"existing": "settings"}), encoding="utf-8")
     install(runtime_home, repo, base_sha)
-    
+
     checker = runtime_home / "delivery-feedback.py"
     payload = {"hook_event_name": "Stop", "last_assistant_message": "ESCALATE: critical issue"}
     result = subprocess.run(
@@ -610,7 +610,7 @@ def test_main_escalate_with_whitespace_preserves_host_authority(tmp_path: Path) 
         capture_output=True,
         text=True,
     )
-    
+
     # ESCALATE takes precedence - returns systemMessage, not block
     assert result.returncode == 0
     output = json.loads(result.stdout)
@@ -680,7 +680,7 @@ def test_check_preserves_worktree_state_dirty(tmp_path: Path) -> None:
 
 def test_check_source_content_does_not_leak_in_feedback(tmp_path: Path) -> None:
     """Source line contents do not leak into feedback - only locations.
-    
+
     Puts SYNTHETIC_MARKER on the actual offending whitespace line.
     Shows raw git diff --check would include the location, but feedback
     does not leak the actual content (only the location).
@@ -691,13 +691,13 @@ def test_check_source_content_does_not_leak_in_feedback(tmp_path: Path) -> None:
     (repo / "secrets.txt").write_text(sensitive_content, encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "secrets.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "initial with secrets"], check=True, capture_output=True)
-    
+
     # Now add trailing whitespace to another line with a unique SYNTHETIC_MARKER
     marker_line = f"clean  SYNTHETIC_MARKER_ON_WHITESPACE_LINE  \n"
     (repo / "value.txt").write_text(marker_line, encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "value.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "add whitespace with marker"], check=True, capture_output=True)
-    
+
     # Verify git diff --check would show the location
     diff_check = subprocess.run(
         ["git", "-C", str(repo), "diff", "--check", f"{base_sha}..HEAD"],
@@ -708,7 +708,7 @@ def test_check_source_content_does_not_leak_in_feedback(tmp_path: Path) -> None:
     # Should contain the location info (file and line)
     assert "value.txt" in diff_check.stdout
     assert "trailing whitespace" in diff_check.stdout
-    
+
     # Now run inspect - should detect issue but NOT leak SYNTHETIC_MARKER or secrets
     failures = inspect(repo, base_sha)
     assert len(failures) == 1
@@ -730,14 +730,14 @@ def test_check_handles_staged_rename_path(tmp_path: Path) -> None:
     (repo / "old_name.txt").write_text("content\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "old_name.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "add old name"], check=True, capture_output=True)
-    
+
     # Now rename but don't commit - leave as staged rename
     subprocess.run(["git", "-C", str(repo), "mv", "old_name.txt", "new_name.txt"], check=True)
-    
+
     # Git status should show the rename
     status_output = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1", "-z"], text=True)
     assert "old_name.txt" in status_output or "R" in status_output
-    
+
     failures = inspect(repo, base_sha)
     # Staged rename should be detected as uncommitted
     assert len(failures) == 1
@@ -749,11 +749,11 @@ def test_check_handles_staged_rename_path(tmp_path: Path) -> None:
 def test_check_handles_dirty_unusual_path(tmp_path: Path) -> None:
     """check handles uncommitted dirty file with unusual filename and correct destination/count."""
     repo, base_sha = make_git_repo(tmp_path, clean=True)
-    
+
     # Create file with spaces in name and add trailing whitespace
     unusual_file = repo / "unusual file with spaces.txt"
     unusual_file.write_text("content  \n", encoding="utf-8")  # trailing whitespace
-    
+
     # Don't commit - leave as dirty uncommitted file
     failures = inspect(repo, base_sha)
     assert len(failures) == 1
@@ -766,7 +766,7 @@ def test_check_handles_dirty_unusual_path(tmp_path: Path) -> None:
 def test_check_clean_after_commit_unusual_path(tmp_path: Path) -> None:
     """check passes after committing file with unusual path (clean state)."""
     repo, base_sha = make_git_repo(tmp_path, clean=True)
-    
+
     # Create file with spaces in name
     unusual_dir = repo / "dir with spaces"
     unusual_dir.mkdir()
@@ -774,14 +774,14 @@ def test_check_clean_after_commit_unusual_path(tmp_path: Path) -> None:
     unusual_file.write_text("content\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "dir with spaces/file with spaces.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "add unusual path"], check=True, capture_output=True)
-    
+
     failures = inspect(repo, base_sha)
     assert failures == []  # Clean after commit
 
 
 def test_check_handles_generated_artifact_with_unusual_path(tmp_path: Path) -> None:
     """check excludes generated artifacts even with unusual paths (uncommitted).
-    
+
     The __pycache__ directory and its contents are excluded, but the parent
     directory 'dir with spaces/' is reported as an uncommitted change since
     it's not itself a generated artifact.
@@ -794,7 +794,7 @@ def test_check_handles_generated_artifact_with_unusual_path(tmp_path: Path) -> N
     pycache.mkdir(exist_ok=True)
     (pycache / "module.pyc").write_text("data", encoding="utf-8")
     # Don't commit - leave as uncommitted generated artifact
-    
+
     failures = inspect(repo, base_sha)
     # The parent directory is uncommitted but not a generated artifact
     # Only the __pycache__ contents should be excluded
@@ -837,11 +837,11 @@ def test_install_with_unusual_checkout_path(tmp_path: Path) -> None:
     # Verify shell quoting by checking for escape or quote
     # shlex.join uses quotes for paths with spaces
     assert "--checkout" in command and ("repo with spaces" in command or ("'repo" in command and "spaces'" in command))
-    
+
     # Execute the installed hook command to verify it runs correctly
     checker = runtime_home / "delivery-feedback.py"
     assert checker.exists()
-    
+
     # Test with payload
     payload = {"hook_event_name": "Stop", "last_assistant_message": ""}
     result = subprocess.run(
@@ -881,7 +881,7 @@ def test_install_with_special_chars_in_path(tmp_path: Path) -> None:
     settings = json.loads(settings_file.read_text(encoding="utf-8"))
     stop_hooks = settings["hooks"]["Stop"]
     command = stop_hooks[0]["hooks"][0]["command"]
-    
+
     # Execute to verify command runs correctly
     checker = runtime_home / "delivery-feedback.py"
     payload = {"hook_event_name": "Stop", "last_assistant_message": ""}
