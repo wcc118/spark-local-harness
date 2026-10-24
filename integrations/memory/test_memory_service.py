@@ -162,11 +162,15 @@ class MemoryIntegration(unittest.TestCase):
     def test_record_memory_use_helper_discovery_does_not_grant_write(self):
         helper=self.worker('helper')
         names={t['name'] for t in self.rpc(helper,'tools/list',{})['result']['tools']}
-        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory'})
+        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory','discover_topics','enrich_memory'})
         coder=self.worker()
         ident=self.value(self.call(coder,'record_memory',text='Helper denial target',source='test',request_id='helper-target'))['memory']['id']
         before=self.value(self.call(coder,'get_memory',memory_id=ident))
         self.assertTrue(self.call(helper,'record_memory_use',memory_id=ident,outcome='helpful',explanation='test',source='test',request_id='test')['isError'])
+        # Helper can discover topics but cannot enrich
+        discover_result=self.value(self.call(helper,'discover_topics'))
+        self.assertIn('topics',discover_result)
+        self.assertTrue(self.call(helper,'enrich_memory',memory_id=ident,topics=['new'],explanation='test',source='test',request_id='enrich')['isError'])
         self.assertEqual(self.value(self.call(coder,'get_memory',memory_id=ident)),before)
 
     def test_api_has_no_delete_sql_or_role_spoof(self):
@@ -239,15 +243,18 @@ class MemoryIntegration(unittest.TestCase):
         # Topics should be unioned
         updated_topics=sorted(enrich_result['memory']['topics'])
         self.assertEqual(updated_topics,['topic-a','topic-b','topic-c'])
-        # Event should have action=enrich
-        events=enrich_result.get('events',[])
-        enrich_events=[e for e in events if e.get('action')=='enrich']
-        self.assertTrue(len(enrich_events)>=1)
-        event=enrich_events[-1]
+        # Event should have action=enrich (singular event, not plural)
+        event=enrich_result.get('event')
+        self.assertIsNotNone(event)
+        self.assertEqual(event['action'],'enrich')
         self.assertEqual(event['topics'],['topic-b','topic-c'])
         self.assertEqual(event['explanation'],'Adding related topics')
         self.assertEqual(event['source'],'reviewer analysis')
         self.assertEqual(event['role'],'reviewer')
+        # Verify audit event is also visible via get_memory
+        inspected=self.value(self.call(coder,'get_memory',memory_id=ident))
+        enrich_events=[e for e in inspected['events'] if e.get('action')=='enrich']
+        self.assertTrue(len(enrich_events)>=1)
         # Search by new topic
         found=self.value(self.call(reviewer,'search_memory',query='Original',topics=['topic-b']))
         self.assertIn(ident,[m['id'] for m in found['memories']])
@@ -278,14 +285,21 @@ class MemoryIntegration(unittest.TestCase):
         args=dict(text='Overlap test',source='test',request_id='overlap-base',topics=['topic-a'])
         first=self.value(self.call(coder,'record_memory',**args))
         ident=first['memory']['id']
-        # Enrich with overlapping topic
+        # Enrich with overlapping topic (add b to existing a)
         enrich1=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['topic-a','topic-b'],explanation='Add b',source='test',request_id='enrich-overlap-1'))
-        # Topics should be deduplicated (no duplicates)
-        self.assertEqual(enrich1['memory']['topics'],['topic-a','topic-b'])
+        # Topics should be deduplicated (no duplicates, additive union)
+        self.assertEqual(sorted(enrich1['memory']['topics']),['topic-a','topic-b'])
+        # Record the initial concerns edge count
+        initial_inspected=self.value(self.call(coder,'get_memory',memory_id=ident))
+        initial_concerns=[e for e in initial_inspected['relations'] if e.get('type')=='concerns']
         # Enrich again with just the already-present topic
         enrich2=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['topic-a'],explanation='Add a again',source='test',request_id='enrich-overlap-2'))
-        # Should not create duplicate concerns edge or event
-        self.assertEqual(enrich2['memory']['topics'],['topic-a'])
+        # Should preserve existing topics (additive, no reduction)
+        self.assertEqual(sorted(enrich2['memory']['topics']),['topic-a','topic-b'])
+        # Should not create duplicate concerns edge
+        after_inspected=self.value(self.call(coder,'get_memory',memory_id=ident))
+        after_concerns=[e for e in after_inspected['relations'] if e.get('type')=='concerns']
+        self.assertEqual(len(after_concerns),len(initial_concerns))
 
     def test_enrich_memory_helper_denied_no_side_effect(self):
         helper=self.worker('helper')
