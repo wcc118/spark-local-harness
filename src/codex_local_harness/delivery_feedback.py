@@ -52,7 +52,8 @@ def inspect(checkout: Path, base: str) -> list[str]:
     if diff.returncode:
         # Do not echo added source lines or arbitrary stderr into the prompt.
         locations = [line for line in diff.stdout.splitlines()
-                     if re.match(r"^.+:\d+: (trailing whitespace|space before tab|new blank line|leftover conflict marker)", line)]
+                     if not line.startswith("+") and
+                     re.match(r"^.+:\d+: (trailing whitespace|space before tab|new blank line|leftover conflict marker)", line)]
         if not locations:
             raise ValueError("committed diff check could not be completed")
         failures.append("Committed diff check failed: " + "; ".join(locations[:20]))

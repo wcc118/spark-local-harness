@@ -23,6 +23,20 @@ from codex_local_harness.delivery_feedback import check, git, install, inspect, 
 REPO = "wcc118/example"
 
 
+def test_diagnostic_shaped_source_is_not_echoed(tmp_path):
+    repo, base = make_git_repo(tmp_path)
+    marker = "SYNTHETIC_SOURCE_MARKER"
+    (repo / "value.txt").write_text(marker + ":123: trailing whitespace   \n")
+    subprocess.run(["git", "-C", str(repo), "add", "value.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "fixture"], check=True, capture_output=True)
+    raw = git(repo, "diff", "--check", f"{base}..HEAD")
+    assert marker in raw.stdout and raw.returncode != 0
+    result = check(repo, base, {"hook_event_name": "Stop"})
+    assert result["decision"] == "block"
+    assert "value.txt:1: trailing whitespace" in result["reason"]
+    assert marker not in result["reason"]
+
+
 def make_git_repo(tmp_path: Path, *, clean: bool = True) -> tuple[Path, str]:
     """Create a temporary Git repo with an initial commit on main."""
     repo = tmp_path / "repo"
