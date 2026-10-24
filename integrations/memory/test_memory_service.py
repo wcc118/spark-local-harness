@@ -62,9 +62,9 @@ class MemoryIntegration(unittest.TestCase):
         cls.client.__exit__(None,None,None)
         admin_query(f'REMOVE DATABASE {cls.name};')
 
-    def worker(self,role='coder'):
+    def worker(self,role='coder',run_id=None):
         response=self.client.post('/sessions',headers={'Authorization':'Bearer test-issuer'},
-            json={'role':role,'run_id':'run-1','repository':'test/repo','issue':'214'})
+            json={'role':role,'run_id':run_id or secrets.token_hex(8),'repository':'test/repo','issue':'214'})
         self.assertEqual(response.status_code,200)
         return response.json()['token']
 
@@ -109,7 +109,8 @@ class MemoryIntegration(unittest.TestCase):
         self.assertTrue(self.call('test-frontier','resolve_memory',target_id=fix,replacement_id=ident,rationale='cycle',request_id='cycle')['isError'])
 
     def test_record_memory_use_lifecycle_and_role_enforcement(self):
-        coder=self.worker();reviewer=self.worker('reviewer');helper=self.worker('helper')
+        run_id='use-'+secrets.token_hex(8)
+        coder=self.worker(run_id=run_id);reviewer=self.worker('reviewer');helper=self.worker('helper')
         args=dict(text='Crossprojectwidget has a reproducible boundary failure',source='test evidence',request_id='discovery',topics=['boundary'],project='project-a',conditions='version one')
         first=self.value(self.call(coder,'record_memory',**args))
         ident=first['memory']['id']
@@ -120,7 +121,8 @@ class MemoryIntegration(unittest.TestCase):
         self.assertEqual(use_result['event']['role'],'coder')
         self.assertEqual(use_result['event']['evidence_kind'],'agent_report')
         self.assertEqual(use_result['event']['actor'],use_result['event']['role'])
-        self.assertEqual(use_result['event']['run_id'],'run-1')
+        self.assertEqual(use_result['event']['run_id'],run_id)
+        self.assertEqual(use_result['event']['repository'],'test/repo')
         self.assertEqual(use_result['event']['issue'],'test/repo#214')
         replayed=self.value(self.call(coder,'record_memory_use',**use_args))
         self.assertTrue(replayed['replayed']);self.assertEqual(replayed['event']['id'],use_result['event']['id'])
@@ -136,6 +138,15 @@ class MemoryIntegration(unittest.TestCase):
         inspected=self.value(self.call(reviewer,'get_memory',memory_id=ident))
         self.assertTrue(inspected['events'])
         self.assertEqual(len([e for e in inspected['events'] if e.get('action')=='use']),3)
+        self.assertEqual(inspected['memory'],first['memory'])
+        frontier=self.value(self.call('test-frontier','record_memory_use',memory_id=ident,
+            outcome='unhelpful',explanation='Did not apply in this environment',source='primary observation',request_id='frontier-use'))
+        self.assertEqual(frontier['event']['role'],'frontier')
+        self.assertEqual(frontier['event']['actor'],'codex')
+        self.assertEqual(self.value(self.call(coder,'get_memory',memory_id=ident))['memory'],first['memory'])
+        # The same retry key is scoped to the authenticated principal, not global.
+        another=self.value(self.call(reviewer,'record_memory_use',**use_args))
+        self.assertNotEqual(another['event']['id'],use_result['event']['id'])
 
     def test_record_memory_use_invalid_outcome_and_missing_target(self):
         coder=self.worker()
@@ -148,11 +159,15 @@ class MemoryIntegration(unittest.TestCase):
         r=self.call(coder,'record_memory_use',memory_id='memory:x',outcome='helpful',explanation='test',source='',request_id='empty-source')
         self.assertTrue(r['isError'])
 
-    def test_record_memory_use_not_in_tools_list_for_helper(self):
+    def test_record_memory_use_helper_discovery_does_not_grant_write(self):
         helper=self.worker('helper')
         names={t['name'] for t in self.rpc(helper,'tools/list',{})['result']['tools']}
         self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory'})
-        self.assertTrue(self.call(helper,'record_memory_use',memory_id='memory:x',outcome='helpful',explanation='test',source='test',request_id='test')['isError'])
+        coder=self.worker()
+        ident=self.value(self.call(coder,'record_memory',text='Helper denial target',source='test',request_id='helper-target'))['memory']['id']
+        before=self.value(self.call(coder,'get_memory',memory_id=ident))
+        self.assertTrue(self.call(helper,'record_memory_use',memory_id=ident,outcome='helpful',explanation='test',source='test',request_id='test')['isError'])
+        self.assertEqual(self.value(self.call(coder,'get_memory',memory_id=ident)),before)
 
     def test_api_has_no_delete_sql_or_role_spoof(self):
         token=self.worker()

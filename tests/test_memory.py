@@ -85,3 +85,4 @@ def test_effective_opencode_permissions(tmp_path):
             matching = [r['action'] for r in rules if fnmatch.fnmatchcase(name, r['permission'])]
             assert matching[-1] == action, (role, name, matching)
         assert (o/'agents/reviewer.md').read_text().count('memory_record_memory_use:') == 1
+        assert (o/'agents/reviewer.md').read_text().count('memory_record_memory:') == 1

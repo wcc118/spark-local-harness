@@ -154,6 +154,14 @@ replacement, marking that replacement active and preserving both histories.
 No routine MCP operation deletes records. Owner-directed administrative deletion
 must also consider relationships and copies in backups; it is not automated here.
 
+`record_memory_use` appends an attributed report of actual lesson application:
+helpful, unhelpful, misleading or uncertain, with an explanation and source.
+These are agent reports, not independently verified performance measurements or
+votes. They never change the lesson text, status or search ranking. Merely finding
+or reading a lesson is not an application outcome. Contributors choose when a
+report is useful; no per-task report is required. `get_memory` includes the most
+recent 50 audit events, including use reports. Older events remain in the database.
+
 Reviewable service source is also included in the harness PR under
 `integrations/memory/`. After a service change, sync that reviewed source and restart
 this unit. Disable future worker integration with `enabled: false` in the host memory
