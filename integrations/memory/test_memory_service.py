@@ -335,6 +335,22 @@ class MemoryIntegration(unittest.TestCase):
         self.assertIn('topics',result)
         self.assertIsInstance(result['topics'],list)
 
+    def test_contribution_tools_expose_optional_declared_context(self):
+        """All five contribution tools expose optional declared_context parameter."""
+        token=self.worker()
+        tools=self.rpc(token,'tools/list',{})['result']['tools']
+        tool_map={t['name']:t for t in tools}
+        contribution_tools=['record_memory','correct_memory','record_memory_use','enrich_memory','resolve_memory']
+        for name in contribution_tools:
+            self.assertIn(name,tool_map,f'{name} should be a contributed tool')
+            # Check inputSchema.properties for declared_context
+            input_schema=tool_map[name].get('inputSchema',{})
+            properties=input_schema.get('properties',{})
+            self.assertIn('declared_context',properties,f'{name} should have declared_context in properties')
+            # Verify it's optional (not in required list)
+            required=input_schema.get('required',[])
+            self.assertNotIn('declared_context',required,f'{name} declared_context should be optional')
+
     def test_discover_topics_invalid_limit_and_empty_query(self):
         coder=self.worker()
         r=self.call(coder,'discover_topics',limit=0)
@@ -584,6 +600,344 @@ class DisposableDatabaseTests(unittest.TestCase):
             }))
             with self.assertRaises(ValueError):
                 DisposableDatabase(profile_path, 'memory_test_x')
+
+
+class DeclaredContextTests(unittest.TestCase):
+    """Tests for optional declared_context on all write tools."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up disposable database for context tests."""
+        profile_path = os.environ.get('MEMORY_TEST_PROFILE')
+        if profile_path is not None and profile_path != '' and HAS_DISPOSABLE:
+            cls._db_manager = DisposableDatabaseManager(profile_path)
+            cls._db_manager.__enter__()
+            cls.db = cls._db_manager.db
+            cls.store = cls._db_manager.create_store()
+            cls.config = {'issuer_token': 'test-issuer', 'signing_key': 'test-signing',
+                          'clients': {'codex': {'role': 'frontier', 'token': 'test-frontier'}}}
+            cls.server = build_server(cls.store)
+            cls.app = AuthenticatedApp(cls.server.streamable_http_app(stateless_http=True, json_response=True), cls.config)
+            cls.client = TestClient(cls.app, base_url='http://127.0.0.1:9602')
+            cls.client.__enter__()
+            cls._client_created = True
+        else:
+            # Skip if no disposable DB available
+            cls.skipTest('requires disposable database with MEMORY_TEST_PROFILE')
+
+    @classmethod
+    def tearDownClass(cls):
+        """Tear down test database."""
+        if hasattr(cls, '_client_created') and cls._client_created:
+            try:
+                cls.client.__exit__(None, None, None)
+            except Exception:
+                pass
+        if hasattr(cls, '_db_manager') and cls._db_manager:
+            try:
+                cls._db_manager.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def worker(self, role='coder', run_id=None):
+        response = self.client.post('/sessions', headers={'Authorization': 'Bearer test-issuer'},
+            json={'role': role, 'run_id': run_id or secrets.token_hex(8), 'repository': 'test/repo', 'issue': '214'})
+        self.assertEqual(response.status_code, 200)
+        return response.json()['token']
+
+    def rpc(self, token, method, params):
+        r = self.client.post('/mcp', headers={'Authorization': 'Bearer '+token, 'Accept': 'application/json, text/event-stream'},
+            json={'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def call(self, token, name, **args):
+        return self.rpc(token, 'tools/call', {'name': name, 'arguments': args})['result']
+
+    def value(self, result):
+        self.assertFalse(result.get('isError'), result)
+        return result.get('structuredContent') or json.loads(result['content'][0]['text'])
+
+    def test_declared_context_on_record_memory(self):
+        """declared_context is stored with record_memory."""
+        coder = self.worker()
+        # Record without declared_context (baseline)
+        args = dict(text='Baseline finding', source='test', request_id='baseline', topics=['test'])
+        baseline = self.value(self.call(coder, 'record_memory', **args))
+        # Record with declared_context
+        context = dict(repository='other/repo', issue='other/repo#999')
+        with_context = self.value(self.call(coder, 'record_memory',
+            text='Context finding', source='test', request_id='with-context', topics=['test'],
+            declared_context=context))
+        # Verify context is stored
+        self.assertEqual(with_context['memory']['declared_context'], context)
+        # Context should not affect identity
+        self.assertNotEqual(baseline['memory']['id'], with_context['memory']['id'])
+        # Search without exclude should find both
+        all_found = self.value(self.call(coder, 'search_memory', query='finding'))
+        ids = {m['id'] for m in all_found['memories']}
+        self.assertIn(baseline['memory']['id'], ids)
+        self.assertIn(with_context['memory']['id'], ids)
+
+    def test_declared_context_on_correct_memory(self):
+        """declared_context is stored with correct_memory."""
+        coder = self.worker()
+        # Create original
+        original = self.value(self.call(coder, 'record_memory',
+            text='Original claim', source='test', request_id='original', topics=['claim']))
+        ident = original['memory']['id']
+        # Add correction with declared_context
+        context = dict(repository='other/repo', issue='other/repo#100')
+        corrected = self.value(self.call(coder, 'correct_memory',
+            target_id=ident, text='Corrected claim', source='correction source',
+            request_id='correction', declared_context=context))
+        self.assertEqual(corrected['memory']['declared_context'], context)
+        # Original should be disputed
+        inspected = self.value(self.call(coder, 'get_memory', memory_id=ident))
+        self.assertEqual(inspected['memory']['status'], 'disputed')
+
+    def test_declared_context_on_record_memory_use(self):
+        """declared_context is stored with record_memory_use."""
+        coder = self.worker()
+        # Create memory first
+        original = self.value(self.call(coder, 'record_memory',
+            text='Use target', source='test', request_id='use-target', topics=['target']))
+        ident = original['memory']['id']
+        # Record use with declared_context
+        context = dict(repository='other/repo', issue='other/repo#200')
+        use_result = self.value(self.call(coder, 'record_memory_use',
+            memory_id=ident, outcome='helpful', explanation='test',
+            source='use source', request_id='use-with-context', declared_context=context))
+        self.assertEqual(use_result['event']['declared_context'], context)
+
+    def test_declared_context_on_enrich_memory(self):
+        """declared_context is stored with enrich_memory."""
+        coder = self.worker()
+        # Create memory first
+        original = self.value(self.call(coder, 'record_memory',
+            text='Enrich target', source='test', request_id='enrich-target', topics=['base']))
+        ident = original['memory']['id']
+        # Enrich with declared_context
+        context = dict(repository='other/repo', issue='other/repo#300')
+        enriched = self.value(self.call(coder, 'enrich_memory',
+            memory_id=ident, topics=['new-topic'],
+            explanation='enrich explanation', source='enrich source',
+            request_id='enrich-with-context', declared_context=context))
+        self.assertEqual(enriched['event']['declared_context'], context)
+
+    def test_declared_context_on_resolve_memory(self):
+        """declared_context is stored with resolve_memory."""
+        # Create original
+        original = self.value(self.call('test-frontier', 'record_memory',
+            text='Old claim', source='test', request_id='old-claim', topics=['old']))
+        ident = original['memory']['id']
+        # Create replacement
+        replacement = self.value(self.call('test-frontier', 'record_memory',
+            text='New claim', source='test', request_id='new-claim', topics=['new']))
+        rep_id = replacement['memory']['id']
+        # Resolve with declared_context
+        context = dict(repository='other/repo', issue='other/repo#400')
+        resolved = self.value(self.call('test-frontier', 'resolve_memory',
+            target_id=ident, replacement_id=rep_id, rationale='superseded',
+            request_id='resolve-with-context', declared_context=context))
+        # Check that target is superseded
+        self.assertEqual(resolved['target']['status'], 'superseded')
+        # Event is stored with declared_context (inspect via get_memory)
+        inspected = self.value(self.call('test-frontier', 'get_memory', memory_id=ident))
+        # Find the supersede event
+        supersede_events=[e for e in inspected['events'] if e.get('action')=='supersede']
+        self.assertTrue(len(supersede_events)>=1)
+        self.assertEqual(supersede_events[0]['declared_context'], context)
+
+    def test_declared_context_in_search_exclusion(self):
+        """Search excludes both trusted issue AND declared_context.issue."""
+        coder = self.worker()
+        # Create memory with different declared issue
+        context = dict(repository='test/repo', issue='test/repo#555')
+        self.value(self.call(coder, 'record_memory',
+            text='Exclusion target', source='test', request_id='exclusion-target',
+            topics=['exclusion'], declared_context=context))
+        # Search without exclude should find it
+        found = self.value(self.call(coder, 'search_memory', query='Exclusion'))
+        self.assertTrue(found['memories'])
+        # Search with exclude matching declared issue should filter it out
+        filtered = self.value(self.call(coder, 'search_memory',
+            query='Exclusion', exclude_issue='test/repo#555'))
+        self.assertFalse(filtered['memories'])
+
+    def test_declared_context_with_only_session_id(self):
+        """declared_context can contain only session_id."""
+        coder = self.worker()
+        context = dict(session_id='session-abc-123')
+        result = self.value(self.call(coder, 'record_memory',
+            text='Session context test', source='test', request_id='session-context',
+            topics=['test'], declared_context=context))
+        self.assertEqual(result['memory']['declared_context'], context)
+
+    def test_declared_context_validation_rejects_unknown_keys(self):
+        """declared_context rejects unknown keys."""
+        coder = self.worker()
+        context = dict(repository='test/repo', issue='test/repo#1', extra_key='invalid')
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='bad-context', topics=['test'],
+            declared_context=context)
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_validation_rejects_empty_dict(self):
+        """declared_context rejects empty dict (but None is allowed)."""
+        coder = self.worker()
+        # Empty dict should fail
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='empty-context', topics=['test'],
+            declared_context={})
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_validation_rejects_empty_values(self):
+        """declared_context values must be non-empty strings."""
+        coder = self.worker()
+        # Empty repository
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='empty-repo', topics=['test'],
+            declared_context=dict(repository='', issue='test/repo#1'))
+        self.assertTrue(r['isError'])
+        # Empty issue
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='empty-issue', topics=['test'],
+            declared_context=dict(repository='test/repo', issue=''))
+        self.assertTrue(r['isError'])
+        # Empty session_id
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='empty-session', topics=['test'],
+            declared_context=dict(session_id=''))
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_validation_repository_format(self):
+        """declared_context.repository must match OWNER/REPO pattern."""
+        coder = self.worker()
+        # Invalid repository format
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='bad-repo-format', topics=['test'],
+            declared_context=dict(repository='invalid_repo', issue='test/repo#1'))
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_validation_issue_format(self):
+        """declared_context.issue must match OWNER/REPO#N pattern."""
+        coder = self.worker()
+        # Invalid issue format
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='bad-issue-format', topics=['test'],
+            declared_context=dict(repository='test/repo', issue='not-a-valid-issue'))
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_validation_issue_mismatch(self):
+        """declared_context repository and issue must agree."""
+        coder = self.worker()
+        # Repository and issue don't match
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='repo-issue-mismatch', topics=['test'],
+            declared_context=dict(repository='test/repo', issue='other/repo#1'))
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_validation_types(self):
+        """declared_context values must be strings."""
+        coder = self.worker()
+        # Integer repository
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='int-repo', topics=['test'],
+            declared_context=dict(repository=123, issue='test/repo#1'))
+        self.assertTrue(r['isError'])
+        # Array issue
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='array-issue', topics=['test'],
+            declared_context=dict(repository='test/repo', issue=['test/repo#1']))
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_length_limits(self):
+        """declared_context values have length limits (200 chars)."""
+        coder = self.worker()
+        # Over 200 characters
+        long_str = 'x' * 201
+        r = self.call(coder, 'record_memory',
+            text='Test', source='test', request_id='long-repo', topics=['test'],
+            declared_context=dict(repository=long_str, issue='test/repo#1'))
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_identity_preservation(self):
+        """declared_context is a claim, never authenticated identity."""
+        # Same content with different declared_context produces different fingerprints
+        coder = self.worker()
+        # First without context
+        first = self.value(self.call(coder, 'record_memory',
+            text='Context test', source='test', request_id='no-context', topics=['test']))
+        # Second with context - should be different memory (different fingerprint)
+        context = dict(repository='other/repo', issue='other/repo#999')
+        second = self.value(self.call(coder, 'record_memory',
+            text='Context test', source='test', request_id='with-context', topics=['test'],
+            declared_context=context))
+        # Different request_ids but same content - both should be stored
+        self.assertNotEqual(first['memory']['id'], second['memory']['id'])
+
+    def test_declared_context_idempotent_replay(self):
+        """Same declared_context + same request_id + same content = replay."""
+        coder = self.worker()
+        context = dict(repository='other/repo', issue='other/repo#777')
+        args = dict(text='Replay test', source='test', request_id='replay-base',
+                    topics=['test'], declared_context=context)
+        first = self.value(self.call(coder, 'record_memory', **args))
+        # Replay with identical content
+        second = self.value(self.call(coder, 'record_memory', **args))
+        self.assertTrue(second['replayed'])
+        self.assertEqual(second['memory']['id'], first['memory']['id'])
+        # Different context with same request_id should fail
+        different_context = dict(repository='other/repo', issue='other/repo#888')
+        r = self.call(coder, 'record_memory', text='Replay test', source='test',
+                      request_id='replay-base', topics=['test'], declared_context=different_context)
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_does_not_affect_role_enforcement(self):
+        """declared_context does not grant write permissions to helper."""
+        helper = self.worker('helper')
+        context = dict(repository='other/repo', issue='other/repo#123')
+        # Helper cannot write even with declared_context
+        r = self.call(helper, 'record_memory',
+            text='Helper context test', source='test', request_id='helper-context',
+            topics=['test'], declared_context=context)
+        self.assertTrue(r['isError'])
+        # Helper cannot correct
+        r = self.call(helper, 'correct_memory',
+            target_id='memory:x', text='Correction', source='test',
+            request_id='helper-correct', declared_context=context)
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_coder_cannot_resolve(self):
+        """Coder with declared_context cannot resolve."""
+        coder = self.worker()
+        # Create two memories
+        m1 = self.value(self.call(coder, 'record_memory',
+            text='Target', source='test', request_id='target', topics=['t']))
+        m2 = self.value(self.call(coder, 'record_memory',
+            text='Replacement', source='test', request_id='replacement', topics=['r']))
+        context = dict(repository='other/repo', issue='other/repo#456')
+        # Coder cannot resolve even with declared_context
+        r = self.call(coder, 'resolve_memory',
+            target_id=m1['memory']['id'], replacement_id=m2['memory']['id'],
+            rationale='superseded', request_id='coder-resolve', declared_context=context)
+        self.assertTrue(r['isError'])
+
+    def test_declared_context_frontier_can_resolve(self):
+        """Frontier with declared_context can resolve."""
+        context = dict(repository='other/repo', issue='other/repo#789')
+        # Create memories
+        m1 = self.value(self.call('test-frontier', 'record_memory',
+            text='Old', source='test', request_id='old', topics=['o']))
+        m2 = self.value(self.call('test-frontier', 'record_memory',
+            text='New', source='test', request_id='new', topics=['n']))
+        # Frontier can resolve with declared_context
+        resolved = self.value(self.call('test-frontier', 'resolve_memory',
+            target_id=m1['memory']['id'], replacement_id=m2['memory']['id'],
+            rationale='superseded', request_id='frontier-resolve', declared_context=context))
+        self.assertEqual(resolved['replacement'], m2['memory']['id'])
+        self.assertEqual(resolved['target']['status'], 'superseded')
 
 
 class EmptyProfileTests(unittest.TestCase):
