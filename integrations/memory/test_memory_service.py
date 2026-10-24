@@ -64,7 +64,7 @@ class MemoryIntegration(unittest.TestCase):
 
     def worker(self,role='coder'):
         response=self.client.post('/sessions',headers={'Authorization':'Bearer test-issuer'},
-            json={'role':role,'run_id':secrets.token_hex(8),'repository':'test/repo','issue':'214'})
+            json={'role':role,'run_id':'run-1','repository':'test/repo','issue':'214'})
         self.assertEqual(response.status_code,200)
         return response.json()['token']
 
@@ -151,7 +151,8 @@ class MemoryIntegration(unittest.TestCase):
     def test_record_memory_use_not_in_tools_list_for_helper(self):
         helper=self.worker('helper')
         names={t['name'] for t in self.rpc(helper,'tools/list',{})['result']['tools']}
-        self.assertEqual(names,{'search_memory','get_memory'})
+        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory'})
+        self.assertTrue(self.call(helper,'record_memory_use',memory_id='memory:x',outcome='helpful',explanation='test',source='test',request_id='test')['isError'])
 
     def test_api_has_no_delete_sql_or_role_spoof(self):
         token=self.worker()
