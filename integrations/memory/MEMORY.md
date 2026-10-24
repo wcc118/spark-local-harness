@@ -17,6 +17,12 @@ Tools:
 - `record_memory_use`: report actual lesson use as helpful/unhelpful/misleading/uncertain,
   with evidence and limits. Append-only attributed report, not proof or a vote; does not
   change the lesson. Retry identical content with the same request_id.
+- `discover_topics`: discover existing topic names with optional case-insensitive
+  substring matching. Limit validation constrains result set size. Reuse names when
+  applicable; this is not a fixed taxonomy or semantic alias resolver.
+- `enrich_memory`: add justified topics and graph links to an existing lesson with
+  an audit trail. Preserves original text/source/status; no removal. Reuse request_id
+  only for the identical retry.
 - `resolve_memory`: Codex/frontier only; reconcile evidence by superseding an old claim
   with an active replacement and recording the rationale. History remains inspectable.
 

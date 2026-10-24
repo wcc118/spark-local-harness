@@ -34,7 +34,7 @@ def test_helper_remains_read_only(tmp_path):
     o=runtime(tmp_path);configure(tmp_path,'http://127.0.0.1:9602/mcp','reader','helper')
     assert 'memory_record_memory: deny' in (o/'agents/reviewer.md').read_text()
     q=json.loads((tmp_path/'.qwen/settings.json').read_text())
-    assert q['mcpServers']['memory']['includeTools']==['search_memory','get_memory']
+    assert q['mcpServers']['memory']['includeTools']==['search_memory','get_memory','discover_topics']
 
 
 def test_missing_or_unavailable_memory_is_optional(tmp_path,capsys):
@@ -77,6 +77,7 @@ def test_effective_opencode_permissions(tmp_path):
             cwd=tmp_path, env=env, capture_output=True, text=True, check=True, timeout=30)
         rules = json.loads(result.stdout)['permission']
         expected = {'memory_search_memory': 'allow', 'memory_get_memory': 'allow',
+                    'memory_discover_topics': 'allow', 'memory_enrich_memory': 'deny' if role == 'helper' else 'allow',
                     'memory_record_memory': 'deny' if role == 'helper' else 'allow',
                     'memory_correct_memory': 'deny' if role == 'helper' else 'allow',
                     'memory_record_memory_use': 'deny' if role == 'helper' else 'allow',
@@ -86,3 +87,32 @@ def test_effective_opencode_permissions(tmp_path):
             assert matching[-1] == action, (role, name, matching)
         assert (o/'agents/reviewer.md').read_text().count('memory_record_memory_use:') == 1
         assert (o/'agents/reviewer.md').read_text().count('memory_record_memory:') == 1
+
+
+def test_repeated_configuration_does_not_duplicate_permissions(tmp_path):
+    """Verify configure() idempotency: repeated calls don't duplicate permission entries."""
+    o = runtime(tmp_path)
+    # First configuration
+    configure(tmp_path, 'http://127.0.0.1:9602/mcp', 'token1', 'reviewer')
+    text1 = (o/'agents/reviewer.md').read_text()
+    # Second configuration with same role
+    configure(tmp_path, 'http://127.0.0.1:9602/mcp', 'token2', 'reviewer')
+    text2 = (o/'agents/reviewer.md').read_text()
+    # Third configuration with helper role
+    configure(tmp_path, 'http://127.0.0.1:9602/mcp', 'token3', 'helper')
+    text3 = (o/'agents/reviewer.md').read_text()
+    # Verify permission entries are not duplicated
+    reviewer_perms = [l for l in text2.split('\n') if 'memory_' in l and ':' in l]
+    helper_perms = [l for l in text3.split('\n') if 'memory_' in l and ':' in l]
+    # Each permission should appear exactly once (no duplicates)
+    assert len(reviewer_perms) == len(set(reviewer_perms)), "Duplicate reviewer permissions found"
+    assert len(helper_perms) == len(set(helper_perms)), "Duplicate helper permissions found"
+    # Verify helper has deny for write tools and reviewer has allow
+    helper_text = '\n'.join(helper_perms)
+    reviewer_text = '\n'.join(reviewer_perms)
+    assert 'memory_record_memory: deny' in helper_text
+    assert 'memory_record_memory: allow' in reviewer_text
+    assert 'memory_enrich_memory: deny' in helper_text
+    assert 'memory_enrich_memory: allow' in reviewer_text
+    # All tools should be present in both (same count)
+    assert len(helper_perms) == len(reviewer_perms) == 8

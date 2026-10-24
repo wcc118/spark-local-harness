@@ -18,6 +18,7 @@ import urllib.request
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import StrictInt
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 import uvicorn
@@ -35,8 +36,8 @@ class Principal:
 
 
 CURRENT = contextvars.ContextVar('memory_principal')
-READ_TOOLS = ['search_memory', 'get_memory']
-WRITE_TOOLS = ['record_memory', 'correct_memory', 'record_memory_use']
+READ_TOOLS = ['search_memory', 'get_memory', 'discover_topics']
+WRITE_TOOLS = ['record_memory', 'correct_memory', 'record_memory_use', 'enrich_memory']
 ALL_TOOLS = READ_TOOLS + WRITE_TOOLS + ['resolve_memory']
 ID = re.compile(r'^memory:[A-Za-z0-9_]+$')
 
@@ -134,6 +135,61 @@ class MemoryStore:
         if not isinstance(values, list) or len(values) > 20:
             raise MemoryError('topics must be a list with at most 20 entries')
         return list(dict.fromkeys(bounded(v, 'topic', 100) for v in values))
+
+    def discover_topics(self, query='', limit=30):
+        query = bounded(query, 'query', 100, False)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise MemoryError('limit must be between 1 and 100')
+        rows = self.db.query('''SELECT id, name FROM topic
+            WHERE $q = '' OR string::contains(string::lowercase(name), string::lowercase($q))
+            ORDER BY name ASC LIMIT $limit;''', {'q': query, 'limit': limit})[0]
+        return {'topics': rows, 'hint': 'Existing names are suggestions, not a fixed taxonomy. Inspect applicability; similar names need not mean the same thing.'}
+
+    def enrich(self, principal, memory_id, topics, explanation, source, request_id):
+        """Add topic metadata and audit its source without replacing a claim."""
+        if principal.role not in {'coder', 'reviewer', 'frontier'}:
+            raise MemoryError('This identity has read-only memory access')
+        memory_id = record_id(memory_id)
+        topics = self.topics(topics)
+        if not topics:
+            raise MemoryError('Supply at least one topic to add')
+        explanation = bounded(explanation, 'explanation', 4000)
+        source = bounded(source, 'source', 4000)
+        request_id = bounded(request_id, 'request_id', 200)
+        payload = dict(memory_id=memory_id, topics=topics, explanation=explanation, source=source)
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps([principal.__dict__, request_id, 'enrich'], sort_keys=True).encode()).hexdigest()[:32]
+        event_id = 'memory_event:' + key
+        with self.lock:
+            previous = self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0]
+            if previous:
+                if previous[0].get('fingerprint') != fingerprint:
+                    raise MemoryError('request_id already used for different enrichment')
+                return {'memory': self.get_record(memory_id), 'event': previous[0], 'replayed': True}
+            record = self.get_record(memory_id)
+            linked = {edge['out'] for edge in self.db.query(
+                'SELECT out FROM concerns WHERE in = type::record($id);', {'id': memory_id})[0]}
+            event = dict(action='enrich', topics=topics,
+                         added_topics=[topic for topic in topics if topic not in record.get('topics', [])],
+                         explanation=explanation, source=source, fingerprint=fingerprint,
+                         actor=principal.actor, role=principal.role, run_id=principal.run_id,
+                         repository=principal.repository, issue=principal.issue)
+            params = dict(id=memory_id, topics=topics, event=event, event_id=event_id)
+            statements = ['BEGIN TRANSACTION;',
+                          'UPDATE type::record($id) SET topics=array::union(topics, $topics);']
+            for i, topic in enumerate(topics):
+                topic_id = 'topic:' + hashlib.sha256(topic.encode()).hexdigest()[:24]
+                params[f'topic_id_{i}'] = topic_id
+                params[f'topic_{i}'] = topic
+                statements.append(f'UPSERT type::record($topic_id_{i}) SET name=$topic_{i};')
+                if topic_id not in linked:
+                    statements.append(f'RELATE (type::record($id))->concerns->(type::record($topic_id_{i}));')
+            statements += ['CREATE type::record($event_id) CONTENT $event;',
+                           'UPDATE type::record($event_id) SET target=type::record($id), created_at=time::now();',
+                           'COMMIT TRANSACTION;']
+            self.db.query('\n'.join(statements), params)
+            stored = self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0][0]
+            return {'memory': self.get_record(memory_id), 'event': stored, 'replayed': False}
 
     def inspect(self, memory_id):
         record = self.get_record(memory_id)
@@ -276,6 +332,16 @@ def build_server(store):
     def get_memory(memory_id: str) -> dict:
         """Inspect a memory, provenance, graph neighbors and recent events, including attributed use reports. Reports are not independent verification."""
         return store.inspect(memory_id)
+
+    @server.tool()
+    def discover_topics(query: str = '', limit: StrictInt = 30) -> dict:
+        """Discover existing topic names with optional case-insensitive substring matching. Reuse names when applicable; this is not a fixed taxonomy or semantic alias resolver."""
+        return store.discover_topics(query, limit)
+
+    @server.tool()
+    def enrich_memory(memory_id: str, topics: list[str], explanation: str, source: str, request_id: str) -> dict:
+        """Add justified topics and graph links to an existing lesson with an audit trail. Preserves original text/source/status; no removal. Reuse request_id only for the identical retry."""
+        return store.enrich(CURRENT.get(), memory_id, topics, explanation, source, request_id)
 
     @server.tool()
     def record_memory(text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', kind: str = 'finding', conditions: str = '') -> dict:

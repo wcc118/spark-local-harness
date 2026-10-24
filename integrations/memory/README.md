@@ -65,7 +65,7 @@ are not. See `MEMORY.md` for shared usage conventions.
 
 - `~/.codex/config.toml`: narrow memory tools with the Codex/frontier identity;
   `client_headers.py` supplies the private bearer credential. Codex can record,
-  propose corrections and reconcile. No SQL/delete tools are registered.
+  propose corrections, reconcile and enrich. Discover_topics is also available.
 - Interactive OpenCode uses a contributor identity. Headless workers do not inherit
   interactive MCP servers: issue #214 explicitly provisions per-run credentials into
   Qwen Code and OpenCode configurations, permitting coder/reviewer contributions.
