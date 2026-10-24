@@ -18,6 +18,7 @@ import urllib.request
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import StrictInt
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 import uvicorn
@@ -333,7 +334,7 @@ def build_server(store):
         return store.inspect(memory_id)
 
     @server.tool()
-    def discover_topics(query: str = '', limit: int = 30) -> dict:
+    def discover_topics(query: str = '', limit: StrictInt = 30) -> dict:
         """Discover existing topic names with optional case-insensitive substring matching. Reuse names when applicable; this is not a fixed taxonomy or semantic alias resolver."""
         return store.discover_topics(query, limit)
 
