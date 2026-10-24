@@ -20,7 +20,7 @@ The hook is installed automatically for native Qwen coder sessions when:
 ```bash
 CODEX_LOCAL_DELIVERY_FEEDBACK=1 \
 CODEX_LOCAL_CODER_POSTFLIGHT=1 \
-CODEX_LOCAL_WORKER_V4 ...
+codex-local-coder REPOSITORY_PATH --task-file TASK_FILE
 ```
 
 Default: `CODEX_LOCAL_DELIVERY_FEEDBACK=1` (enabled)
@@ -29,25 +29,9 @@ Disable by setting `CODEX_LOCAL_DELIVERY_FEEDBACK=0`.
 
 ## How It Works
 
-1. **Installation** (`delivery_feedback.py install`): Copies the checker script to the worker runtime home and appends to `.qwen/settings.json`:
-   ```json
-   {
-     "hooks": {
-       "Stop": [
-         {
-           "hooks": [
-             {
-               "type": "command",
-               "command": "python3 /path/to/runtime-home/delivery-feedback.py check --checkout /path/to/repo --base <base-sha>"
-             }
-           ]
-         }
-       ]
-     }
-   }
-   ```
+1. **Installation** (via `install()`): Copies `delivery-feedback.py` to the worker runtime home and appends to `.qwen/settings.json` for the native worker's Stop event.
 
-2. **Execution** (`delivery_feedback.py check`): Reads JSON payload from stdin containing:
+2. **Execution** (via `check()`): Reads JSON payload from stdin containing:
    ```json
    {
      "hook_event_name": "Stop",
@@ -145,26 +129,11 @@ echo '{"hook_event_name": "Stop", "last_assistant_message": ""}' | \
 
 ## Integration Points
 
-The hook is integrated into `codex-local-worker-v4`:
+The hook is integrated into `codex-local-coder` worker runtime via the worker framework's Stop hook installation mechanism. The worker's built-in `finalize_coder` postflight remains the final authority for delivery decisions.
 
-```bash
-# Local feedback is not publication authority. The final host check is unchanged.
-case "${CODEX_LOCAL_DELIVERY_FEEDBACK:-1}" in
-  0) ;;
-  1)
-    if [[ $worker_role == coder && $worker_runtime == qwen-code && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
-      if feedback_base=$(git -C "$worker_repo_path" merge-base origin/main HEAD) && \
-        env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.delivery_feedback install \
-          --runtime-home "$worker_runtime_home" --checkout "$worker_repo_path" --base "$feedback_base"; then
-        worker_task=$'LOCAL DELIVERY FEEDBACK: A native Stop hook reports uncommitted changes and committed-diff whitespace errors before you finish. Use its evidence to repair your own work. If a genuine blocker remains, begin your final response with ESCALATE: and explain it. This feedback never authorizes publication; final host postflight remains authoritative.\n\n'"$worker_task"
-      else
-        echo "WARN: local delivery feedback setup failed; final host postflight remains authoritative" >&2
-      fi
-    fi
-    ;;
-  *) echo "ERROR: CODEX_LOCAL_DELIVERY_FEEDBACK must be 0 or 1" >&2; exit 64 ;;
-esac
-```
+**Escalate handling:** If the coder reports `ESCALATE:`, delivery feedback returns `systemMessage` to allow escalation handling, but the final host `finalize_coder` still performs its own Git checks and may reject dirty/whitespace state.
+
+**Runtime cap vs task deadline:** This delivery feedback mechanism is independent of task deadlines. It provides advisory local feedback before the coder exits, not a new whole-task timer.
 
 ## Testing
 
@@ -177,7 +146,7 @@ Tests cover:
 - Clean/dirty/uncommitted checkout detection
 - Trailing whitespace, space before tab, new blank line, conflict marker detection
 - Generated artifact exclusions (`__pycache__`, `.pytest_cache`, `.pyc`, `.coverage`)
-- Rename/copy path handling
+- Staged rename and dirty unusual filename with actual statuses
 - Unusual file paths (spaces, special characters)
 - Malformed inputs (invalid JSON, non-dict)
 - Invalid/missing base SHA
@@ -186,7 +155,7 @@ Tests cover:
 - Read-only checking preserves Git/worktree state
 - Source line contents do not leak (only locations)
 - Hook installation preserves existing settings and shell-quotes paths
-- Standalone checker actually runs
+- Standalone checker actually runs with actual worker setup wiring
 
 ## Rollback
 
@@ -209,6 +178,6 @@ The worker's built-in postflight (`finalize_coder`) remains active and will stil
 ## See Also
 
 - `src/codex_local_harness/coder.py` - Final host postflight with same Git checks
-- `bin/codex-local-worker-v4` - Worker entry point with hook installation
+- `bin/codex-local-coder` - Worker entry point with runtime initialization
 - `docs/worker-completion.md` - Stop hook and completion workflow
 - `tests/test_delivery_feedback.py` - Comprehensive test coverage
