@@ -238,6 +238,8 @@ install -d -m 700 "$worker_runtime_home/.config/opencode/agents" "$worker_runtim
 # Automatic OpenCode compaction is the installed auto-only baseline. Manual
 # compaction is a separate controller capability and remains disabled.
 jq --arg vllm_url "${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" --arg deepseek_url "${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}/v1" '.mcp = ((.mcp // {}) | with_entries(.value.enabled = false))
+    | .mcp |= del(.memory)
+    | .instructions = ((.instructions // []) | map(select(endswith("/projects/memory/MEMORY.md") | not)))
     | .permission.external_directory = "deny"
     | .agent.coder.permission = ((.agent.coder.permission // {}) + {
         "github_*": "deny", "gitea_*": "deny", "external_directory": "deny"
@@ -441,6 +443,21 @@ if [[ $worker_role == reviewer ]]; then
 fi
 if [[ $worker_role == coder && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   worker_task=$'HARNESS DELIVERY BOUNDARY: Work only in the local checkout. Do not push, use gh, create a PR, comment, or change labels. Commit the verified implementation on a clean local issue branch; the deterministic harness owns all remote publication.\n\n'"$worker_task"
+fi
+
+# Optional role-scoped memory. The issuer credential stays outside the sandbox;
+# only a run-specific contributor/reader token reaches the worker.
+memory_source=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../src" && pwd)
+if ! env PYTHONPATH="$memory_source" python3 -m codex_local_harness.memory \
+  --config "${CODEX_LOCAL_MEMORY_CONFIG:-${HOME}/.config/codex-local/memory.json}" \
+  --runtime-home "$worker_runtime_home" --role "$worker_role" \
+  --run-id "$worker_run_id" --repository "$worker_repository" --issue "$worker_issue"; then
+  echo "WARN: optional memory setup failed; continuing without memory guidance" >&2
+fi
+if [[ -f "$worker_runtime_home/memory-guidance.txt" ]]; then
+  worker_task="$(cat "$worker_runtime_home/memory-guidance.txt")"$'\n\n'"$worker_task"
+  worker_task_file="$worker_runtime_home/memory-task.txt"
+  printf '%s\n' "$worker_task" >"$worker_task_file"
 fi
 
 echo "Starting local worker: role=$worker_role tier=$worker_tier runtime=$worker_runtime mode=$worker_mode model=$worker_model run_id=$worker_run_id" >&2

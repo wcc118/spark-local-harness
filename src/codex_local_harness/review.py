@@ -197,8 +197,8 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         "Continue while useful investigation remains; report an explicit blocker if unable to progress. "
         if envelope.investigative else
         "Inspect the harness-observed exact-head diff and deterministic git-diff-check result in this "
-        "packet. The evidence boundary is intentionally tool-free: do not invoke tools or seek more "
-        "files. If the bounded patch is truncated or insufficient, return ESCALATE. Serialize the "
+        "packet. The repository evidence boundary is packet-only: do not inspect more repository "
+        "files. Configured shared-memory tools may be used according to the supplied memory guidance; historical lessons do not replace current patch evidence. If the bounded patch is truncated or insufficient, return ESCALATE. Serialize the "
         "complete result immediately. "
     )
     prompt = (
@@ -224,7 +224,7 @@ def prepare_prompt(envelope: Envelope, task: str, packet: ReviewerEvidencePacket
         "Put explanations in a separate outcome field, never inside provenance. "
         "Every reviewer-observed test requires an integer exit_code from 0 through 255; "
         "never invent an exit code or describe a task-reported test as executed by you. "
-        "For this tool-free review, use harness-observed for supplied deterministic evidence "
+        "Use harness-observed for supplied deterministic evidence "
         "and task-reported for claims. A test you cannot run is not reviewer-observed. "
         "Example: {\"command\":\"pytest\",\"provenance\":\"task-reported\","
         "\"outcome\":\"Reported passing; not independently executed\"}. "
@@ -385,6 +385,13 @@ def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
             continue
         if tool in {"github", "gitea"} or tool.startswith(("github_", "gitea_")):
             violations.append(f"line {line_number}: prohibited GitHub/Gitea tool {tool}")
+        # These authenticated memory tools write evidence records, never files or
+        # repository state. Source references can legitimately name other projects.
+        from .memory import WORKER_TOOLS
+        if tool in {"memory_" + name for name in WORKER_TOOLS}:
+            continue
+        if tool.startswith("memory_"):
+            violations.append(f"line {line_number}: prohibited memory tool {tool}")
         command = str(inputs.get("command", inputs.get("cmd", "")))
         if command and forbidden_commands.search(command):
             violations.append(f"line {line_number}: prohibited command")
