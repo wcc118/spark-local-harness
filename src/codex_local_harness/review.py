@@ -411,20 +411,7 @@ def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
                 # Container /tmp is a distinct tmpfs. Host symlink resolution does
                 # not describe it. Normalize traversal lexically before allowance.
                 lexical = posixpath.normpath(raw_path)
-                # Allow container tmpfs paths lexically under /tmp
-                # These are isolated container paths, not host paths
                 if envelope.container_tmpfs and (lexical == '/tmp' or lexical.startswith('/tmp/')):
-                    # For /tmp paths with container_tmpfs, verify symlinks don't escape
-                    # to host paths outside allowed roots
-                    candidate = Path(raw_path).resolve(strict=False)
-                    # If resolution leaves /tmp or goes outside allowed roots, reject
-                    candidate_lexical = posixpath.normpath(str(candidate))
-                    if not (candidate_lexical == '/tmp' or candidate_lexical.startswith('/tmp/')):
-                        # Symlink resolved outside /tmp, reject
-                        violations.append(f"line {line_number}: path outside container tmpfs: {candidate}")
-                        continue
-                    # Path is lexically under /tmp after resolution, allow
-                    # (container tmpfs is isolated from host filesystem)
                     continue
                 candidate = Path(raw_path).resolve(strict=False)
                 harness_roots = [
