@@ -1,115 +1,35 @@
-# Native Todo_write Qualification
+# Native task-list qualification
 
-## Overview
+The worker image pins Qwen Code **0.22.0**. This probe imports its actual
+`TodoWriteTool` and Storage implementation; the Storage chunk hash is deliberately
+version-specific and unsupported versions or missing chunks fail with exit 1.
+It does not reimplement the tool.
 
-This directory contains a qualification probe for the native `todo_write` tool that's built into Qwen Code (v0.22.0+).
-
-## Purpose
-
-The probe exercises the **actual installed** `TodoWriteTool` implementation from:
-```
-/usr/local/lib/node_modules/@qwen-code/qwen-code/chunks/todoWrite-*.js
-```
-
-It does **not** implement or mock the tool. It imports and runs the real code with:
-
-- A separate temporary home directory (`QWEN_RUNTIME_DIR`)
-- File-backed storage for todo state
-- No configured hooks (probe sets `getHookSystem() → null`)
-- No Docker socket, network, or installation needed
-- Pure Node.js execution with native package
-
-## File-Backed Storage
-
-The `todo_write` tool stores task lists to disk in the session's runtime directory:
-
-```
-$QWEN_RUNTIME_DIR/todos/{sessionId}.json
-```
-
-Key characteristics:
-
-1. **Durable within session**: Data is persisted to the file system, not just in memory
-2. **Session-local scope**: Data exists only during the session lifetime (temp home is cleaned up)
-3. **No remote sync**: Nothing is pushed to GitHub or external storage
-4. **Validation-only**: The tool validates malformed input and rejects it
-
-This is appropriate for:
-- Long-running interactive sessions where the user wants progress tracking
-- Multi-step tasks within a single conversation
-- Session-local task lists that don't need GitHub issue synchronization
-
-### Durable GitHub Work State
-
-GitHub-based work state (issues, PRs, tasks) is managed through:
-
-1. **Remote repository**: Actual work tracked in git history
-2. **Issue/PR numbers**: External reference for collaboration
-3. **Commit history**: Immutable record of changes
-4. **Pull request workflow**: Formal review and merge process
-
-This is appropriate for:
-- Collaborative development across team members
-- Permanent records of design decisions
-- Audit trails for production changes
-- Integration with CI/CD and release workflows
-
-### When to Use Each
-
-| Use Case | Recommendation |
-|----------|---------------|
-| Session-local progress tracking | `todo_write` |
-| Multi-step task within one conversation | `todo_write` |
-| Team collaboration | GitHub issue/PR |
-| Permanent record | GitHub issue/PR |
-| Design decision tracking | GitHub ADR |
-| Production deployment | GitHub release |
-
-## Probe Execution
-
-### Basic Run
+Run inside the worker image, where the package is installed:
 
 ```bash
-python qualification/native-todo/probe.py
+python3 qualification/native-todo/probe.py
 ```
 
-### With Custom Output
+The probe creates a fresh temporary home, calls the native create/update and
+validation paths, checks the exact persisted IDs, contents and statuses, rejects
+malformed input, verifies unchanged valid state afterward, and lists the session.
+It supplies no hook system to this tool instance. This does not disable hooks in
+other Qwen sessions or qualify hook behavior.
 
-```bash
-python qualification/native-todo/probe.py --output results.json
-```
+Results go to stdout by default. `--output /path/results.json` writes a report
+explicitly. `--temp-home /existing/parent` creates a fresh child beneath that
+parent; only the child is cleaned up. The default leaves no checkout artifacts.
+Exit 0 means all checks passed; exit 1 reports failed checks or setup errors.
 
-### Keep Temp Directory (for debugging)
+Todo state is file-backed under the configured runtime directory. The probe
+removes its temporary state afterward; production retention depends on the
+harness runtime-home lifecycle. Task lists support planning within a worker
+session. GitHub issues, commits, PRs and reviews remain authoritative durable
+work state; enabling this tool adds no delegation or publication privileges.
 
-```bash
-python qualification/native-todo/probe.py --temp-home /tmp/my-test-home
-```
+The probe does not contact the network or need Docker, but it does **not** impose
+network or filesystem confinement itself. Those protections come from the outer
+worker container. Host Docker checks must be run by the orchestrator.
 
-## Validation Coverage
-
-The probe validates:
-
-1. **Create**: Valid todos are written to session file
-2. **Update**: Existing todo list can be modified
-3. **Readback**: Persisted state is correctly retrieved
-4. **Validation rejection**: Malformed todos are rejected
-5. **State preservation**: Failed validation doesn't corrupt prior state
-
-## Expected Exit Behavior
-
-- **Exit 0**: All tests passed, temp home cleaned up
-- **Exit 1**: One or more tests failed, temp home cleaned up
-- **Exit N**: Unexpected error (e.g., missing todoWrite chunk)
-
-## Limitations
-
-1. **No Docker access**: Probe runs in isolated environment without Docker socket access
-2. **No network**: Probe runs without network access (isolated Node.js execution)
-3. **No hooks**: Hook validation requires the orchestrator configuration; probe intentionally sets `getHookSystem() → null` to focus on core tool behavior
-
-## Related References
-
-- Issue: wcc118/codex-local-harness#223
-- Commit: ab7f23a (add todo_write to Qwen tools.core)
-- Chunk: `/usr/local/lib/node_modules/@qwen-code/qwen-code/chunks/todoWrite-*.js`
-- Storage: `chunk-A5F2YNO6.js` (runtime base dir management)
+Related: [issue #223](https://github.com/wcc118/codex-local-harness/issues/223).

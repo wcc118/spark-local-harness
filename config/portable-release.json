@@ -22,7 +22,7 @@
     "bin/codex-local-model": "6b2a47c933e893ded2ef84edd4b2e90587d3caa63646802c1557722e91842db7",
     "bin/codex-local-supervise": "2a4ed80ef002818af57b53bf6d71b57f2b9bc109ab3c6a346eb38720d3dbc62b",
     "bin/codex-local-worker-candidate": "e570d9e707b7120a308d060cfa474e78e861725b23ae0a229a08f05b08133721",
-    "bin/codex-local-worker-v4": "28d66e90afb2d615d3fdb112864d1f9245a88b1dd524fa5b9f0c889f7caeafa3",
+    "bin/codex-local-worker-v4": "c24c5499b46bc7d797a7d18403dc7aac32211db6ed410f3ad20e37b7a067462d",
     "bin/install-harness": "a0497315dc8388baa8836330dfe3efc197a79821bfe84138c3aa95e6430a8229",
     "config/deepseek-v4-compose.codex.yaml": "817eeb90e14245b027a42075fffef26a87322f33275290523ea76f64739df7b6",
     "config/deepseek-v4-reasoning.yaml": "c9e523c829f32444e2549d252384c6ee1eb3772c8b9796ef0fa7f249ea34bea9",

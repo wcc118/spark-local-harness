@@ -45,10 +45,31 @@ def find_storage_chunk() -> Path:
     This function verifies that specific chunk exists and returns it.
     """
     chunks_dir = Path("/usr/local/lib/node_modules/@qwen-code/qwen-code/chunks")
+    package = json.loads((chunks_dir.parent / "package.json").read_text())
+    if package.get("version") != "0.22.0":
+        raise RuntimeError("This probe requires the qualified Qwen Code 0.22.0 package")
     storage_chunk = chunks_dir / "chunk-A5F2YNO6.js"
     if not storage_chunk.exists():
         raise RuntimeError(f"Storage chunk not found: {storage_chunk}")
     return storage_chunk
+
+
+def persisted_todos_match(output: str, statuses: tuple[str, str]) -> bool:
+    """Require exact persisted task data, not presence of success text."""
+    lines = [line.removeprefix("READ_SUCCESS:").strip()
+             for line in output.splitlines() if line.startswith("READ_SUCCESS:")]
+    if len(lines) != 1:
+        return False
+    try:
+        value = json.loads(lines[0])
+    except json.JSONDecodeError:
+        return False
+    expected = [
+        {"id": "task-1", "content": "First task", "status": statuses[0]},
+        {"id": "task-2", "content": "Second task", "status": statuses[1]},
+    ]
+    return (isinstance(value, dict) and value.get("sessionId") == "probe-session"
+            and value.get("todos") == expected)
 
 
 def run_node_test(
@@ -353,7 +374,8 @@ def main() -> int:
         file_exists = "FILE_EXISTS: true" in stdout
         file_path_line = [l for l in stdout.split("\n") if l.startswith("FILE_PATH:")][0] if any(l.startswith("FILE_PATH:") for l in stdout.split("\n")) else ""
         read_success_line = [l for l in stdout.split("\n") if l.startswith("READ_SUCCESS:")][0] if any(l.startswith("READ_SUCCESS:") for l in stdout.split("\n")) else ""
-        test2_pass = exit_code == 0 and file_exists and "READ_SUCCESS:" in stdout
+        test2_pass = (exit_code == 0 and file_exists
+                      and persisted_todos_match(stdout, ("pending", "in_progress")))
         results["tests"].append({
             "name": "read_todos",
             "pass": test2_pass,
@@ -417,7 +439,8 @@ def main() -> int:
         read_success_line = [l for l in stdout.split("\n") if l.startswith("READ_SUCCESS:")][0] if any(l.startswith("READ_SUCCESS:") for l in stdout.split("\n")) else ""
         has_expected_ids = all(f'"id":"{id}"' in read_success_line for id in ["task-1", "task-2"])
         has_completed_status = '"status":"completed"' in read_success_line
-        test3b_pass = exit_code == 0 and file_exists and has_expected_ids and has_completed_status
+        test3b_pass = (exit_code == 0 and file_exists
+                       and persisted_todos_match(stdout, ("completed", "completed")))
         results["tests"].append({
             "name": "verify_updated_content",
             "pass": test3b_pass,
@@ -563,7 +586,9 @@ def main() -> int:
             "VALIDATION_ERROR" in malformed_stdout and
             after_exit == 0 and
             after_file_exists and
-            prior_parsed == after_parsed
+            prior_parsed == after_parsed and
+            persisted_todos_match(prior_stdout, ("completed", "completed")) and
+            persisted_todos_match(after_stdout, ("completed", "completed"))
         )
         results["tests"].append({
             "name": "malformed_preserves_prior_state",
