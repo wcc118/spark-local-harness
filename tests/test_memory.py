@@ -53,3 +53,34 @@ def test_remote_issuer_url_rejected(tmp_path):
     with patch('urllib.request.urlopen') as call:
         assert not prepare(config,tmp_path,'coder','run','repo','1')
         call.assert_not_called()
+
+
+def test_effective_opencode_permissions(tmp_path):
+    """Resolve real OpenCode policy: later wildcard denies must not hide memory."""
+    import fnmatch
+    import os
+    import shutil
+    import subprocess
+    import pytest
+
+    executable = shutil.which('opencode')
+    if executable is None:
+        pytest.skip('OpenCode CLI is required to resolve runtime permissions')
+    o = runtime(tmp_path)
+    (o/'opencode.json').write_text(json.dumps({'agent': {'reviewer': {'permission': {'*': 'deny'}}}}))
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'XDG_'))}
+    env.update(HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path/'.config'),
+               OPENCODE_CONFIG=str(o/'opencode.json'))
+    for role in ['reviewer', 'helper', 'reviewer']:
+        configure(tmp_path, 'http://127.0.0.1:9602/mcp', 'test-token', role)
+        result = subprocess.run([executable, 'debug', 'agent', 'reviewer'],
+            cwd=tmp_path, env=env, capture_output=True, text=True, check=True, timeout=30)
+        rules = json.loads(result.stdout)['permission']
+        expected = {'memory_search_memory': 'allow', 'memory_get_memory': 'allow',
+                    'memory_record_memory': 'deny' if role == 'helper' else 'allow',
+                    'memory_correct_memory': 'deny' if role == 'helper' else 'allow',
+                    'memory_resolve_memory': 'deny', 'edit': 'deny'}
+        for name, action in expected.items():
+            matching = [r['action'] for r in rules if fnmatch.fnmatchcase(name, r['permission'])]
+            assert matching[-1] == action, (role, name, matching)
+        assert (o/'agents/reviewer.md').read_text().count('memory_record_memory:') == 1

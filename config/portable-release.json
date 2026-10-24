@@ -93,7 +93,7 @@
     "src/codex_local_harness/lane.py": "4aae808f3f04a8141a8dcfd168bcee28a916ebd70a945c8a5cd516fcb8a2ba4a",
     "src/codex_local_harness/lane_cli.py": "1f0e1264bfc59c80dab1dc7d7eb57716628bfe53deaff173bbb5353d4216c69a",
     "src/codex_local_harness/live_execution.py": "f967f3a99dc3bf266cf6cabd0ac7631a4c1fea6a39bf891071e8953ede1e34ca",
-    "src/codex_local_harness/memory.py": "787de9c3c357a34fd8b382cc65c9c009380a56994ff0335d1e414c32396b6278",
+    "src/codex_local_harness/memory.py": "7977e51e017fb5bc44c41696138f692ac88ac69187543c72a32451ffee65bef5",
     "src/codex_local_harness/merge_gate.py": "e9bd9809f34e47bfa94295fb93a6f7bd51b39cd5794b7626a19df4275d3b29a8",
     "src/codex_local_harness/merge_publish.py": "c6841b3de4bb0ccaee82447e8c51183afc64da31d9c9f2d82efe24b8fedd33df",
     "src/codex_local_harness/monitor.py": "26538de084ed75f889e18a5cecc8ad1a0245360d52a5786a346ac6180ad77aec",

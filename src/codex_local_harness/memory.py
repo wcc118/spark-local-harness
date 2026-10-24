@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import urllib.request
@@ -69,7 +70,12 @@ def configure(runtime_home: Path, endpoint: str, token: str, role: str) -> None:
         if 'permission:\n' in text:
             rules = ''.join(f'  memory_{name}: {"allow" if name in allowed else "deny"}\n' for name in WORKER_TOOLS)
             rules += '  memory_resolve_memory: deny\n'
-            text = text.replace('permission:\n', 'permission:\n' + rules, 1)
+            # OpenCode uses the last matching permission. Append specific rules
+            # after the existing mapping, so a default '*' deny cannot mask them.
+            header, separator, body = text[4:].partition('\n---')
+            header = re.sub(r'(?m)^  memory_(?:search_memory|get_memory|record_memory|correct_memory|resolve_memory):[^\n]*\n?', '', header)
+            header = re.sub(r'(?m)^(permission:\n(?:[ \t].*\n|\n)*)', lambda match: match[0] + rules, header + '\n', count=1)
+            text = '---\n' + header.rstrip('\n') + separator + body
             temp = path.with_suffix('.memory-tmp'); temp.write_text(text); temp.chmod(0o600); temp.replace(path)
     qwen.setdefault('mcpServers', {})['memory'] = {
         'httpUrl': endpoint, 'headers': {'Authorization': 'Bearer ' + token},
