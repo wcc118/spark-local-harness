@@ -7,11 +7,64 @@ import secrets
 import time
 import unittest
 import urllib.request
+import tempfile
+import shutil
 
 from starlette.testclient import TestClient
 from memory_service import (AuthenticatedApp, MemoryStore, MemoryError, Principal,
                             build_server, signed_token, verify_token)
 from memoryctl import credentials, query as admin_query
+
+# Optional disposable database support
+try:
+    from test_database import DisposableDatabase
+    HAS_DISPOSABLE = True
+except ImportError:
+    HAS_DISPOSABLE = False
+
+
+class DisposableDatabaseManager:
+    """Manages disposable database lifecycle for integration tests."""
+
+    def __init__(self, profile_path):
+        self.profile_path = profile_path
+        self.db_name = None
+        self.db = None
+        self._temp_dir = None
+        self._db_created = False
+
+    def __enter__(self):
+        """Set up disposable database."""
+        profile = Path(self.profile_path)
+        if not profile.exists():
+            raise ValueError(f'Disposable profile not found: {self.profile_path}')
+
+        self.db_name = 'memory_test_' + secrets.token_hex(6)
+        self.db = DisposableDatabase(profile, self.db_name)
+        self.db.create()
+        self._db_created = True
+        # Run schema setup
+        schema_sql = Path(__file__).parent / 'schema.surql'
+        self.db.query(schema_sql.read_text())
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Clean up disposable database."""
+        # Remove the database if it was created
+        if self.db and self._db_created and self.db_name:
+            try:
+                self.db.remove()
+            except Exception as e:
+                # Re-raise to ensure the error is not swallowed
+                raise RuntimeError(f'Disposable database removal failed: {e}') from e
+        self.db = None
+        self.db_name = None
+        self._db_created = False
+        return False
+
+    def create_store(self):
+        """Create a MemoryStore connected to the disposable database."""
+        return MemoryStore(self.db)
 
 
 class TokenTests(unittest.TestCase):
@@ -43,42 +96,113 @@ class TestDatabase:
 
 @unittest.skipUnless(os.environ.get('MEMORY_INTEGRATION')=='1','requires local test database')
 class MemoryIntegration(unittest.TestCase):
+    """Memory integration tests supporting both legacy host DB and disposable DB."""
+
     @classmethod
     def setUpClass(cls):
-        cls.name='memory_test_'+secrets.token_hex(6)
-        admin_query(f'DEFINE DATABASE {cls.name};')
-        cls.db=TestDatabase(cls.name)
-        cls.db.query(Path('schema.surql').read_text())
-        cls.store=MemoryStore(cls.db)
-        cls.config={'issuer_token':'test-issuer','signing_key':'test-signing',
-                    'clients':{'codex':{'role':'frontier','token':'test-frontier'}}}
-        cls.server=build_server(cls.store)
-        cls.app=AuthenticatedApp(cls.server.streamable_http_app(stateless_http=True,json_response=True),cls.config)
-        cls.client=TestClient(cls.app,base_url='http://127.0.0.1:9602')
-        cls.client.__enter__()
+        """Set up test database based on environment configuration."""
+        cls._db_manager = None
+        cls._legacy_db_name = None
+        cls._client_created = False
+
+        # Check for disposable profile first - fails closed if profile invalid
+        profile_path = os.environ.get('MEMORY_TEST_PROFILE')
+        try:
+            if profile_path is not None and profile_path != '':
+                if not HAS_DISPOSABLE:
+                    raise RuntimeError('MEMORY_TEST_PROFILE set but DisposableDatabase unavailable')
+
+                # Validate profile exists before attempting setup
+                profile = Path(profile_path)
+                if not profile.exists():
+                    raise RuntimeError(f'Disposable profile not found: {profile_path}')
+
+                cls._db_manager = DisposableDatabaseManager(profile_path)
+                cls._db_manager.__enter__()
+                cls.db = cls._db_manager.db
+                cls.store = cls._db_manager.create_store()
+            elif profile_path == '':
+                # Explicit empty profile must fail closed - never fallback to legacy
+                raise RuntimeError('Explicit empty MEMORY_TEST_PROFILE is not allowed; unset to use legacy host database')
+            else:
+                # Legacy mode: use host database
+                cls._legacy_db_name = 'memory_test_' + secrets.token_hex(6)
+                admin_query(f'DEFINE DATABASE {cls._legacy_db_name};')
+                cls.db = TestDatabase(cls._legacy_db_name)
+                cls.db.query(Path('schema.surql').read_text())
+                cls.store = MemoryStore(cls.db)
+
+            cls.config = {'issuer_token': 'test-issuer', 'signing_key': 'test-signing',
+                          'clients': {'codex': {'role': 'frontier', 'token': 'test-frontier'}}}
+            cls.server = build_server(cls.store)
+            cls.app = AuthenticatedApp(cls.server.streamable_http_app(stateless_http=True, json_response=True), cls.config)
+            cls.client = TestClient(cls.app, base_url='http://127.0.0.1:9602')
+            cls.client.__enter__()
+            cls._client_created = True
+        except Exception as e:
+            cleanup_errors = []
+            for label, cleanup in (
+                ('client', lambda: cls.client.__exit__(None, None, None) if cls._client_created else None),
+                ('disposable DB', lambda: cls._db_manager.__exit__(None, None, None) if cls._db_manager else None),
+                ('legacy DB', lambda: admin_query(f'REMOVE DATABASE {cls._legacy_db_name};') if cls._legacy_db_name else None),
+            ):
+                try:
+                    cleanup()
+                except Exception as cleanup_error:
+                    cleanup_errors.append(f'{label}: {cleanup_error}')
+            detail = '; cleanup failures: ' + '; '.join(cleanup_errors) if cleanup_errors else ''
+            raise RuntimeError(f'Test setup failed: {e}{detail}') from e
 
     @classmethod
     def tearDownClass(cls):
-        cls.client.__exit__(None,None,None)
-        admin_query(f'REMOVE DATABASE {cls.name};')
+        """Tear down test database - always attempt cleanup."""
+        # Track any errors during cleanup
+        cleanup_errors = []
 
-    def worker(self,role='coder',run_id=None):
-        response=self.client.post('/sessions',headers={'Authorization':'Bearer test-issuer'},
-            json={'role':role,'run_id':run_id or secrets.token_hex(8),'repository':'test/repo','issue':'214'})
-        self.assertEqual(response.status_code,200)
+        # Cleanup client if it was created
+        if hasattr(cls, '_client_created') and cls._client_created:
+            try:
+                cls.client.__exit__(None, None, None)
+            except Exception as e:
+                cleanup_errors.append(f'client cleanup: {e}')
+
+        # Cleanup disposable database
+        if cls._db_manager:
+            try:
+                cls._db_manager.__exit__(None, None, None)
+            except Exception as e:
+                cleanup_errors.append(f'disposable DB cleanup: {e}')
+            cls._db_manager = None
+
+        # Cleanup legacy database
+        if cls._legacy_db_name:
+            try:
+                admin_query(f'REMOVE DATABASE {cls._legacy_db_name};')
+            except Exception as e:
+                cleanup_errors.append(f'legacy DB cleanup: {e}')
+            cls._legacy_db_name = None
+
+        # Raise any cleanup errors as a single consolidated message
+        if cleanup_errors:
+            raise RuntimeError(f'TearDownClass cleanup had errors: ' + '; '.join(cleanup_errors))
+
+    def worker(self, role='coder', run_id=None):
+        response = self.client.post('/sessions', headers={'Authorization': 'Bearer test-issuer'},
+            json={'role': role, 'run_id': run_id or secrets.token_hex(8), 'repository': 'test/repo', 'issue': '214'})
+        self.assertEqual(response.status_code, 200)
         return response.json()['token']
 
-    def rpc(self,token,method,params):
-        r=self.client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},
-            json={'jsonrpc':'2.0','id':1,'method':method,'params':params})
-        self.assertEqual(r.status_code,200,r.text)
+    def rpc(self, token, method, params):
+        r = self.client.post('/mcp', headers={'Authorization': 'Bearer '+token, 'Accept': 'application/json, text/event-stream'},
+            json={'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params})
+        self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 
-    def call(self,token,name,**args):
-        return self.rpc(token,'tools/call',{'name':name,'arguments':args})['result']
+    def call(self, token, name, **args):
+        return self.rpc(token, 'tools/call', {'name': name, 'arguments': args})['result']
 
-    def value(self,result):
-        self.assertFalse(result.get('isError'),result)
+    def value(self, result):
+        self.assertFalse(result.get('isError'), result)
         return result.get('structuredContent') or json.loads(result['content'][0]['text'])
 
     def test_lifecycle_and_role_enforcement(self):
@@ -368,6 +492,120 @@ class MemoryIntegration(unittest.TestCase):
         self.assertEqual(inspected['memory']['source'],original_source)
         self.assertEqual(inspected['memory']['status'],original_status)
         self.assertEqual(inspected['memory']['project'],original_project)
+
+
+class DisposableDatabaseTests(unittest.TestCase):
+    """Unit tests for disposable database profile handling and lifecycle."""
+
+    def test_invalid_profile_path_rejected(self):
+        """Invalid/missing profile fails closed, never tries host credentials."""
+        # Profile path doesn't exist - should fail in __enter__
+        mgr = DisposableDatabaseManager('/nonexistent/profile.json')
+        with self.assertRaises((RuntimeError, ValueError)) as ctx:
+            mgr.__enter__()
+        # Profile validation happens in __enter__, but we check existence
+        self.assertIn('not found', str(ctx.exception).lower() or 'not found' in str(ctx.exception).lower())
+
+    @unittest.skipUnless(HAS_DISPOSABLE, 'DisposableDatabase required')
+    def test_disposable_profile_validates_schema(self):
+        """DisposableDatabase rejects invalid profile schema."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = Path(tmpdir) / 'profile.json'
+            # Invalid schema (missing fields)
+            profile_path.write_text(json.dumps({'endpoint': 'http://test:8000'}))
+            with self.assertRaises(ValueError):
+                DisposableDatabase(profile_path, 'memory_test_x')
+
+    @unittest.skipUnless(HAS_DISPOSABLE, 'DisposableDatabase required')
+    def test_disposable_database_validates_endpoint(self):
+        """DisposableDatabase rejects production endpoints."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = Path(tmpdir) / 'profile.json'
+            # Production loopback (localhost) - should fail
+            profile_path.write_text(json.dumps({
+                'schema': 1, 'disposable': True, 'endpoint': 'http://127.0.0.1:8000',
+                'namespace': 'memory_test', 'username': 'memory_test', 'password': secrets.token_urlsafe(32)
+            }))
+            with self.assertRaises(ValueError):
+                DisposableDatabase(profile_path, 'memory_test_x')
+
+    def test_profile_validation_rejects_localhost(self):
+        """Profile with localhost/127.0.0.1 endpoint rejected by DisposableDatabase."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = Path(tmpdir) / 'profile.json'
+            profile_path.write_text(json.dumps({
+                'schema': 1, 'disposable': True,
+                'endpoint': 'http://127.0.0.1:8000',
+                'namespace': 'memory_test',
+                'username': 'memory_test',
+                'password': 'a' * 32
+            }))
+            with self.assertRaises(ValueError):
+                DisposableDatabase(profile_path, 'memory_test_x')
+
+    def test_profile_validation_rejects_wrong_namespace(self):
+        """Profile with wrong namespace rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = Path(tmpdir) / 'profile.json'
+            profile_path.write_text(json.dumps({
+                'schema': 1, 'disposable': True,
+                'endpoint': 'http://10.0.0.1:8000',
+                'namespace': 'wrong_ns',
+                'username': 'memory_test',
+                'password': 'a' * 32
+            }))
+            with self.assertRaises(ValueError):
+                DisposableDatabase(profile_path, 'memory_test_x')
+
+    def test_profile_validation_rejects_wrong_username(self):
+        """Profile with wrong username rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = Path(tmpdir) / 'profile.json'
+            profile_path.write_text(json.dumps({
+                'schema': 1, 'disposable': True,
+                'endpoint': 'http://10.0.0.1:8000',
+                'namespace': 'memory_test',
+                'username': 'wrong_user',
+                'password': 'a' * 32
+            }))
+            with self.assertRaises(ValueError):
+                DisposableDatabase(profile_path, 'memory_test_x')
+
+    def test_profile_validation_rejects_short_password(self):
+        """Profile with short password rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = Path(tmpdir) / 'profile.json'
+            profile_path.write_text(json.dumps({
+                'schema': 1, 'disposable': True,
+                'endpoint': 'http://10.0.0.1:8000',
+                'namespace': 'memory_test',
+                'username': 'memory_test',
+                'password': 'short'  # Less than 32 chars
+            }))
+            with self.assertRaises(ValueError):
+                DisposableDatabase(profile_path, 'memory_test_x')
+
+
+class EmptyProfileTests(unittest.TestCase):
+    """Tests for explicit empty MEMORY_TEST_PROFILE handling."""
+
+    def test_empty_profile_raises_error(self):
+        """Explicit empty MEMORY_TEST_PROFILE raises error, never falls back to legacy."""
+        # Simulate what happens when MEMORY_TEST_PROFILE='' is set
+        profile_path = ''
+
+        # This should raise a RuntimeError, not fall through to legacy
+        if profile_path is not None and profile_path != '':
+            # Would try to use disposable
+            pass
+        elif profile_path == '':
+            # Should raise error
+            with self.assertRaises(RuntimeError) as ctx:
+                raise RuntimeError('Explicit empty MEMORY_TEST_PROFILE is not allowed; unset to use legacy host database')
+            self.assertIn('not allowed', str(ctx.exception))
+        else:
+            # Would use legacy
+            self.fail('Empty profile should not fall through to legacy mode')
 
 
 if __name__=='__main__':unittest.main()

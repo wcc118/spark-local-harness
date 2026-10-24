@@ -51,6 +51,62 @@ inference continues. Inherited interactive memory configs/host instruction paths
 removed before configuration so missing host files do not break isolated workers.
 Tool failures during a run are evidence to report, not a reason to abandon the task.
 
+## Disposable test database
+
+The operator can opt a coder or reviewer into a separate in-memory SurrealDB
+instance. Build the optional image once from the harness repository:
+
+```sh
+docker build -t codex-local-worker-memory:0.1.0 docker/memory-test-worker
+CODEX_LOCAL_MEMORY_TEST_DB=1 CODEX_LOCAL_CONTAINER_IMAGE=codex-local-worker-memory:0.1.0 \
+  codex-local-coder REPOSITORY_PATH --task-file TASK_FILE
+```
+
+Use the same flags with `codex-local-reviewer`. The normal worker image and
+production database are unchanged. Explicit capability setup failure stops the
+run before inference. The pinned SurrealDB image must already be available locally.
+
+The harness exports `MEMORY_TEST_PROFILE` and `MEMORY_INTEGRATION=1`. From the
+repository's `integrations/memory` directory, the worker can run:
+
+```sh
+python3 -m unittest test_memory_service test_memory_test_db
+```
+
+Do not replace the supplied profile path. An explicitly empty, nonexistent or
+invalid profile fails closed; it never falls back to host credentials. With the
+profile variable entirely absent, the existing operator-only host fixture remains
+available. Schema setup and client startup failures trigger fixture cleanup;
+cleanup failures are observable alongside the original error.
+
+Each worker gets a separate container and internal Docker network, fixed namespace
+`memory_test`, random per-test database names and synthetic root credentials valid
+only in that disposable instance. There are no published host ports or host data
+mounts. The DB uses tmpfs for image-declared data/log directories, a read-only root,
+dropped capabilities, an unprivileged UID, 512 MiB memory, one CPU and 128 PIDs.
+Outbound DB network access is denied. Profile validation rejects production
+loopback addresses and unexpected identity fields; actual isolation comes from
+the host-provisioned container and distinct credentials, not an IP-name heuristic.
+
+The profile is written mode0600 after readiness. Synthetic credentials are also
+present in the disposable container's environment; do not print either. Workers
+receive no Docker socket, production DB credentials or memory issuer credential.
+They may experiment freely inside their test instance, including schema changes.
+
+The host removes the container/network on success, failure and handled cancellation.
+SIGKILL, host/daemon failure may leave resources; inspect the exact run, then use
+the installed runtime module with that run ID:
+
+```sh
+PYTHONPATH=/path/to/installed/runtime/src python3 -m codex_local_harness.memory_test_db \
+  cleanup --run-id RUN_ID
+```
+
+Cleanup verifies ownership labels and removes only that run's resources. Do not
+use blanket container/volume pruning. Fixture cleanup removes individual test
+DBs; the host owns the per-worker container lifecycle. Profiles are not reusable
+once that worker capability ends.
+
 ## Learning and review
 
 End-of-run summaries can mention useful retrieved, created or challenged memory IDs.

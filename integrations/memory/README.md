@@ -162,8 +162,23 @@ or reading a lesson is not an application outcome. Contributors choose when a
 report is useful; no per-task report is required. `get_memory` includes the most
 recent 50 audit events, including use reports. Older events remain in the database.
 
-Reviewable service source is also included in the harness PR under
-`integrations/memory/`. After a service change, sync that reviewed source and restart
-this unit. Disable future worker integration with `enabled: false` in the host memory
-config; restore the prior harness using its installer receipt. Private snapshots of
-interactive client configs are in `.local/config-backups/`. Data is preserved.
+## Disposable test database
+
+For confined coder/reviewer runs, opt into the harness's disposable capability
+with `CODEX_LOCAL_MEMORY_TEST_DB=1` and the optional
+`CODEX_LOCAL_CONTAINER_IMAGE=codex-local-worker-memory:0.1.0`. Build that image
+from the harness's `docker/memory-test-worker` directory first. The harness
+supplies `MEMORY_TEST_PROFILE` and `MEMORY_INTEGRATION=1` automatically.
+
+From this directory in the worker, run:
+
+```sh
+python3 -m unittest test_memory_service test_memory_test_db
+```
+
+The real service tests use a separate in-memory database instance with synthetic
+credentials, no published host port, no production data and no Docker socket in
+the worker. Explicitly invalid/empty/missing profiles fail closed. Test fixture
+cleanup handles setup/teardown failures; the host owns container/network cleanup.
+Without the profile variable, the existing operator-only host fixture is retained.
+See the harness's `docs/memory.md` for build/launch commands, limits and recovery.

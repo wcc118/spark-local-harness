@@ -30,6 +30,7 @@ health_dir=${CODEX_LOCAL_HEALTH_DIR:-${HOME}/.local/share/codex-local-harness/he
 diagnostic_started=0
 diagnostic_finalized=0
 worker_started_epoch=
+worker_memory_test_db=0
 cleanup() {
   cleanup_status=$?
   if [[ -n $worker_server_container ]]; then
@@ -50,6 +51,12 @@ cleanup() {
   fi
   if [[ -n $worker_control_secret ]]; then
     rm -f -- "$worker_control_secret"
+  fi
+  if [[ $worker_memory_test_db == 1 ]]; then
+    if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.memory_test_db cleanup --run-id "$worker_run_id"; then
+      echo "ERROR: disposable test database cleanup failed; inspect owned resources before retry" >&2
+      (( cleanup_status != 0 )) || cleanup_status=70
+    fi
   fi
   if [[ $diagnostic_started == 1 && $diagnostic_finalized == 0 ]]; then
     diagnostic_event=cancelled
@@ -103,6 +110,7 @@ cleanup() {
     env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.supervision --health "$health_dir" --session "$worker_session_id" finish "$worker_run_id" --exit-status "$cleanup_status" || echo "ERROR: terminal ownership record failed; retained work requires inspection" >&2
     echo "Retained checkpoint: $worker_repo_path (not a live model session)" >&2
   fi
+  exit "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -460,6 +468,23 @@ if [[ -f "$worker_runtime_home/memory-guidance.txt" ]]; then
   printf '%s\n' "$worker_task" >"$worker_task_file"
 fi
 
+# Explicit operator opt-in: no production DB credentials enter this capability.
+case "${CODEX_LOCAL_MEMORY_TEST_DB:-0}" in
+  0) ;;
+  1)
+    [[ $worker_sandbox == container && $worker_role != helper ]] || {
+      echo "ERROR: disposable memory testing requires a coder/reviewer container" >&2; exit 69;
+    }
+    env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.memory_test_db start \
+      --run-id "$worker_run_id" --profile "$worker_runtime_home/memory-test-db.json" || exit 69
+    worker_memory_test_db=1
+    worker_task=$'DISPOSABLE DATABASE CAPABILITY: MEMORY_TEST_PROFILE points to synthetic credentials for your isolated temporary SurrealDB. No production credentials or Docker socket are available. You may run and rerun service tests with MEMORY_INTEGRATION=1 using the supplied profile. Do not print credentials. Host harness owns cleanup.\n\n'"$worker_task"
+    worker_task_file="$worker_runtime_home/database-task.txt"
+    printf '%s\n' "$worker_task" >"$worker_task_file"
+    ;;
+  *) echo "ERROR: CODEX_LOCAL_MEMORY_TEST_DB must be 0 or 1" >&2; exit 64 ;;
+esac
+
 echo "Starting local worker: role=$worker_role tier=$worker_tier runtime=$worker_runtime mode=$worker_mode model=$worker_model run_id=$worker_run_id" >&2
 if [[ $record_run == 1 ]]; then
   worker_started_epoch=$(date -u +%s)
@@ -527,6 +552,9 @@ if [[ $worker_sandbox == container ]]; then
     XDG_CONFIG_HOME="$worker_runtime_home/.config" XDG_DATA_HOME="$worker_runtime_home/.local/share"
     XDG_CACHE_HOME="$worker_runtime_home/.cache" LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}"
     NO_COLOR=1 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS="-p no:cacheprovider")
+  if [[ $worker_memory_test_db == 1 ]]; then
+    container_env+=(MEMORY_TEST_PROFILE="$worker_runtime_home/memory-test-db.json" MEMORY_INTEGRATION=1)
+  fi
   docker_args=(run --rm --network host --read-only --cap-drop ALL
     --security-opt no-new-privileges --pids-limit 512 --user "$(id -u):$(id -g)"
     --tmpfs /tmp:rw,nosuid,nodev,size=1g
