@@ -14,15 +14,14 @@ The probe exercises the **actual installed** `TodoWriteTool` implementation from
 It does **not** implement or mock the tool. It imports and runs the real code with:
 
 - A separate temporary home directory (`QWEN_RUNTIME_DIR`)
-- No hooks configured (`getHookSystem() → null`)
+- File-backed storage for todo state
+- No configured hooks (probe sets `getHookSystem() → null`)
 - No Docker socket, network, or installation needed
 - Pure Node.js execution with native package
 
-## Session-Local Planning vs. Durable GitHub Work State
+## File-Backed Storage
 
-### Session-Local Planning (native todo_write)
-
-The `todo_write` tool stores task lists **in-memory at runtime** under the session's runtime directory:
+The `todo_write` tool stores task lists to disk in the session's runtime directory:
 
 ```
 $QWEN_RUNTIME_DIR/todos/{sessionId}.json
@@ -30,11 +29,10 @@ $QWEN_RUNTIME_DIR/todos/{sessionId}.json
 
 Key characteristics:
 
-1. **Temporary scope**: Data exists only during the session lifetime
-2. **No persistence across sessions**: Each new session gets a fresh workspace
+1. **Durable within session**: Data is persisted to the file system, not just in memory
+2. **Session-local scope**: Data exists only during the session lifetime (temp home is cleaned up)
 3. **No remote sync**: Nothing is pushed to GitHub or external storage
-4. **No hooks**: The probe explicitly disables hooks for clean validation
-5. **Validation-only**: The tool validates malformed input and rejects it
+4. **Validation-only**: The tool validates malformed input and rejects it
 
 This is appropriate for:
 - Long-running interactive sessions where the user wants progress tracking
@@ -105,9 +103,9 @@ The probe validates:
 
 ## Limitations
 
-1. **Docker-dependent checks**: Tests that require Docker are host-only and report as skipped
-2. **No network**: Probe runs in isolated environment without network access
-3. **No hooks**: Hook validation requires the orchestrator configuration
+1. **No Docker access**: Probe runs in isolated environment without Docker socket access
+2. **No network**: Probe runs without network access (isolated Node.js execution)
+3. **No hooks**: Hook validation requires the orchestrator configuration; probe intentionally sets `getHookSystem() → null` to focus on core tool behavior
 
 ## Related References
 

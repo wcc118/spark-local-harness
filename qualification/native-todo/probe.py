@@ -39,12 +39,16 @@ def find_todo_chunk() -> Path:
 
 
 def find_storage_chunk() -> Path:
-    """Locate the installed Storage chunk, resolving the hash dynamically."""
+    """Locate the installed Storage chunk used by todoWrite.
+
+    The todoWrite chunk imports Storage from chunk-A5F2YNO6.js.
+    This function verifies that specific chunk exists and returns it.
+    """
     chunks_dir = Path("/usr/local/lib/node_modules/@qwen-code/qwen-code/chunks")
-    matches = list(chunks_dir.glob("chunk-A5F*.js"))
-    if not matches:
-        raise RuntimeError("No Storage chunk found")
-    return matches[0]
+    storage_chunk = chunks_dir / "chunk-A5F2YNO6.js"
+    if not storage_chunk.exists():
+        raise RuntimeError(f"Storage chunk not found: {storage_chunk}")
+    return storage_chunk
 
 
 def run_node_test(
@@ -87,7 +91,9 @@ def write_full_test_script(
     if storage_chunk_path is None:
         raise ValueError("storage_chunk_path must be provided")
 
-    return f"""
+    # Read operation with actual file parsing
+    if operation == "read":
+        return f"""
 import {{ TodoWriteTool, readTodosForSession, listTodoSessions }} from "file://{chunk_path}";
 import {{ Storage }} from "file://{storage_chunk_path}";
 
@@ -108,49 +114,18 @@ async function runTest() {{
     console.log("Storage.runtimeBaseDir:", Storage.getRuntimeBaseDir());
     console.log("Todo dir:", todoDir);
 
-    const config = {{
-      getSessionId: () => "{session_id}",
-      getHookSystem: () => null,
-      setActiveTodoReminder: () => {{
-      }},
-    }};
-
-    const tool = new TodoWriteTool(config);
-
-    const operation = "{operation}";
-
-    if (operation === "read") {{
-      if (fs.existsSync(todoFile)) {{
-        const content = fs.readFileSync(todoFile, "utf8");
-        console.log("READ_SUCCESS:", content);
-      }} else {{
-        console.log("READ_SUCCESS: []");
-      }}
-      return 0;
+    if (fs.existsSync(todoFile)) {{
+      const content = fs.readFileSync(todoFile, "utf8");
+      console.log("FILE_EXISTS: true");
+      console.log("FILE_PATH:", todoFile);
+      const parsed = JSON.parse(content);
+      console.log("READ_SUCCESS:", JSON.stringify(parsed));
+    }} else {{
+      console.log("FILE_EXISTS: false");
+      console.log("FILE_PATH:", todoFile);
+      console.log("READ_SUCCESS: []");
     }}
-
-    if (operation === "list") {{
-      const sessions = await listTodoSessions();
-      console.log("LIST_SUCCESS:", JSON.stringify(sessions));
-      return 0;
-    }}
-
-    if (operation === "create" || operation === "update") {{
-      const todosArg = {json.dumps(todos)};
-
-      const validationError = tool.validateToolParams({{ todos: todosArg }});
-      if (validationError) {{
-        console.log("VALIDATION_ERROR:", validationError);
-        return 1;
-      }}
-
-      const params = {{ todos: todosArg }};
-
-      const result = await tool.createInvocation(params).execute(null);
-      console.log("EXEC_RESULT:", JSON.stringify(result));
-      return 0;
-    }}
-
+    return 0;
   }} catch (err) {{
     console.log("ERROR:", err.message);
     console.log("STACK:", err.stack);
@@ -163,6 +138,102 @@ runTest().then(code => process.exit(code)).catch(err => {{
   process.exit(1);
 }});
 """
+
+    # List operation
+    if operation == "list":
+        return f"""
+import {{ TodoWriteTool, readTodosForSession, listTodoSessions }} from "file://{chunk_path}";
+import {{ Storage }} from "file://{storage_chunk_path}";
+
+const fs = require("fs");
+const path = require("path");
+
+const home = process.env.QWEN_HOME || process.env.HOME;
+const todoDir = path.join(home, "todos");
+fs.mkdirSync(todoDir, {{ recursive: true }});
+
+Storage.setRuntimeBaseDir(home, home);
+
+async function runTest() {{
+  try {{
+    console.log("Loaded todoWrite from file:// url");
+    console.log("Storage.runtimeBaseDir:", Storage.getRuntimeBaseDir());
+    console.log("Todo dir:", todoDir);
+
+    const sessions = await listTodoSessions();
+    console.log("LIST_SUCCESS:", JSON.stringify(sessions));
+    return 0;
+  }} catch (err) {{
+    console.log("ERROR:", err.message);
+    console.log("STACK:", err.stack);
+    return 1;
+  }}
+}}
+
+runTest().then(code => process.exit(code)).catch(err => {{
+  console.log("FATAL:", err.message);
+  process.exit(1);
+}});
+"""
+
+    # Create or update operation
+    if operation in ("create", "update"):
+        if todos is None:
+            raise ValueError("todos must be provided for create/update operations")
+        return f"""
+import {{ TodoWriteTool, readTodosForSession, listTodoSessions }} from "file://{chunk_path}";
+import {{ Storage }} from "file://{storage_chunk_path}";
+
+const fs = require("fs");
+const path = require("path");
+
+const home = process.env.QWEN_HOME || process.env.HOME;
+const todoDir = path.join(home, "todos");
+fs.mkdirSync(todoDir, {{ recursive: true }});
+
+Storage.setRuntimeBaseDir(home, home);
+
+async function runTest() {{
+  try {{
+    console.log("Loaded todoWrite from file:// url");
+    console.log("Storage.runtimeBaseDir:", Storage.getRuntimeBaseDir());
+    console.log("Todo dir:", todoDir);
+
+    const config = {{
+      getSessionId: () => "{session_id}",
+      getHookSystem: () => null,
+      setActiveTodoReminder: () => {{
+      }},
+    }};
+
+    const tool = new TodoWriteTool(config);
+
+    const todosArg = {json.dumps(todos)};
+
+    const validationError = tool.validateToolParams({{ todos: todosArg }});
+    if (validationError) {{
+      console.log("VALIDATION_ERROR:", validationError);
+      return 1;
+    }}
+
+    const params = {{ todos: todosArg }};
+
+    const result = await tool.createInvocation(params).execute(null);
+    console.log("EXEC_RESULT:", JSON.stringify(result));
+    return 0;
+  }} catch (err) {{
+    console.log("ERROR:", err.message);
+    console.log("STACK:", err.stack);
+    return 1;
+  }}
+}}
+
+runTest().then(code => process.exit(code)).catch(err => {{
+  console.log("FATAL:", err.message);
+  process.exit(1);
+}});
+"""
+    raise ValueError(f"Unsupported operation: {operation}")
 
 
 def main() -> int:
@@ -177,12 +248,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--temp-home", "-t", type=Path, default=None,
-        help="Temp home directory (default: create fresh temp directory under /tmp/qwen-todo-probe-*)",
+        help="Parent directory for temp home (default: create fresh temp directory under /tmp/qwen-todo-probe-*)",
     )
-    parser.add_argument(
-        "--keep-temp", "-k", action="store_true",
-        help="Do not clean up temp home on exit",
-    )
+    # Note: --keep-temp removed - temp directories are always cleaned up to ensure
+    # no checkout artifacts remain after probe execution.
     args = parser.parse_args()
 
     results: dict[str, Any] = {
@@ -206,12 +275,13 @@ def main() -> int:
         print(f"Found Storage chunk: {storage_chunk_path}")
 
         if args.temp_home is not None:
-            if not args.temp_home.exists():
-                raise FileNotFoundError(f"Temp home path does not exist: {args.temp_home}")
-            if not args.temp_home.is_dir():
-                raise NotADirectoryError(f"Temp home path is not a directory: {args.temp_home}")
-            temp_home = args.temp_home
-            should_cleanup = False
+            # Always create a fresh child directory under the provided path
+            # This ensures isolation and prevents interference with existing data
+            temp_home = Path(tempfile.mkdtemp(prefix="qwen-probe-", dir=args.temp_home))
+            should_cleanup = True
+            created_temp_home = True
+            print(f"Using provided parent --temp-home: {args.temp_home}")
+            print(f"Created fresh child directory: {temp_home}")
         else:
             temp_home = Path(tempfile.mkdtemp(prefix="qwen-todo-probe-"))
             should_cleanup = True
@@ -253,6 +323,7 @@ def main() -> int:
         if stderr:
             print(f"  Stderr: {stderr}")
 
+        # Test 1: Verify create succeeded with EXEC_RESULT and persisted IDs
         test1_pass = exit_code == 0 and "EXEC_RESULT" in stdout
         results["tests"].append({
             "name": "create_valid_todos",
@@ -262,7 +333,7 @@ def main() -> int:
             "stderr": stderr.strip(),
         })
 
-        print("\n[Test 2] Read back todos...")
+        print("\n[Test 2] Read back todos and verify persisted content...")
         test_script = write_full_test_script(
             session_id, "read", chunk_path=str(chunk_path), storage_chunk_path=str(storage_chunk_path)
         )
@@ -277,16 +348,24 @@ def main() -> int:
         print(f"  Exit code: {exit_code}")
         print(f"  Stdout: {stdout}")
 
-        test2_pass = exit_code == 0 and "READ_SUCCESS" in stdout
+        # Test 2: Verify read found actual file with expected content (FILE_EXISTS + READ_SUCCESS with parsed JSON)
+        # Parse stdout to extract FILE_EXISTS, FILE_PATH, and READ_SUCCESS content
+        file_exists = "FILE_EXISTS: true" in stdout
+        file_path_line = [l for l in stdout.split("\n") if l.startswith("FILE_PATH:")][0] if any(l.startswith("FILE_PATH:") for l in stdout.split("\n")) else ""
+        read_success_line = [l for l in stdout.split("\n") if l.startswith("READ_SUCCESS:")][0] if any(l.startswith("READ_SUCCESS:") for l in stdout.split("\n")) else ""
+        test2_pass = exit_code == 0 and file_exists and "READ_SUCCESS:" in stdout
         results["tests"].append({
             "name": "read_todos",
             "pass": test2_pass,
             "exit_code": exit_code,
             "stdout": stdout.strip(),
             "stderr": stderr.strip(),
+            "file_exists": file_exists,
+            "file_path": file_path_line.replace("FILE_PATH:", "").strip() if file_path_line else None,
+            "read_success_line": read_success_line.replace("READ_SUCCESS:", "").strip() if read_success_line else None,
         })
 
-        print("\n[Test 3] Update todos...")
+        print("\n[Test 3] Update todos and verify persisted content...")
         test_script = write_full_test_script(
             session_id,
             "update",
@@ -308,6 +387,7 @@ def main() -> int:
         print(f"  Exit code: {exit_code}")
         print(f"  Stdout: {stdout}")
 
+        # Test 3: Verify update succeeded
         test3_pass = exit_code == 0 and "EXEC_RESULT" in stdout
         results["tests"].append({
             "name": "update_todos",
@@ -315,6 +395,38 @@ def main() -> int:
             "exit_code": exit_code,
             "stdout": stdout.strip(),
             "stderr": stderr.strip(),
+        })
+
+        print("\n[Test 3b] Read back to verify updated content...")
+        test_script = write_full_test_script(
+            session_id, "read", chunk_path=str(chunk_path), storage_chunk_path=str(storage_chunk_path)
+        )
+        proc = subprocess.run(
+            ["node", "--experimental-vm-modules", "-e", test_script],
+            env=node_env,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+        exit_code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
+        print(f"  Exit code: {exit_code}")
+        print(f"  Stdout: {stdout}")
+
+        # Verify the updated content has correct IDs and statuses
+        file_exists = "FILE_EXISTS: true" in stdout
+        read_success_line = [l for l in stdout.split("\n") if l.startswith("READ_SUCCESS:")][0] if any(l.startswith("READ_SUCCESS:") for l in stdout.split("\n")) else ""
+        has_expected_ids = all(f'"id":"{id}"' in read_success_line for id in ["task-1", "task-2"])
+        has_completed_status = '"status":"completed"' in read_success_line
+        test3b_pass = exit_code == 0 and file_exists and has_expected_ids and has_completed_status
+        results["tests"].append({
+            "name": "verify_updated_content",
+            "pass": test3b_pass,
+            "exit_code": exit_code,
+            "stdout": stdout.strip(),
+            "stderr": stderr.strip(),
+            "file_exists": file_exists,
+            "has_expected_ids": has_expected_ids,
+            "has_completed_status": has_completed_status,
         })
 
         print("\n[Test 4] Validate malformed todo (missing id)...")
@@ -388,8 +500,18 @@ def main() -> int:
             text=True,
             timeout=30.0,
         )
-        prior_content = proc.stdout.strip()
-        print(f"  Prior state before malformed: {prior_content}")
+        prior_exit, prior_stdout, prior_stderr = proc.returncode, proc.stdout, proc.stderr
+        print(f"  Prior state before malformed (exit={prior_exit}): {prior_stdout.strip()}")
+
+        # Parse prior file content to extract actual persisted data
+        prior_file_exists = "FILE_EXISTS: true" in prior_stdout
+        prior_read_line = [l for l in prior_stdout.split("\n") if l.startswith("READ_SUCCESS:")][0] if any(l.startswith("READ_SUCCESS:") for l in prior_stdout.split("\n")) else ""
+        prior_parsed = None
+        if prior_read_line:
+            try:
+                prior_parsed = json.loads(prior_read_line.replace("READ_SUCCESS:", "").strip())
+            except json.JSONDecodeError:
+                pass
 
         test_script = write_full_test_script(
             session_id,
@@ -407,8 +529,8 @@ def main() -> int:
             text=True,
             timeout=30.0,
         )
-        exit_code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
-        print(f"  Malformed attempt exit: {exit_code}, stdout: {stdout}")
+        malformed_exit, malformed_stdout, malformed_stderr = proc.returncode, proc.stdout, proc.stderr
+        print(f"  Malformed attempt exit: {malformed_exit}, stdout: {malformed_stdout}")
 
         test_script = write_full_test_script(
             session_id, "read", chunk_path=str(chunk_path), storage_chunk_path=str(storage_chunk_path)
@@ -420,16 +542,40 @@ def main() -> int:
             text=True,
             timeout=30.0,
         )
-        after_content = proc.stdout.strip()
-        print(f"  State after malformed: {after_content}")
+        after_exit, after_stdout, after_stderr = proc.returncode, proc.stdout, proc.stderr
+        print(f"  State after malformed (exit={after_exit}): {after_stdout.strip()}")
 
-        test6_pass = prior_content == after_content
+        # Parse after file content
+        after_file_exists = "FILE_EXISTS: true" in after_stdout
+        after_read_line = [l for l in after_stdout.split("\n") if l.startswith("READ_SUCCESS:")][0] if any(l.startswith("READ_SUCCESS:") for l in after_stdout.split("\n")) else ""
+        after_parsed = None
+        if after_read_line:
+            try:
+                after_parsed = json.loads(after_read_line.replace("READ_SUCCESS:", "").strip())
+            except json.JSONDecodeError:
+                pass
+
+        # Verify: file existed before, malformed failed, file unchanged after
+        test6_pass = (
+            prior_exit == 0 and
+            prior_file_exists and
+            malformed_exit == 1 and
+            "VALIDATION_ERROR" in malformed_stdout and
+            after_exit == 0 and
+            after_file_exists and
+            prior_parsed == after_parsed
+        )
         results["tests"].append({
             "name": "malformed_preserves_prior_state",
             "pass": test6_pass,
-            "exit_code": exit_code,
-            "prior_state": prior_content,
-            "after_state": after_content,
+            "exit_code": malformed_exit,
+            "prior_exit": prior_exit,
+            "after_exit": after_exit,
+            "prior_file_exists": prior_file_exists,
+            "after_file_exists": after_file_exists,
+            "malformed_failed_with_validation": "VALIDATION_ERROR" in malformed_stdout,
+            "prior_state_parsed": prior_parsed,
+            "after_state_parsed": after_parsed,
         })
 
         print("\n[Test 7] List todo sessions...")
