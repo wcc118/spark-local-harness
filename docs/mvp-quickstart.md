@@ -131,6 +131,25 @@ Health data is stored in `~/.local/share/codex-local-harness/health/`. Backups f
 ~/.local/share/codex-local-harness/backups/YYYYMMDDTHHMMSSZ-$(DESCRIPTION)
 ```
 
+## Reviewer temporary files
+
+Container workers have an isolated `/tmp` tmpfs. Qualified investigative reviews
+also declare `container_tmpfs` in their immutable review envelope and final role
+permissions, allowing temporary data there. Default and legacy envelopes retain
+their previous scope. The flag describes permission/audit context; it does not
+create the mount or qualify an arbitrary host process as a container.
+
+The host audit normalizes these container paths lexically. Host symlinks beneath
+`/tmp` do not describe the separate container filesystem. Traversal outside
+`/tmp`, forbidden commands and repository publication restrictions still apply.
+Actual filesystem confinement comes from the container mounts, not lexical audit.
+
+`TMPDIR`, coverage and Python cache settings point to the supplied reviewer
+scratch directory, mounted in both reviewer modes. Use that directory for
+executable fixtures: `/tmp` is noexec, which blocks direct execution (an
+interpreter can still read a script). The checkout remains read-only. The normal
+reviewer entry point supplies these settings; no manual flags are needed.
+
 ## Known Limitations
 
 ### Reviewer tempfile detection

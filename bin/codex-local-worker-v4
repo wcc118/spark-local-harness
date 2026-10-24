@@ -439,10 +439,10 @@ if [[ $worker_role == reviewer ]]; then
     env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.review_profile \
       "$candidate_agents/convergence-reviewer.md" \
       "$worker_runtime_home/.config/opencode/agents/convergence-reviewer.md" \
-      "$worker_repo_path" "$review_runtime_tmp"
+      "$worker_repo_path" "$review_runtime_tmp" --container-tmpfs
   fi
   review_prepare_args=()
-  [[ $convergence != 1 ]] || review_prepare_args+=(--investigative)
+  [[ $convergence != 1 ]] || review_prepare_args+=(--investigative --container-tmpfs)
   worker_task=$("${review_cli[@]}" prepare "${review_prepare_args[@]}" \
     --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --pr "$worker_pr" --task-file "$worker_task_file" \
@@ -569,6 +569,7 @@ if [[ $worker_sandbox == container ]]; then
     XDG_CONFIG_HOME="$worker_runtime_home/.config" XDG_DATA_HOME="$worker_runtime_home/.local/share"
     XDG_CACHE_HOME="$worker_runtime_home/.cache" LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}"
     NO_COLOR=1 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS="-p no:cacheprovider")
+  container_env+=("${execution_env[@]}")
   if [[ $worker_memory_test_db == 1 ]]; then
     container_env+=(MEMORY_TEST_PROFILE="$worker_runtime_home/memory-test-db.json" MEMORY_INTEGRATION=1)
   fi
@@ -597,7 +598,7 @@ if [[ $worker_sandbox == container ]]; then
     done <<<"$sandbox_mounts"
   fi
   for item in "${container_env[@]}"; do docker_args+=(--env "$item"); done
-  if [[ $convergence == 1 && $worker_role == reviewer ]]; then
+  if [[ $worker_role == reviewer ]]; then
     docker_args+=(--mount "type=bind,src=$review_runtime_tmp,dst=$review_runtime_tmp")
   fi
   if [[ $convergence == 1 && -n ${CODEX_LOCAL_VERIFY_COMMAND:-} ]]; then
