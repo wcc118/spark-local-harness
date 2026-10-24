@@ -139,7 +139,7 @@ The hook is integrated into `codex-local-coder` worker runtime via the worker fr
 
 Run tests with:
 ```bash
-PYTHONPATH=src python3 -m pytest tests/test_delivery_feedback.py -v
+PYTHONPATH=src python3 -m pytest tests/test_delivery_feedback.py tests/test_delivery_boundaries.py -v
 ```
 
 Tests cover:
@@ -155,7 +155,9 @@ Tests cover:
 - Read-only checking preserves Git/worktree state
 - Source line contents do not leak (only locations)
 - Hook installation preserves existing settings and shell-quotes paths
-- Standalone checker actually runs with actual worker setup wiring
+- Standalone checker runs from its copied script
+- Actual host publication-mode validation rejects dirty and committed-whitespace Git fixtures after local ESCALATE; any push or GitHub invocation fails the test
+- Extracted production shell setup exercises default/on/off, role/runtime/postflight gating, invalid configuration and unavailable-base warning
 
 ## Rollback
 
