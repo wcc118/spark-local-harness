@@ -36,7 +36,7 @@ class Principal:
 
 CURRENT = contextvars.ContextVar('memory_principal')
 READ_TOOLS = ['search_memory', 'get_memory']
-WRITE_TOOLS = ['record_memory', 'correct_memory']
+WRITE_TOOLS = ['record_memory', 'correct_memory', 'record_memory_use']
 ALL_TOOLS = READ_TOOLS + WRITE_TOOLS + ['resolve_memory']
 ID = re.compile(r'^memory:[A-Za-z0-9_]+$')
 
@@ -200,6 +200,39 @@ class MemoryStore:
             self.db.query('\n'.join(statements), params)
             return {'memory': self.get_record(ident), 'replayed': False}
 
+    def record_use(self, principal, memory_id, outcome, explanation, source, request_id):
+        """Append an attributed observation; reporting use never promotes a claim."""
+        if principal.role not in {'coder', 'reviewer', 'frontier'}:
+            raise MemoryError('This identity has read-only memory access')
+        memory_id = record_id(memory_id)
+        if outcome not in {'helpful', 'unhelpful', 'misleading', 'uncertain'}:
+            raise MemoryError('outcome must be helpful, unhelpful, misleading or uncertain')
+        explanation = bounded(explanation, 'explanation', 4000)
+        source = bounded(source, 'source', 4000)
+        request_id = bounded(request_id, 'request_id', 200)
+        payload = dict(memory_id=memory_id, outcome=outcome, explanation=explanation, source=source)
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps([principal.__dict__, request_id, 'use'], sort_keys=True).encode()).hexdigest()[:32]
+        event_id = 'memory_event:' + key
+        with self.lock:
+            previous = self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0]
+            if previous:
+                if previous[0].get('fingerprint') != fingerprint:
+                    raise MemoryError('request_id already used for a different use observation')
+                return {'event': previous[0], 'replayed': True}
+            self.get_record(memory_id)
+            event = dict(action='use', outcome=outcome, explanation=explanation, source=source,
+                         evidence_kind='agent_report', fingerprint=fingerprint,
+                         actor=principal.actor, role=principal.role, run_id=principal.run_id,
+                         repository=principal.repository, issue=principal.issue)
+            self.db.query('''BEGIN TRANSACTION;
+                CREATE type::record($event_id) CONTENT $event;
+                UPDATE type::record($event_id) SET target=type::record($target), created_at=time::now();
+                COMMIT TRANSACTION;''',
+                dict(event_id=event_id, event=event, target=memory_id))
+            return {'event': self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0][0],
+                    'replayed': False}
+
     def resolve(self, principal, target_id, replacement_id, rationale, request_id):
         if principal.role != 'frontier':
             raise MemoryError('Only the frontier reconciliation identity may supersede memories')
@@ -241,7 +274,7 @@ def build_server(store):
 
     @server.tool()
     def get_memory(memory_id: str) -> dict:
-        """Inspect a memory, provenance, graph neighbors, corrections and reconciliation history."""
+        """Inspect a memory, provenance, graph neighbors and recent events, including attributed use reports. Reports are not independent verification."""
         return store.inspect(memory_id)
 
     @server.tool()
@@ -253,6 +286,11 @@ def build_server(store):
     def correct_memory(target_id: str, text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', conditions: str = '') -> dict:
         """Add contrary evidence or a proposed correction. Preserve the original and mark it disputed; no approval is required to contribute."""
         return store.write(CURRENT.get(), text, source, request_id, topics, project, 'correction', conditions, record_id(target_id), 'challenge')
+
+    @server.tool()
+    def record_memory_use(memory_id: str, outcome: str, explanation: str, source: str, request_id: str) -> dict:
+        """Report actual lesson use as helpful/unhelpful/misleading/uncertain, with evidence and limits. Append-only attributed report, not proof or a vote; does not change the lesson. Retry identical content with the same request_id."""
+        return store.record_use(CURRENT.get(), memory_id, outcome, explanation, source, request_id)
 
     @server.tool()
     def resolve_memory(target_id: str, replacement_id: str, rationale: str, request_id: str) -> dict:

@@ -62,9 +62,9 @@ class MemoryIntegration(unittest.TestCase):
         cls.client.__exit__(None,None,None)
         admin_query(f'REMOVE DATABASE {cls.name};')
 
-    def worker(self,role='coder'):
+    def worker(self,role='coder',run_id=None):
         response=self.client.post('/sessions',headers={'Authorization':'Bearer test-issuer'},
-            json={'role':role,'run_id':secrets.token_hex(8),'repository':'test/repo','issue':'214'})
+            json={'role':role,'run_id':run_id or secrets.token_hex(8),'repository':'test/repo','issue':'214'})
         self.assertEqual(response.status_code,200)
         return response.json()['token']
 
@@ -108,10 +108,71 @@ class MemoryIntegration(unittest.TestCase):
         self.assertIn(ident,[m['id'] for m in history['memories']])
         self.assertTrue(self.call('test-frontier','resolve_memory',target_id=fix,replacement_id=ident,rationale='cycle',request_id='cycle')['isError'])
 
+    def test_record_memory_use_lifecycle_and_role_enforcement(self):
+        run_id='use-'+secrets.token_hex(8)
+        coder=self.worker(run_id=run_id);reviewer=self.worker('reviewer');helper=self.worker('helper')
+        args=dict(text='Crossprojectwidget has a reproducible boundary failure',source='test evidence',request_id='discovery',topics=['boundary'],project='project-a',conditions='version one')
+        first=self.value(self.call(coder,'record_memory',**args))
+        ident=first['memory']['id']
+        use_args=dict(memory_id=ident,outcome='helpful',explanation='Reproduced in test run 2026-10-24',source='worker observation',request_id='use-1')
+        use_result=self.value(self.call(coder,'record_memory_use',**use_args))
+        self.assertEqual(use_result['event']['action'],'use')
+        self.assertEqual(use_result['event']['outcome'],'helpful')
+        self.assertEqual(use_result['event']['role'],'coder')
+        self.assertEqual(use_result['event']['evidence_kind'],'agent_report')
+        self.assertEqual(use_result['event']['actor'],use_result['event']['role'])
+        self.assertEqual(use_result['event']['run_id'],run_id)
+        self.assertEqual(use_result['event']['repository'],'test/repo')
+        self.assertEqual(use_result['event']['issue'],'test/repo#214')
+        replayed=self.value(self.call(coder,'record_memory_use',**use_args))
+        self.assertTrue(replayed['replayed']);self.assertEqual(replayed['event']['id'],use_result['event']['id'])
+        self.assertTrue(self.call(coder,'record_memory_use',**dict(use_args,outcome='unhelpful'))['isError'])
+        inspected=self.value(self.call(reviewer,'get_memory',memory_id=ident))
+        self.assertTrue(inspected['events'])
+        self.assertIn('use',[e.get('action') for e in inspected['events']])
+        self.assertTrue(self.call(helper,'record_memory_use',**use_args)['isError'])
+        use_coder=self.value(self.call(coder,'record_memory_use',memory_id=ident,outcome='uncertain',explanation='Mixed results in two runs',source='worker observation',request_id='use-2'))
+        self.assertEqual(use_coder['event']['outcome'],'uncertain')
+        use_reviewer=self.value(self.call(reviewer,'record_memory_use',memory_id=ident,outcome='misleading',explanation='Root cause differs from initial report',source='reviewer analysis',request_id='use-3'))
+        self.assertEqual(use_reviewer['event']['outcome'],'misleading')
+        inspected=self.value(self.call(reviewer,'get_memory',memory_id=ident))
+        self.assertTrue(inspected['events'])
+        self.assertEqual(len([e for e in inspected['events'] if e.get('action')=='use']),3)
+        self.assertEqual(inspected['memory'],first['memory'])
+        frontier=self.value(self.call('test-frontier','record_memory_use',memory_id=ident,
+            outcome='unhelpful',explanation='Did not apply in this environment',source='primary observation',request_id='frontier-use'))
+        self.assertEqual(frontier['event']['role'],'frontier')
+        self.assertEqual(frontier['event']['actor'],'codex')
+        self.assertEqual(self.value(self.call(coder,'get_memory',memory_id=ident))['memory'],first['memory'])
+        # The same retry key is scoped to the authenticated principal, not global.
+        another=self.value(self.call(reviewer,'record_memory_use',**use_args))
+        self.assertNotEqual(another['event']['id'],use_result['event']['id'])
+
+    def test_record_memory_use_invalid_outcome_and_missing_target(self):
+        coder=self.worker()
+        r=self.call(coder,'record_memory_use',memory_id='memory:nonexistent',outcome='helpful',explanation='test',source='test',request_id='bad-target')
+        self.assertTrue(r['isError'])
+        r=self.call(coder,'record_memory_use',memory_id='memory:x',outcome='invalid',explanation='test',source='test',request_id='bad-outcome')
+        self.assertTrue(r['isError'])
+        r=self.call(coder,'record_memory_use',memory_id='memory:x',outcome='helpful',explanation='',source='test',request_id='empty-explanation')
+        self.assertTrue(r['isError'])
+        r=self.call(coder,'record_memory_use',memory_id='memory:x',outcome='helpful',explanation='test',source='',request_id='empty-source')
+        self.assertTrue(r['isError'])
+
+    def test_record_memory_use_helper_discovery_does_not_grant_write(self):
+        helper=self.worker('helper')
+        names={t['name'] for t in self.rpc(helper,'tools/list',{})['result']['tools']}
+        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory'})
+        coder=self.worker()
+        ident=self.value(self.call(coder,'record_memory',text='Helper denial target',source='test',request_id='helper-target'))['memory']['id']
+        before=self.value(self.call(coder,'get_memory',memory_id=ident))
+        self.assertTrue(self.call(helper,'record_memory_use',memory_id=ident,outcome='helpful',explanation='test',source='test',request_id='test')['isError'])
+        self.assertEqual(self.value(self.call(coder,'get_memory',memory_id=ident)),before)
+
     def test_api_has_no_delete_sql_or_role_spoof(self):
         token=self.worker()
         names={t['name'] for t in self.rpc(token,'tools/list',{})['result']['tools']}
-        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','resolve_memory'})
+        self.assertEqual(names,{'search_memory','get_memory','record_memory','correct_memory','record_memory_use','resolve_memory'})
         self.assertEqual(self.client.post('/mcp',json={}).status_code,401)
         self.assertEqual(self.client.post('/sessions',headers={'Authorization':'Bearer '+token},json={'role':'frontier'}).status_code,401)
         self.assertEqual(self.client.post('/sessions',headers={'Authorization':'Bearer test-issuer'},json={'role':'frontier','run_id':'x'}).status_code,400)

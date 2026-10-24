@@ -599,3 +599,9 @@ def test_memory_contribution_sources_are_not_filesystem_access(tmp_path):
         log.write_text(json.dumps({"type": "tool_use", "part": {"tool": tool, "state": {"status": "completed", "input": {}}}}) + "\n")
         with pytest.raises(ReviewError, match="prohibited memory tool"):
             audit_tool_scope(log, envelope(tmp_path))
+
+
+def test_memory_record_use_is_allowed_in_tool_scope(tmp_path):
+    log = tmp_path / "memory-log.jsonl"
+    log.write_text(json.dumps({"type": "tool_use", "part": {"tool": "memory_record_memory_use", "state": {"status": "completed", "input": {"memory_id": "memory:abc123", "outcome": "helpful", "explanation": "Validated in run", "source": "worker observation", "request_id": "use-1"}}}}) + "\n")
+    audit_tool_scope(log, envelope(tmp_path))

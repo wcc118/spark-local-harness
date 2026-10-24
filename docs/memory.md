@@ -27,13 +27,13 @@ of the author's source/evidence claims. Runtime homes are private and contain be
 credentials: do not publish them. Deleting a token's file does not revoke a token;
 rotating the service signing key revokes all worker tokens.
 
-Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory.
+Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory, record_memory_use.
 Helper tools: search_memory, get_memory. Codex additionally has resolve_memory.
 No routine client receives arbitrary SQL or a deletion tool from this service.
 The user/admin can still manage the underlying database directly. These MCP boundaries
 are not a sandbox against the workstation owner or an unrestricted host shell.
 
-The reviewer tool-scope audit explicitly recognizes the four worker memory operations:
+The reviewer tool-scope audit explicitly recognizes the five worker memory operations:
 source paths in a finding are data, not filesystem access. Repository permissions,
 publication boundaries, exact-head review and the result schema remain unchanged.
 Other memory tool names, including reconciliation, remain prohibited in worker reviews.
@@ -58,6 +58,15 @@ text stays unchanged. Searches include active/disputed claims by default. Codex 
 supersede an old claim with an active or disputed replacement and rationale. Inspection retains
 relationships and audit events. Permanent deletion is a separate owner-directed
 administrative operation, including consideration of backup copies.
+
+Use `record_memory_use` to report actual lesson use as helpful/unhelpful/misleading/
+uncertain. This append-only attributed report does not change the lesson text or status.
+Distinguish between searching/reading (assessment) and applying a lesson (use report).
+Report honest positive, negative, or uncertain outcomes with source references and
+applicability limitations. No per-task use report is required; agents exercise
+discretion based on the task context. There is no automatic popularity/confidence
+score, and no inference that fewer failures are already measured. Memory unavailability
+does not block your investigation or implementation.
 
 ## Verification and rollback
 
