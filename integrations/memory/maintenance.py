@@ -184,7 +184,7 @@ def backup_sets():
 def prune(apply=False, keep_days=14, keep_weeks=12):
     """Keep every backup newer than keep_days, then one per ISO week for keep_weeks, always the newest verified one.
 
-    Prints the plan; only deletes with apply=True. Unverified backups are never the sole survivor.
+    Prints the plan; only deletes with apply=True. With no verified backup at all, nothing is pruned.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
     keep, weeks = set(), set()
@@ -198,6 +198,8 @@ def prune(apply=False, keep_days=14, keep_weeks=12):
         elif verified and week not in weeks and (now - stamp).days < keep_days + 7 * keep_weeks:
             keep.add(stem)
             weeks.add(week)
+        elif newest_verified is None:
+            keep.add(stem)  # nothing has been proven restorable, so nothing may be pruned
     doomed = [stem for stem, _ in sets if stem not in keep]
     for stem in doomed:
         if apply:

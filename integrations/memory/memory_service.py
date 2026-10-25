@@ -56,10 +56,19 @@ DUPLICATE_MIN = 0.88      # cosine above which a new memory is reported as a nea
 RRF_K = 60                # reciprocal-rank-fusion constant for blending keyword and semantic ranks
 
 
+CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]+')
+
+
+def clean_label(text, limit=120):
+    """One line, no control characters: titles are shown in lists and injected into agent sessions."""
+    return ' '.join(CONTROL.sub(' ', text).split())[:limit]
+
+
 def make_title(text, limit=90):
     """A short readable label: the first sentence or line, cut at a word boundary."""
     text = re.sub(r'^[\s*#_>-]*(?:title|summary)\s*:\s*[*_]*\s*', '', text.strip(), flags=re.I)  # markdown label
     first = re.split(r'(?<=[.!?])\s|\n', text.strip(), maxsplit=1)[0].strip()
+    first = clean_label(first, 4000)
     if len(first) <= limit:
         return first
     return first[:limit].rsplit(' ', 1)[0].rstrip(',;:-') + '…'
@@ -393,7 +402,7 @@ class MemoryStore:
         request_id = bounded(request_id, 'request_id', 200)
         project = bounded(project, 'project', 200, False)
         conditions = bounded(conditions, 'conditions', 4000, False)
-        title = bounded(title, 'title', 120, False)
+        title = clean_label(bounded(title, 'title', 120, False))
         topics = self.topics(topics or [])
         if kind not in {'finding','decision','preference','hypothesis','correction','review'}:
             raise MemoryError('Invalid memory kind')
