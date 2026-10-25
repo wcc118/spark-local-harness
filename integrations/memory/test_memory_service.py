@@ -11,8 +11,9 @@ import tempfile
 import shutil
 
 from starlette.testclient import TestClient
-from memory_service import (AuthenticatedApp, MemoryStore, MemoryError, Principal,
-                            build_server, signed_token, verify_token)
+import embedding
+from memory_service import (AuthenticatedApp, MemoryStore, MemoryError, Principal, build_server,
+                            make_title, project_key, signed_token, verify_token)
 from memoryctl import credentials, query as admin_query
 
 # Optional disposable database support
@@ -65,6 +66,40 @@ class DisposableDatabaseManager:
     def create_store(self):
         """Create a MemoryStore connected to the disposable database."""
         return MemoryStore(self.db)
+
+
+# One axis per group. Tests share a database, so each test uses its own group to stay independent.
+CONCEPTS = [('teardown', 'cleanup', 'leftover', 'junk'), ('summarization', 'compaction', 'forgot', 'context'),
+            ('mesh', 'skewed', 'cells', 'solver'), ('lattice', 'tessellation', 'gridlock'),
+            ('orchid', 'tulip', 'daisy'), ('refreshtopic',)]
+
+
+def fake_embed(text, query=False):
+    """Concept-axis vectors: words in one group embed together without sharing any literal word."""
+    vector = [float(sum(w in group for w in text.lower().split())) for group in CONCEPTS]
+    norm = sum(x * x for x in vector) ** 0.5
+    return [x / norm for x in vector] if norm else None
+
+
+class HelperTests(unittest.TestCase):
+    def test_make_title(self):
+        self.assertEqual(make_title('Short claim. More detail follows.'), 'Short claim.')
+        self.assertEqual(make_title('first line\nsecond line'), 'first line')
+        long = make_title('word ' * 60)
+        self.assertLessEqual(len(long), 91)
+        self.assertTrue(long.endswith('…'))
+        self.assertFalse(long[:-1].endswith(' '))
+
+    def test_project_key_treats_owner_spellings_as_one(self):
+        self.assertEqual(project_key('wcc118/openfoam'), project_key('openfoam'))
+
+    def test_embedding_failure_returns_none(self):
+        original = embedding.URL
+        embedding.URL = 'http://127.0.0.1:9/unreachable'
+        try:
+            self.assertIsNone(embedding.embed('anything'))
+        finally:
+            embedding.URL = original
 
 
 class TokenTests(unittest.TestCase):
@@ -547,6 +582,159 @@ class MemoryIntegration(unittest.TestCase):
         ident=plain['memory']['id']
         enriched=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['wakeflow-qualities'],explanation='x',source='y',request_id='suggest-enrich'))
         self.assertIn('wakeflow-quality',enriched['topic_suggestions']['wakeflow-qualities'])
+
+
+    def use_fake_embedder(self):
+        original = self.store.embedder
+        self.store.embedder = fake_embed
+        self.addCleanup(setattr, self.store, 'embedder', original)
+
+    def test_title_is_stored_derived_or_supplied(self):
+        coder = self.worker()
+        derived = self.value(self.call(coder, 'record_memory', text='Titledalpha holds. Extra detail here.', source='t', request_id='title-derived'))['memory']
+        self.assertEqual(derived['title'], 'Titledalpha holds.')
+        given = self.value(self.call(coder, 'record_memory', text='Titledbeta body', title='Chosen label', source='t', request_id='title-given'))['memory']
+        self.assertEqual(given['title'], 'Chosen label')
+        args = dict(text='Titledbeta body', title='Chosen label', source='t', request_id='title-given')
+        self.assertTrue(self.value(self.call(coder, 'record_memory', **args))['replayed'])
+        self.assertTrue(self.call(coder, 'record_memory', **dict(args, title='Other'))['isError'])
+
+    def test_semantic_search_finds_meaning_without_shared_words(self):
+        self.use_fake_embedder()
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Leftover teardown junk breaks fixtures', source='t', request_id='sem-1'))['memory']['id']
+        self.value(self.call(coder, 'record_memory', text='Skewed mesh cells upset the solver', source='t', request_id='sem-2'))
+        result = self.value(self.call(coder, 'search_memory', query='cleanup'))
+        self.assertEqual(result['search_mode'], 'hybrid')
+        self.assertEqual(result['memories'][0]['id'], ident)
+        self.assertEqual(result['memories'][0]['matched_by'], 'semantic')
+        self.assertGreater(result['memories'][0]['similarity'], 0.9)
+        self.assertNotIn('vector', json.dumps(result))
+
+    def test_search_falls_back_to_keywords_when_embedder_is_down(self):
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Fallbackwidget keyword survives', source='t', request_id='fb-1'))['memory']['id']
+        original = self.store.embedder
+        self.store.embedder = lambda text, query=False: None
+        self.addCleanup(setattr, self.store, 'embedder', original)
+        result = self.value(self.call(coder, 'search_memory', query='fallbackwidget'))
+        self.assertEqual(result['search_mode'], 'keyword')
+        self.assertIn(ident, [m['id'] for m in result['memories']])
+        stored = self.value(self.call(coder, 'record_memory', text='Written without a vector', source='t', request_id='fb-2'))
+        self.assertNotIn('similar_memories', stored)
+
+    def test_near_duplicate_writes_report_similar_memories_but_still_record(self):
+        self.use_fake_embedder()
+        coder = self.worker()
+        first = self.value(self.call(coder, 'record_memory', text='Context compaction forgot state', source='t', request_id='dup-1'))['memory']['id']
+        second = self.value(self.call(coder, 'record_memory', text='Summarization forgot context', source='t', request_id='dup-2'))
+        self.assertEqual([m['id'] for m in second['similar_memories']], [first])
+        self.assertTrue(second['memory']['id'])
+        different = self.value(self.call(coder, 'record_memory', text='Orchid tulip daisy bloom', source='t', request_id='dup-3'))
+        self.assertNotIn('similar_memories', different)
+        correction = self.value(self.call(coder, 'correct_memory', target_id=first, text='Context compaction forgot state in v2', source='t', request_id='dup-4'))
+        self.assertNotIn(first, [m['id'] for m in correction.get('similar_memories', [])])
+
+    def test_project_filter_treats_owner_and_bare_names_alike(self):
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Aliasprojectwidget note', source='t', request_id='alias-1', project='someowner/aliasrepo'))['memory']['id']
+        for spelling in ('aliasrepo', 'someowner/aliasrepo', 'other/aliasrepo'):
+            found = self.value(self.call(coder, 'search_memory', query='aliasprojectwidget', project=spelling))
+            self.assertIn(ident, [m['id'] for m in found['memories']], spelling)
+        none = self.value(self.call(coder, 'search_memory', query='aliasprojectwidget', project='differentrepo'))
+        self.assertFalse(none['memories'])
+
+    def test_search_shows_use_reports_without_ranking_by_them(self):
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Usereportwidget lesson', source='t', request_id='ur-1'))['memory']['id']
+        self.value(self.call(coder, 'record_memory_use', memory_id=ident, outcome='helpful', explanation='x', source='y', request_id='ur-use'))
+        found = self.value(self.call(coder, 'search_memory', query='usereportwidget'))
+        row = next(m for m in found['memories'] if m['id'] == ident)
+        self.assertEqual(row['use_reports'], {'helpful': 1})
+
+    def test_searches_are_logged_without_query_text(self):
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Retrievalloggedwidget fact', source='t', request_id='log-1'))['memory']['id']
+        self.value(self.call(coder, 'search_memory', query='retrievalloggedwidget'))
+        rows = self.db.query("SELECT * FROM retrieval WHERE results CONTAINS type::record($id);", {'id': ident})[0]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['role'], 'coder')
+        self.assertNotIn('retrievalloggedwidget', json.dumps(rows))
+
+
+    def test_brief_search_is_compact_and_validated(self):
+        coder = self.worker()
+        text = 'Briefwidget lesson. ' + 'long detail ' * 60
+        ident = self.value(self.call(coder, 'record_memory', text=text, conditions='only on briefwidget v2', source='t', request_id='brief-1'))['memory']['id']
+        full = self.value(self.call(coder, 'search_memory', query='briefwidget'))['memories']
+        brief = self.value(self.call(coder, 'search_memory', query='briefwidget', detail='brief'))['memories']
+        row = next(m for m in brief if m['id'] == ident)
+        self.assertNotIn('text', row)
+        self.assertLessEqual(len(row['snippet']), 161)
+        self.assertEqual(row['conditions'], 'only on briefwidget v2')
+        self.assertLess(len(json.dumps(brief)), len(json.dumps(full)))
+        self.assertTrue(self.call(coder, 'search_memory', query='briefwidget', detail='tiny')['isError'])
+
+    def test_enrich_refreshes_the_stored_vector(self):
+        self.use_fake_embedder()
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Neutral wording only', source='t', request_id='re-1'))['memory']['id']
+        vector = lambda: self.db.query('SELECT VALUE vector FROM memory_embedding WHERE memory = type::record($id);', {'id': ident})[0]
+        self.assertEqual(vector(), [])  # no concept words yet: the fake embedder returns no vector
+        self.value(self.call(coder, 'enrich_memory', memory_id=ident, topics=['refreshtopic'], explanation='x', source='y', request_id='re-enrich'))
+        self.assertTrue(vector())
+
+    def test_link_similar_is_additive_and_idempotent(self):
+        import maintenance
+        self.use_fake_embedder()
+        coder = self.worker()
+        a = self.value(self.call(coder, 'record_memory', text='Lattice tessellation gridlock', source='t', request_id='ls-1'))['memory']['id']
+        b = self.value(self.call(coder, 'record_memory', text='Gridlock lattice tessellation', source='t', request_id='ls-2'))['memory']['id']
+        first = maintenance.link_similar(self.db, minimum=0.99, space=embedding.space([0.0] * len(CONCEPTS)))
+        second = maintenance.link_similar(self.db, minimum=0.99, space=embedding.space([0.0] * len(CONCEPTS)))
+        self.assertGreaterEqual(first['linked'], 1)
+        edges = self.db.query('SELECT in, out FROM similar_to WHERE in IN [type::record($a), type::record($b)] AND out IN [type::record($a), type::record($b)];', {'a': a, 'b': b})[0]
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(first['linked'], second['linked'])
+
+
+class PruneTests(unittest.TestCase):
+    def setUp(self):
+        import datetime
+        import maintenance
+        self.maintenance = maintenance
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / 'backups').mkdir()
+        self.original, maintenance.ROOT = maintenance.ROOT, self.tmp
+        self.addCleanup(setattr, maintenance, 'ROOT', self.original)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.stems = {}
+        for name, days, verified in [('new', 1, True), ('week_a1', 30, True), ('week_a2', 31, True),
+                                     ('old_unverified', 40, False), ('ancient', 400, True)]:
+            stem = (now - datetime.timedelta(days=days)).strftime('%Y%m%dT%H%M%S') + '.000001Z'
+            self.stems[name] = stem
+            for suffix in ('.surql', '.counts.json') + (('.verify.json',) if verified else ()):
+                (self.tmp / 'backups' / (stem + suffix)).write_text('x')
+
+    def present(self):
+        return {p.name.split('.')[0] for p in (self.tmp / 'backups').glob('*.surql')}
+
+    def test_dry_run_deletes_nothing(self):
+        before = self.present()
+        plan = self.maintenance.prune()
+        self.assertIn('would_remove', plan)
+        self.assertEqual(self.present(), before)
+
+    def test_apply_keeps_recent_newest_verified_and_one_per_week_and_drops_the_rest(self):
+        plan = self.maintenance.prune(apply=True)
+        kept = self.present()
+        self.assertIn(self.stems['new'].split('.')[0], kept)
+        self.assertNotIn(self.stems['ancient'].split('.')[0], kept)
+        self.assertNotIn(self.stems['old_unverified'].split('.')[0], kept)
+        self.assertEqual(len(plan['removed']) + len(kept), 5)
+        # Every removed set loses all of its companion files.
+        self.assertFalse([p for p in (self.tmp / 'backups').glob(self.stems['ancient'] + '.*')])
 
 
 class CredentialReloadTests(unittest.TestCase):

@@ -8,12 +8,19 @@ project labels preserve origin without isolating knowledge.
 
 Tools:
 - `search_memory`: search active and disputed knowledge; opt into history when useful.
-  Matches stemmed words in text, conditions and topic names, plus exact substrings, so
-  word forms and identifiers both work. Any query term can match; results rank by relevance.
+  Matches stemmed words in text, conditions and topic names, plus exact substrings, and also
+  by meaning, so different wording can still find a lesson (`search_mode` says which ran;
+  `matched_by` says why each result matched). Results carry a `title` and, when present,
+  `use_reports` counts, which are context and not a ranking signal. `project` accepts `repo`
+  or `owner/repo`.
 - `get_memory`: inspect sources, attribution, relationships, corrections and attributed use reports.
 - `record_memory`: record a reusable finding, decision, preference, hypothesis or review
   observation, with a source and applicable conditions. Supply a request_id and reuse
-  it only for a retry of the identical contribution. When a topic name is new, the result
+  it only for a retry of the identical contribution. An optional `title` gives a short
+  readable label (derived from the text if omitted). The result may list `similar_memories`:
+  existing lessons very close in meaning. Prefer `record_memory_use` or `enrich_memory` on
+  one of those when it already says what you found; a new record is still right when yours
+  adds a different finding or different conditions. When a topic name is new, the result
   may include `topic_suggestions` with similar existing names. Add one with enrich_memory
   only if it truly applies; similar names need not mean the same thing.
 - `correct_memory`: add contrary evidence/proposed correction linked to an earlier

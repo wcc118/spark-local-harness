@@ -21,6 +21,17 @@ index, with the original index left defined. Record_memory and enrich_memory ret
 rereads its client credential file without a restart. Claude Code connects as its own
 `claude` frontier client. A daily user timer makes a restore-checked export.
 
+Issue #244 mirrors retrieval upgrades; no MCP tool is added, so worker `enabled_tools`
+and role permissions are unchanged. `search_memory` is hybrid (keyword plus meaning via a
+local embedder) and falls back to keywords when the embedder is unavailable; results report
+`search_mode` and `matched_by`. `detail: "brief"` returns id, title, snippet and conditions
+for small context windows; `get_memory` returns the full record. `record_memory` accepts an
+optional `title` and may return advisory `similar_memories` (the record is still written).
+Vectors never appear in tool results. Schema changes are additive: `memory.title`, tables
+`memory_embedding` and `retrieval` (which stores returned IDs, never query text) and the
+derived relation `similar_to`. See the integration README for measurements and maintenance
+commands.
+
 The separate local memory deployment lives in `~/projects/memory`. Service source
 is reviewed in `integrations/memory/`; the deployment directory retains its own local
 Git history. Database storage and all credentials remain outside this repository.

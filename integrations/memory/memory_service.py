@@ -24,6 +24,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 import uvicorn
 
+import embedding
 from memoryctl import ROOT, credentials, private_write
 
 
@@ -45,6 +46,40 @@ ID = re.compile(r'^memory:[A-Za-z0-9_]+$')
 
 class MemoryError(ToolError, ValueError):
     pass
+
+
+SEMANTIC_MIN = 0.58       # cosine floor for any semantic hit; nomic scores unrelated English text 0.55-0.63
+SEMANTIC_ONLY_MIN = 0.65  # a hit the keyword search missed must clear this higher bar
+SEMANTIC_BAND = 0.10      # and every hit must be within this of the best hit
+STOPWORDS = frozenset('a an and are as at be by do does for from how i in is it of on or that the this to was what when which why with'.split())
+DUPLICATE_MIN = 0.88      # cosine above which a new memory is reported as a near-duplicate
+RRF_K = 60                # reciprocal-rank-fusion constant for blending keyword and semantic ranks
+
+
+def make_title(text, limit=90):
+    """A short readable label: the first sentence or line, cut at a word boundary."""
+    text = re.sub(r'^[\s*#_>-]*(?:title|summary)\s*:\s*[*_]*\s*', '', text.strip(), flags=re.I)  # markdown label
+    first = re.split(r'(?<=[.!?])\s|\n', text.strip(), maxsplit=1)[0].strip()
+    if len(first) <= limit:
+        return first
+    return first[:limit].rsplit(' ', 1)[0].rstrip(',;:-') + '…'
+
+
+BRIEF_FIELDS = ('id', 'title', 'kind', 'status', 'project', 'matched_by', 'similarity', 'use_reports')
+
+
+def brief(row):
+    """A compact result for small context windows; get_memory returns the full record."""
+    out = {k: row[k] for k in BRIEF_FIELDS if k in row}
+    out['snippet'] = row['text'][:160] + ('…' if len(row['text']) > 160 else '')
+    if row.get('conditions'):
+        out['conditions'] = row['conditions'][:200]
+    return out
+
+
+def project_key(project):
+    """Compare 'owner/repo' and 'repo' spellings of one project as the same project."""
+    return project.rsplit('/', 1)[-1]
 
 
 def bounded(value, name, maximum=16000, required=True):
@@ -102,8 +137,9 @@ class Database:
 
 
 class MemoryStore:
-    def __init__(self, database=None):
+    def __init__(self, database=None, embedder=embedding.embed):
         self.db = database or Database()
+        self.embedder = embedder
         self.lock = threading.RLock()
 
     def get_record(self, ident):
@@ -113,29 +149,122 @@ class MemoryStore:
             raise MemoryError('Memory not found')
         return rows[0]
 
-    def search(self, query, project='', topics=None, include_history=False, limit=8, exclude_issue=''):
+    def search(self, query, project='', topics=None, include_history=False, limit=8, exclude_issue='', principal=None, detail='full'):
+        if detail not in {'full', 'brief'}:
+            raise MemoryError("detail must be 'full' or 'brief'")
         query = bounded(query, 'query', 1000)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 30:
             raise MemoryError('limit must be between 1 and 30')
         project = bounded(project, 'project', 200, False)
         topics = self.topics(topics or [])
+        exclude = bounded(exclude_issue, 'exclude_issue', 200, False)
+        pool = max(limit * 3, 20)
         # Stemmed full text over text, conditions and topic names, plus a literal substring
         # for exact identifiers. Punctuation is removed from the full-text terms only: a
         # bare '-' or '.' token would otherwise match nearly every record.
         terms = re.sub(r'[^\w]+', ' ', query).strip()
+        terms = ' '.join(w for w in terms.split() if w.lower() not in STOPWORDS) or terms
         matched, score = ('search_text @1@ $terms OR ', 'search::score(1)') if terms else ('', '0')
-        rows = self.db.query(f'''SELECT *, {score} AS relevance OMIT search_text FROM memory
+        filters = {'project': project_key(project), 'topics': topics, 'history': include_history, 'exclude': exclude}
+        keyword = self.db.query(f'''SELECT *, {score} AS relevance OMIT search_text FROM memory
             WHERE ($history OR status IN ['active', 'disputed'])
             AND ({matched}string::contains(string::lowercase(search_text), string::lowercase($q)))
-            AND ($project = '' OR project = $project)
+            AND ($project = '' OR array::last(string::split(project ?? '', '/')) = $project)
             AND (array::len($topics) = 0 OR array::any(topics, |$t| $t IN $topics))
             AND ($exclude = '' OR issue = NONE OR issue != $exclude)
-            ORDER BY relevance DESC LIMIT $limit;''',
-            {'q': query, 'terms': terms, 'project': project, 'topics': topics, 'history': include_history,
-             'exclude': bounded(exclude_issue, 'exclude_issue', 200, False), 'limit': limit})[0]
-        return {'memories': rows, 'hint': 'Disputed records are unresolved evidence. Inspect links before applying. '
+            ORDER BY relevance DESC LIMIT $pool;''',
+            dict(filters, q=query, terms=terms, pool=pool))[0]
+        semantic = self.semantic_hits(query, filters, pool)
+        rows, mode = self.fuse(keyword, semantic, limit)
+        self.attach_use_reports(rows)
+        self.log_retrieval(principal, project, mode, rows)
+        return {'memories': [brief(r) for r in rows] if detail == 'brief' else rows, 'search_mode': mode,
+                'hint': 'Disputed records are unresolved evidence. Inspect links before applying. '
                 'Project filters are optional. If you actually apply a lesson, record_memory_use with the outcome '
-                'helps later readers judge it; reading or finding a lesson alone is not a use.'}
+                'helps later readers judge it; reading or finding a lesson alone is not a use. '
+                'use_reports counts are agent reports, shown for context and not used to rank.'}
+
+    def semantic_hits(self, query, filters, pool):
+        """Nearest memories by meaning as {id: similarity}; empty when no embedder or vectors exist."""
+        vector = self.embedder(query, query=True)
+        if not vector:
+            return {}
+        rows = self.db.query('''SELECT memory AS id, vector::similarity::cosine(vector, $v) AS similarity
+            FROM memory_embedding
+            WHERE model = $model AND ($history OR memory.status IN ['active', 'disputed'])
+            AND ($project = '' OR array::last(string::split(memory.project ?? '', '/')) = $project)
+            AND (array::len($topics) = 0 OR array::any(memory.topics, |$t| $t IN $topics))
+            AND ($exclude = '' OR memory.issue = NONE OR memory.issue != $exclude)
+            ORDER BY similarity DESC LIMIT $pool;''',
+            dict(filters, v=vector, model=embedding.space(vector), pool=pool))[0]
+        floor = max(SEMANTIC_MIN, max((row['similarity'] for row in rows), default=0) - SEMANTIC_BAND)
+        return {str(row['id']): row['similarity'] for row in rows if row['similarity'] >= floor}
+
+    def fuse(self, keyword, semantic, limit):
+        """Reciprocal-rank fusion of the keyword and semantic rankings."""
+        scores, found = {}, {}
+        for rank, row in enumerate(keyword):
+            ident = str(row['id'])
+            found[ident] = dict(row, matched_by='keyword')
+            scores[ident] = 1 / (RRF_K + rank)
+        missing = [ident for ident in semantic if ident not in found]
+        fetched = {}
+        if missing:
+            params = {f'i{n}': ident for n, ident in enumerate(missing)}
+            sql = ' '.join(f'SELECT * OMIT search_text FROM type::record($i{n});' for n in range(len(missing)))
+            for result in self.db.query(sql, params):
+                for row in result:
+                    fetched[str(row['id'])] = row
+        for rank, (ident, similarity) in enumerate(sorted(semantic.items(), key=lambda item: -item[1])):
+            if ident in found:
+                found[ident]['matched_by'] = 'both'
+            elif ident in fetched and similarity >= SEMANTIC_ONLY_MIN:
+                found[ident] = dict(fetched[ident], matched_by='semantic')
+            else:
+                continue
+            found[ident]['similarity'] = round(similarity, 3)
+            scores[ident] = scores.get(ident, 0) + 1 / (RRF_K + rank)
+        ordered = sorted(found, key=lambda ident: -scores[ident])[:limit]
+        return [found[ident] for ident in ordered], ('hybrid' if semantic else 'keyword')
+
+    def attach_use_reports(self, rows):
+        """Show agent use-report counts per memory without letting them change the ranking."""
+        if not rows:
+            return
+        params = {f'i{n}': str(row['id']) for n, row in enumerate(rows)}
+        targets = ', '.join(f'type::record($i{n})' for n in range(len(rows)))
+        counts = self.db.query(f"""SELECT target, outcome, count() AS n FROM memory_event
+            WHERE action = 'use' AND target IN [{targets}] GROUP BY target, outcome;""", params)[0]
+        by_target = {}
+        for item in counts:
+            by_target.setdefault(str(item['target']), {})[item['outcome']] = item['n']
+        for row in rows:
+            if str(row['id']) in by_target:
+                row['use_reports'] = by_target[str(row['id'])]
+
+    def log_retrieval(self, principal, project, mode, rows):
+        """Best-effort usage log (no query text); a logging failure never fails a search."""
+        if principal is None:
+            return
+        try:
+            params = {f'i{n}': str(row['id']) for n, row in enumerate(rows)}
+            returned = ', '.join(f'type::record($i{n})' for n in range(len(rows)))
+            params.update(actor=principal.actor, role=principal.role, repository=principal.repository,
+                          issue=principal.issue, project=project, mode=mode, count=len(rows))
+            self.db.query(f"""CREATE retrieval SET actor=$actor, role=$role, repository=$repository, issue=$issue,
+                project=$project, mode=$mode, count=$count, results=[{returned}], created_at=time::now();""", params)
+        except MemoryError:
+            pass
+
+    def nearest(self, vector, limit=3, exclude=()):
+        """Existing active or disputed memories very close in meaning to `vector`."""
+        rows = self.db.query('''SELECT memory AS id, memory.title AS title, memory.status AS status,
+            vector::similarity::cosine(vector, $v) AS similarity FROM memory_embedding
+            WHERE model = $model AND memory.status IN ['active', 'disputed']
+            ORDER BY similarity DESC LIMIT $limit;''',
+            dict(v=vector, model=embedding.space(vector), limit=limit + len(exclude)))[0]
+        return [dict(id=str(r['id']), title=r['title'], status=r['status'], similarity=round(r['similarity'], 3))
+                for r in rows if r['similarity'] >= DUPLICATE_MIN and str(r['id']) not in exclude][:limit]
 
     def topic_suggestions(self, topics):
         """Existing topic names resembling each not-yet-existing topic; suggestions only, never merged."""
@@ -228,7 +357,20 @@ class MemoryStore:
                            'COMMIT TRANSACTION;']
             self.db.query('\n'.join(statements), params)
             stored = self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0][0]
+            self.refresh_embedding(memory_id)
             return self.with_suggestions({'memory': self.get_record(memory_id), 'event': stored, 'replayed': False}, suggestions)
+
+    def refresh_embedding(self, memory_id):
+        """Re-embed after topics change, since the vector covers topic names. Best effort; never fails a write."""
+        try:
+            record = self.get_record(memory_id)
+            vector = self.embedder(embedding.document_text(record['text'], record.get('conditions') or '', record.get('topics') or []))
+            if vector:
+                self.db.query('UPSERT type::record($eid) SET memory=type::record($id), model=$model, vector=$vector, created_at=time::now();',
+                              {'eid': 'memory_embedding:' + memory_id.split(':', 1)[1], 'id': memory_id,
+                               'model': embedding.space(vector), 'vector': vector})
+        except MemoryError:
+            pass
 
     def inspect(self, memory_id):
         record = self.get_record(memory_id)
@@ -243,7 +385,7 @@ class MemoryStore:
             related.extend(self.db.query('SELECT * OMIT search_text FROM type::record($id);', {'id': ident})[0])
         return {'memory': record, 'relations': edges[0], 'related': related, 'events': edges[1]}
 
-    def write(self, principal, text, source, request_id, topics=None, project='', kind='finding', conditions='', target=None, relation=None):
+    def write(self, principal, text, source, request_id, topics=None, project='', kind='finding', conditions='', target=None, relation=None, title=''):
         if principal.role not in {'coder','reviewer','frontier'}:
             raise MemoryError('This identity has read-only memory access')
         text = bounded(text, 'text')
@@ -251,11 +393,14 @@ class MemoryStore:
         request_id = bounded(request_id, 'request_id', 200)
         project = bounded(project, 'project', 200, False)
         conditions = bounded(conditions, 'conditions', 4000, False)
+        title = bounded(title, 'title', 120, False)
         topics = self.topics(topics or [])
         if kind not in {'finding','decision','preference','hypothesis','correction','review'}:
             raise MemoryError('Invalid memory kind')
         payload = dict(text=text, source=source, topics=topics, project=project, kind=kind, conditions=conditions,
                        target=target, relation=relation)
+        if title:  # absent unless supplied, so retries of pre-title requests keep their fingerprint
+            payload['title'] = title
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         key = hashlib.sha256(json.dumps([principal.__dict__,request_id],sort_keys=True).encode()).hexdigest()[:32]
         ident = 'memory:' + key
@@ -268,7 +413,10 @@ class MemoryStore:
             if target:
                 self.get_record(target)
             suggestions = self.topic_suggestions(topics)
+            vector = self.embedder(embedding.document_text(text, conditions, topics))
+            similar = self.nearest(vector, exclude={target} if target else ()) if vector else []
             data = dict(text=text, source=source, topics=topics, kind=kind, status='active', conditions=conditions,
+                        title=title or make_title(text),
                         actor=principal.actor, role=principal.role, run_id=principal.run_id,
                         repository=principal.repository, issue=principal.issue, fingerprint=fingerprint)
             if project:
@@ -290,11 +438,21 @@ class MemoryStore:
                 # A worker can challenge, but cannot unilaterally supersede another claim.
                 statements += ['RELATE (type::record($id))->challenges->(type::record($target));',
                                "UPDATE type::record($target) SET status='disputed' WHERE status='active';"]
+            if vector:
+                params.update(embedding_id='memory_embedding:' + key, vector=vector, model=embedding.space(vector))
+                statements.append('CREATE type::record($embedding_id) SET memory=type::record($id), model=$model, '
+                                  'vector=$vector, created_at=time::now();')
             params['event'] = dict(action=relation or 'record', actor=principal.actor, role=principal.role,
                                    run_id=principal.run_id, issue=principal.issue, source=source)
             statements += ['CREATE memory_event SET action=$event.action, actor=$event.actor, role=$event.role, run_id=$event.run_id, issue=$event.issue, source=$event.source, target=type::record($id), created_at=time::now();', 'COMMIT TRANSACTION;']
             self.db.query('\n'.join(statements), params)
-            return self.with_suggestions({'memory': self.get_record(ident), 'replayed': False}, suggestions)
+            result = self.with_suggestions({'memory': self.get_record(ident), 'replayed': False}, suggestions)
+            if similar:
+                result['similar_memories'] = similar
+                result['similar_hint'] = ('These existing memories are very close in meaning. If one already says this, '
+                                          'prefer record_memory_use to corroborate it or enrich_memory to add context; '
+                                          'a new record is still valid when yours adds a different finding or conditions.')
+            return result
 
     def record_use(self, principal, memory_id, outcome, explanation, source, request_id):
         """Append an attributed observation; reporting use never promotes a claim."""
@@ -364,9 +522,9 @@ def build_server(store):
     server = MCPServer(name='memory', version='1.0.0', instructions='Shared cross-project lessons. Choose your own searches; inspect evidence and conditions. Record useful findings. No SQL or deletion tool. Memory failures do not block your task.')
 
     @server.tool()
-    def search_memory(query: str, project: str = '', topics: list[str] | None = None, include_history: bool = False, limit: int = 8, exclude_issue: str = '') -> dict:
-        """Search across projects by default. Active and disputed findings are returned; history is opt-in. exclude_issue can preserve current-review independence."""
-        return store.search(query, project, topics, include_history, limit, exclude_issue)
+    def search_memory(query: str, project: str = '', topics: list[str] | None = None, include_history: bool = False, limit: int = 8, exclude_issue: str = '', detail: str = 'full') -> dict:
+        """Search across projects by default, by keyword and by meaning. detail='brief' returns id, title, snippet and conditions only, for small context windows; use get_memory for the full lesson. Active and disputed findings are returned; history is opt-in. exclude_issue can preserve current-review independence. A project filter accepts 'repo' or 'owner/repo'."""
+        return store.search(query, project, topics, include_history, limit, exclude_issue, CURRENT.get(), detail)
 
     @server.tool()
     def get_memory(memory_id: str) -> dict:
@@ -384,9 +542,9 @@ def build_server(store):
         return store.enrich(CURRENT.get(), memory_id, topics, explanation, source, request_id)
 
     @server.tool()
-    def record_memory(text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', kind: str = 'finding', conditions: str = '') -> dict:
-        """Record reusable knowledge with evidence and applicability. Caller attribution is authenticated. Reuse request_id only to retry the identical write."""
-        return store.write(CURRENT.get(), text, source, request_id, topics, project, kind, conditions)
+    def record_memory(text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', kind: str = 'finding', conditions: str = '', title: str = '') -> dict:
+        """Record reusable knowledge with evidence and applicability. Caller attribution is authenticated. Optional title is a short readable label (derived from the text if omitted). The result may list similar_memories to corroborate or enrich instead of duplicating. Reuse request_id only to retry the identical write."""
+        return store.write(CURRENT.get(), text, source, request_id, topics, project, kind, conditions, title=title)
 
     @server.tool()
     def correct_memory(target_id: str, text: str, source: str, request_id: str, topics: list[str] | None = None, project: str = '', conditions: str = '') -> dict:

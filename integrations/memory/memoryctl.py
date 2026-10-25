@@ -60,13 +60,14 @@ def bootstrap():
     print('Schema and database-scoped reader/writer accounts ready.')
 
 
-TABLES = ['memory', 'memory_event', 'topic', 'project', 'concerns', 'discovered_in', 'supersedes', 'challenges']
+TABLES = ['memory', 'memory_event', 'topic', 'project', 'concerns', 'discovered_in', 'supersedes', 'challenges',
+          'memory_embedding']
 
 
-def counts(database=DB):
-    sql = f'USE NS {NS} DB {database}; ' + ' '.join(f'SELECT count() FROM {t} GROUP ALL;' for t in TABLES)
+def counts(database=DB, tables=TABLES):
+    sql = f'USE NS {NS} DB {database}; ' + ' '.join(f'SELECT count() FROM {t} GROUP ALL;' for t in tables)
     rows = query(sql)[1:]
-    return {t: (r['result'][0]['count'] if r['result'] else 0) for t, r in zip(TABLES, rows)}
+    return {t: (r['result'][0]['count'] if r['result'] else 0) for t, r in zip(tables, rows)}
 
 
 def backup():
@@ -99,7 +100,8 @@ def verify_backup(path):
         req = urllib.request.Request(URL + '/import', data=path.read_bytes(), headers=h, method='POST')
         with urllib.request.urlopen(req, timeout=120) as response:
             response.read()
-        restored = counts(database)
+        # A backup taken before a table existed recorded no count for it; count only what it recorded.
+        restored = counts(database, list(expected))
     finally:
         query(f'USE NS {NS}; REMOVE DATABASE {database};')
     result = {'backup': path.name, 'verified_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -112,9 +114,13 @@ def verify_backup(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['bootstrap', 'query', 'backup', 'verify-backup', 'headers', 'connection'])
+    parser.add_argument('command', choices=['bootstrap', 'query', 'backup', 'verify-backup', 'headers', 'connection',
+                                            'backfill', 'stats', 'review', 'prune', 'offsite', 'link-similar'])
     parser.add_argument('path', nargs='?', help='verify-backup: export to check (default: newest)')
     parser.add_argument('--verify', action='store_true', help='backup: restore-check the new export')
+    parser.add_argument('--apply', action='store_true', help='prune: actually delete (default prints the plan)')
+    parser.add_argument('--min', type=float, default=0.85, help='link-similar: minimum cosine')
+    parser.add_argument('--refresh', action='store_true', help='backfill: re-embed memories that already have a vector')
     parser.add_argument('--role', choices=['admin', 'memory_writer', 'memory_reader'], default='memory_reader')
     args = parser.parse_args()
     if args.command == 'bootstrap':
@@ -127,6 +133,18 @@ def main():
         user, password = credentials(args.role)
         print(f'Endpoint: {URL}\nNamespace: {NS}\nDatabase: {DB}\nAuthentication: '+('Root' if args.role == 'admin' else 'Database'))
         print(f'Username: {user}\nPassword: {password}')
+    elif args.command in {'backfill', 'stats', 'review', 'prune', 'offsite', 'link-similar'}:
+        import maintenance
+        if args.command == 'backfill':
+            print(json.dumps(maintenance.backfill(refresh=args.refresh)))
+        elif args.command == 'prune':
+            print(json.dumps(maintenance.prune(apply=args.apply)))
+        elif args.command == 'offsite':
+            print(json.dumps(maintenance.offsite()))
+        elif args.command == 'link-similar':
+            print(json.dumps(maintenance.link_similar(minimum=args.min)))
+        else:
+            print(getattr(maintenance, args.command)())
     elif args.command == 'backup':
         path = backup()
         print(path)

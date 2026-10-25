@@ -24,3 +24,17 @@ DEFINE FIELD IF NOT EXISTS search_text ON memory TYPE string VALUE string::join(
 DEFINE INDEX IF NOT EXISTS memory_search_stem ON memory FIELDS search_text FULLTEXT ANALYZER memory_stem BM25;
 -- Idempotent backfill of the derived field for records written before it existed.
 UPDATE memory WHERE search_text = NONE;
+-- Readable label for browsers and results (the record ID is a hash). Additive and optional.
+DEFINE FIELD IF NOT EXISTS title ON memory TYPE option<string>;
+-- Semantic vectors live beside, not inside, memory so records stay readable. `model` names the
+-- embedding space; only vectors with the same model are compared.
+DEFINE TABLE IF NOT EXISTS memory_embedding SCHEMALESS COMMENT 'Derived vectors; safe to rebuild from memory text.';
+DEFINE FIELD IF NOT EXISTS memory ON memory_embedding TYPE record<memory>;
+DEFINE FIELD IF NOT EXISTS model ON memory_embedding TYPE string;
+DEFINE FIELD IF NOT EXISTS vector ON memory_embedding TYPE array<float>;
+DEFINE INDEX IF NOT EXISTS memory_embedding_memory ON memory_embedding FIELDS memory UNIQUE;
+-- Which memories searches return, for usage statistics. Stores no query text.
+DEFINE TABLE IF NOT EXISTS retrieval SCHEMALESS COMMENT 'Search result log: who searched, mode and returned memory IDs; never the query.';
+-- Derived "close in meaning" links between memories, recomputed by `memoryctl.py link-similar`.
+DEFINE TABLE IF NOT EXISTS similar_to TYPE RELATION IN memory OUT memory COMMENT 'Derived from embeddings; safe to rebuild.';
+DEFINE FIELD IF NOT EXISTS similarity ON similar_to TYPE float;
