@@ -60,9 +60,61 @@ def bootstrap():
     print('Schema and database-scoped reader/writer accounts ready.')
 
 
+TABLES = ['memory', 'memory_event', 'topic', 'project', 'concerns', 'discovered_in', 'supersedes', 'challenges']
+
+
+def counts(database=DB):
+    sql = f'USE NS {NS} DB {database}; ' + ' '.join(f'SELECT count() FROM {t} GROUP ALL;' for t in TABLES)
+    rows = query(sql)[1:]
+    return {t: (r['result'][0]['count'] if r['result'] else 0) for t, r in zip(TABLES, rows)}
+
+
+def backup():
+    """Export with a count snapshot; retry if writes landed during the export."""
+    for _ in range(3):
+        before = counts()
+        h = headers('admin'); h['Accept'] = 'application/octet-stream'
+        req = urllib.request.Request(URL + '/export', headers=h)
+        with urllib.request.urlopen(req, timeout=60) as response:
+            body = response.read().decode()
+        if counts() == before:
+            break
+    else:
+        raise RuntimeError('Knowledge changed during every export attempt; no consistent snapshot taken')
+    name = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    path = ROOT / 'backups' / (name + '.surql')
+    private_write(path, body)
+    private_write(path.with_suffix('.counts.json'), json.dumps(before, indent=2))
+    return path
+
+
+def verify_backup(path):
+    """Import into a throwaway database, compare counts with the export snapshot, then remove it."""
+    path = Path(path)
+    expected = json.loads(path.with_suffix('.counts.json').read_text())
+    database = 'restore_check_' + secrets.token_hex(6)
+    query(f'USE NS {NS}; DEFINE DATABASE {database};')
+    try:
+        h = headers('admin'); h['surreal-db'] = database; h['Content-Type'] = 'text/plain'
+        req = urllib.request.Request(URL + '/import', data=path.read_bytes(), headers=h, method='POST')
+        with urllib.request.urlopen(req, timeout=120) as response:
+            response.read()
+        restored = counts(database)
+    finally:
+        query(f'USE NS {NS}; REMOVE DATABASE {database};')
+    result = {'backup': path.name, 'verified_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'expected': expected, 'restored': restored, 'ok': restored == expected}
+    private_write(path.with_suffix('.verify.json'), json.dumps(result, indent=2))
+    if not result['ok']:
+        raise RuntimeError(f'Restore check failed for {path.name}: expected {expected}, restored {restored}')
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['bootstrap', 'query', 'backup', 'headers', 'connection'])
+    parser.add_argument('command', choices=['bootstrap', 'query', 'backup', 'verify-backup', 'headers', 'connection'])
+    parser.add_argument('path', nargs='?', help='verify-backup: export to check (default: newest)')
+    parser.add_argument('--verify', action='store_true', help='backup: restore-check the new export')
     parser.add_argument('--role', choices=['admin', 'memory_writer', 'memory_reader'], default='memory_reader')
     args = parser.parse_args()
     if args.command == 'bootstrap':
@@ -76,13 +128,13 @@ def main():
         print(f'Endpoint: {URL}\nNamespace: {NS}\nDatabase: {DB}\nAuthentication: '+('Root' if args.role == 'admin' else 'Database'))
         print(f'Username: {user}\nPassword: {password}')
     elif args.command == 'backup':
-        h = headers('admin'); h['Accept'] = 'application/octet-stream'
-        req = urllib.request.Request(URL + '/export', headers=h)
-        name = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
-        path = ROOT / 'backups' / (name + '.surql')
-        with urllib.request.urlopen(req, timeout=60) as response:
-            private_write(path, response.read().decode())
+        path = backup()
         print(path)
+        if args.verify:
+            print('Restore check passed:', json.dumps(verify_backup(path)['restored']))
+    elif args.command == 'verify-backup':
+        path = args.path or max((ROOT / 'backups').glob('*.surql'))
+        print('Restore check passed:', json.dumps(verify_backup(path)['restored']))
 
 
 if __name__ == '__main__':

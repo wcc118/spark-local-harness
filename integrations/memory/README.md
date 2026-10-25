@@ -58,14 +58,25 @@ python3 memoryctl.py query < examples.surql
 ```
 
 For writes, add `--role memory_writer`. Sources and conditions should accompany
-findings. Full-text search is enabled; semantic embeddings and automatic extraction
-are not. See `MEMORY.md` for shared usage conventions.
+findings. Search is stemmed full text (English snowball) over each memory's text,
+conditions and topic names, held in the derived `search_text` field. A literal substring
+fallback keeps exact identifiers matchable. Multi-word queries match any term and rank
+by BM25. The original `memory_search` index remains defined but unused by the service.
+Semantic embeddings and automatic extraction are not enabled. See `MEMORY.md` for shared
+usage conventions.
 
 ## Agent connections installed on this workstation
 
 - `~/.codex/config.toml`: narrow memory tools with the Codex/frontier identity;
   `client_headers.py` supplies the private bearer credential. Codex can record,
   propose corrections, reconcile and enrich. Discover_topics is also available.
+  `enabled_tools` must list every tool; it listed only five until issue #242. Codex
+  0.164 defers MCP tools behind a metadata catalog, so a session may report "no memory
+  tools" until it searches that catalog. A fresh session found
+  `mcp__memory__record_memory_use` there after the allowlist fix.
+- Claude Code (user scope, `~/.claude.json`): all tools with its own `claude`
+  frontier identity, registered via `headersHelper` running
+  `client_headers.py claude`. Authorship is recorded as `claude`, not `codex`.
 - Interactive OpenCode uses a contributor identity. Headless workers do not inherit
   interactive MCP servers: issue #214 explicitly provisions per-run credentials into
   Qwen Code and OpenCode configurations, permitting coder/reviewer contributions.
@@ -91,12 +102,23 @@ model context; use the local model runtime for inference that must remain local.
 ## Backups and recovery
 
 ```sh
-python3 memoryctl.py backup
+python3 memoryctl.py backup --verify
+python3 memoryctl.py verify-backup [backups/NAME.surql]   # default: newest
+systemctl --user list-timers memory-backup.timer
 ```
 
 This exports `personal/knowledge` into a timestamped `backups/*.surql` file with
-owner-only permissions. Backups can contain database user definitions/password hashes;
-keep them private. This is an on-demand export, not a scheduled or off-machine backup.
+owner-only permissions, plus a `.counts.json` table-count snapshot. The snapshot is
+re-taken if writes land during the export. `--verify` and `verify-backup` import the
+export into a temporary `restore_check_*` database, compare counts, record
+`.verify.json`, and always remove the temporary database. Backups can contain
+database user definitions/password hashes; keep them private.
+
+The enabled user timer `memory-backup.timer` (template in `deployment/`) runs a
+verified export daily around 03:30 local time; `Persistent=true` catches up after
+downtime. It is on-machine only, not an off-machine backup, and old exports are never
+deleted automatically. Pruning is an owner decision. Check failures with
+`journalctl --user -u memory-backup.service`.
 Preserve `.env` and `.local/accounts.json` separately in secure storage. Root users are
 outside the database export. For recovery, import an export into a fresh instance
 using SurrealDB's import command; do not overwrite a live database casually.
@@ -142,6 +164,11 @@ The workstation-specific unit template is in `deployment/`. Adjust paths if movi
 Service/client secrets are owner-only files in `.local`. Do not copy these into
 worker packets or logs. Rotate the signing key to revoke all run credentials; rotate
 individual client/issuer tokens to revoke those identities and update their consumers.
+The service rereads `.local/service-auth.json` when its modification time changes, so
+adding, rotating or revoking clients needs no restart. An unreadable or invalid file is
+ignored and the last valid configuration stays in force (the journal logs which happened).
+Client roles: `frontier` (codex, claude), `coder` (opencode); worker roles are issued
+per run.
 The service protects its MCP surface, not an unrestricted workstation owner's shell.
 Direct SQL administration and the human graph-browser login remain separate.
 
@@ -151,6 +178,8 @@ corrections. `memory_event` records lifecycle actions. Writes use request_id for
 retry deduplication and transactions for records/edges/state together. Codex can
 reconcile competing claims by superseding either with an active or disputed
 replacement, marking that replacement active and preserving both histories.
+Four records seeded by direct SQL during installation have no attested actor; each
+carries a `provenance` memory_event saying so, without changing the record.
 No routine MCP operation deletes records. Owner-directed administrative deletion
 must also consider relationships and copies in backups; it is not automated here.
 

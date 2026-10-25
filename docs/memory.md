@@ -12,6 +12,15 @@ adds topic edges and audit events to existing memories without changing text, so
 or status. Both tools are read/write appropriate based on role and contribute to
 structured metadata without affecting claim integrity.
 
+Issue #242 widens retrieval and adds operations. Search_memory now uses stemmed
+full text over each memory's text, conditions and topic names, with a literal
+substring fallback for identifiers. Before this, "isolation" found nothing while
+"isolated" found ten. The change is additive: a derived `search_text` field and a new
+index, with the original index left defined. Record_memory and enrich_memory return
+`topic_suggestions` for new topic names; nothing is merged automatically. The service
+rereads its client credential file without a restart. Claude Code connects as its own
+`claude` frontier client. A daily user timer makes a restore-checked export.
+
 The separate local memory deployment lives in `~/projects/memory`. Service source
 is reviewed in `integrations/memory/`; the deployment directory retains its own local
 Git history. Database storage and all credentials remain outside this repository.
@@ -36,7 +45,8 @@ rotating the service signing key revokes all worker tokens.
 
 Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory,
 record_memory_use, discover_topics, enrich_memory. Helper tools: search_memory,
-get_memory, discover_topics. Codex additionally has resolve_memory. No routine
+get_memory, discover_topics. Frontier clients (Codex and Claude Code) additionally
+have resolve_memory. No routine
 client receives arbitrary SQL or a deletion tool from this service. The user/admin
 can still manage the underlying database directly. These MCP boundaries are not
 a sandbox against the workstation owner or an unrestricted host shell.

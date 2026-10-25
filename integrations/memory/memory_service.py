@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import difflib
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -107,7 +108,7 @@ class MemoryStore:
 
     def get_record(self, ident):
         ident = record_id(ident)
-        rows = self.db.query('SELECT * FROM type::record($id);', {'id': ident})[0]
+        rows = self.db.query('SELECT * OMIT search_text FROM type::record($id);', {'id': ident})[0]
         if not rows:
             raise MemoryError('Memory not found')
         return rows[0]
@@ -118,17 +119,54 @@ class MemoryStore:
             raise MemoryError('limit must be between 1 and 30')
         project = bounded(project, 'project', 200, False)
         topics = self.topics(topics or [])
-        # Full text plus literal substring, parameter-bound (never query interpolation).
-        rows = self.db.query('''SELECT *, search::score(0) AS relevance FROM memory
+        # Stemmed full text over text, conditions and topic names, plus a literal substring
+        # for exact identifiers. Punctuation is removed from the full-text terms only: a
+        # bare '-' or '.' token would otherwise match nearly every record.
+        terms = re.sub(r'[^\w]+', ' ', query).strip()
+        matched, score = ('search_text @1@ $terms OR ', 'search::score(1)') if terms else ('', '0')
+        rows = self.db.query(f'''SELECT *, {score} AS relevance OMIT search_text FROM memory
             WHERE ($history OR status IN ['active', 'disputed'])
-            AND (text @0@ $q OR string::contains(string::lowercase(text), string::lowercase($q)))
+            AND ({matched}string::contains(string::lowercase(search_text), string::lowercase($q)))
             AND ($project = '' OR project = $project)
             AND (array::len($topics) = 0 OR array::any(topics, |$t| $t IN $topics))
             AND ($exclude = '' OR issue = NONE OR issue != $exclude)
             ORDER BY relevance DESC LIMIT $limit;''',
-            {'q': query, 'project': project, 'topics': topics, 'history': include_history,
+            {'q': query, 'terms': terms, 'project': project, 'topics': topics, 'history': include_history,
              'exclude': bounded(exclude_issue, 'exclude_issue', 200, False), 'limit': limit})[0]
-        return {'memories': rows, 'hint': 'Disputed records are unresolved evidence. Inspect links before applying. Project filters are optional.'}
+        return {'memories': rows, 'hint': 'Disputed records are unresolved evidence. Inspect links before applying. '
+                'Project filters are optional. If you actually apply a lesson, record_memory_use with the outcome '
+                'helps later readers judge it; reading or finding a lesson alone is not a use.'}
+
+    def topic_suggestions(self, topics):
+        """Existing topic names resembling each not-yet-existing topic; suggestions only, never merged."""
+        if not topics:
+            return {}
+        existing = self.db.query('SELECT VALUE name FROM topic;')[0]
+        names = {name.lower(): name for name in existing if isinstance(name, str)}
+        suggestions = {}
+        for topic in topics:
+            if topic.lower() in names:
+                continue
+            words = {w for w in re.split(r'[^a-z0-9]+', topic.lower()) if len(w) >= 3}
+            scored = []
+            for low, name in names.items():
+                other = {w for w in re.split(r'[^a-z0-9]+', low) if len(w) >= 3}
+                shared = any(a == b or (min(len(a), len(b)) >= 4 and (a.startswith(b[:4]) and b.startswith(a[:4])))
+                             for a in words for b in other)
+                ratio = difflib.SequenceMatcher(None, topic.lower(), low).ratio()
+                if shared or ratio >= 0.75:
+                    scored.append((ratio + shared, name))
+            if scored:
+                suggestions[topic] = [name for _, name in sorted(scored, key=lambda s: (-s[0], s[1]))[:5]]
+        return suggestions
+
+    @staticmethod
+    def with_suggestions(result, suggestions):
+        if suggestions:
+            result['topic_suggestions'] = suggestions
+            result['topic_hint'] = ('New topic names were created. Similar existing names are listed; if one also '
+                                    'applies, enrich_memory can add it. Similar names need not mean the same thing.')
+        return result
 
     @staticmethod
     def topics(values):
@@ -167,6 +205,7 @@ class MemoryStore:
                     raise MemoryError('request_id already used for different enrichment')
                 return {'memory': self.get_record(memory_id), 'event': previous[0], 'replayed': True}
             record = self.get_record(memory_id)
+            suggestions = self.topic_suggestions(topics)
             linked = {edge['out'] for edge in self.db.query(
                 'SELECT out FROM concerns WHERE in = type::record($id);', {'id': memory_id})[0]}
             event = dict(action='enrich', topics=topics,
@@ -189,7 +228,7 @@ class MemoryStore:
                            'COMMIT TRANSACTION;']
             self.db.query('\n'.join(statements), params)
             stored = self.db.query('SELECT * FROM type::record($id);', {'id': event_id})[0][0]
-            return {'memory': self.get_record(memory_id), 'event': stored, 'replayed': False}
+            return self.with_suggestions({'memory': self.get_record(memory_id), 'event': stored, 'replayed': False}, suggestions)
 
     def inspect(self, memory_id):
         record = self.get_record(memory_id)
@@ -201,7 +240,7 @@ class MemoryStore:
             neighbors.update(v for k,v in edge.items() if k in {'in','out'} and isinstance(v,str))
         related = []
         for ident in sorted(neighbors - {memory_id})[:30]:
-            related.extend(self.db.query('SELECT * FROM type::record($id);', {'id': ident})[0])
+            related.extend(self.db.query('SELECT * OMIT search_text FROM type::record($id);', {'id': ident})[0])
         return {'memory': record, 'relations': edges[0], 'related': related, 'events': edges[1]}
 
     def write(self, principal, text, source, request_id, topics=None, project='', kind='finding', conditions='', target=None, relation=None):
@@ -221,13 +260,14 @@ class MemoryStore:
         key = hashlib.sha256(json.dumps([principal.__dict__,request_id],sort_keys=True).encode()).hexdigest()[:32]
         ident = 'memory:' + key
         with self.lock:
-            existing = self.db.query('SELECT * FROM type::record($id);', {'id': ident})[0]
+            existing = self.db.query('SELECT * OMIT search_text FROM type::record($id);', {'id': ident})[0]
             if existing:
                 if existing[0].get('fingerprint') != fingerprint:
                     raise MemoryError('request_id already used for different content; use a new request_id')
                 return {'memory': existing[0], 'replayed': True}
             if target:
                 self.get_record(target)
+            suggestions = self.topic_suggestions(topics)
             data = dict(text=text, source=source, topics=topics, kind=kind, status='active', conditions=conditions,
                         actor=principal.actor, role=principal.role, run_id=principal.run_id,
                         repository=principal.repository, issue=principal.issue, fingerprint=fingerprint)
@@ -254,7 +294,7 @@ class MemoryStore:
                                    run_id=principal.run_id, issue=principal.issue, source=source)
             statements += ['CREATE memory_event SET action=$event.action, actor=$event.actor, role=$event.role, run_id=$event.run_id, issue=$event.issue, source=$event.source, target=type::record($id), created_at=time::now();', 'COMMIT TRANSACTION;']
             self.db.query('\n'.join(statements), params)
-            return {'memory': self.get_record(ident), 'replayed': False}
+            return self.with_suggestions({'memory': self.get_record(ident), 'replayed': False}, suggestions)
 
     def record_use(self, principal, memory_id, outcome, explanation, source, request_id):
         """Append an attributed observation; reporting use never promotes a claim."""
@@ -366,13 +406,40 @@ def build_server(store):
     return server
 
 
+def valid_auth_config(config):
+    return (isinstance(config, dict) and isinstance(config.get('issuer_token'), str) and config['issuer_token']
+            and isinstance(config.get('signing_key'), str) and config['signing_key']
+            and isinstance(config.get('clients'), dict)
+            and all(isinstance(c, dict) and c.get('role') in {'frontier', 'coder', 'reviewer', 'helper'}
+                    and isinstance(c.get('token'), str) and len(c['token']) >= 32 for c in config['clients'].values()))
+
+
 class AuthenticatedApp:
-    def __init__(self, app, config):
-        self.app, self.config = app, config
+    def __init__(self, app, config, path=None):
+        self.app, self.config, self.path = app, config, path
+        self.mtime = path.stat().st_mtime_ns if path else None
+
+    def reload(self):
+        """Pick up added or rotated clients without a restart; keep the last valid config otherwise."""
+        try:
+            mtime = self.path.stat().st_mtime_ns
+            if mtime == self.mtime:
+                return
+            config = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return
+        self.mtime = mtime
+        if valid_auth_config(config):
+            self.config = config
+            print('memory: reloaded client credentials', flush=True)
+        else:
+            print('memory: ignored invalid client credential file; previous configuration kept', flush=True)
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
             return await self.app(scope, receive, send)
+        if self.path:
+            self.reload()
         request = Request(scope, receive)
         if request.url.path == '/health' and request.method == 'GET':
             return await JSONResponse({'status':'ok'})(scope, receive, send)
@@ -425,7 +492,7 @@ def main():
     config = provision()
     server = build_server(MemoryStore())
     app = server.streamable_http_app(stateless_http=True,json_response=True)
-    uvicorn.run(AuthenticatedApp(app,config),host='127.0.0.1',port=9602,access_log=False)
+    uvicorn.run(AuthenticatedApp(app,config,ROOT/'.local/service-auth.json'),host='127.0.0.1',port=9602,access_log=False)
 
 
 if __name__ == '__main__':

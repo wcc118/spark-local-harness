@@ -8,10 +8,14 @@ project labels preserve origin without isolating knowledge.
 
 Tools:
 - `search_memory`: search active and disputed knowledge; opt into history when useful.
+  Matches stemmed words in text, conditions and topic names, plus exact substrings, so
+  word forms and identifiers both work. Any query term can match; results rank by relevance.
 - `get_memory`: inspect sources, attribution, relationships, corrections and attributed use reports.
 - `record_memory`: record a reusable finding, decision, preference, hypothesis or review
   observation, with a source and applicable conditions. Supply a request_id and reuse
-  it only for a retry of the identical contribution.
+  it only for a retry of the identical contribution. When a topic name is new, the result
+  may include `topic_suggestions` with similar existing names. Add one with enrich_memory
+  only if it truly applies; similar names need not mean the same thing.
 - `correct_memory`: add contrary evidence/proposed correction linked to an earlier
   memory. The original is preserved and marked disputed. No approval gate is required.
 - `record_memory_use`: report actual lesson use as helpful/unhelpful/misleading/uncertain,

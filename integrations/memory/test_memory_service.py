@@ -493,6 +493,106 @@ class MemoryIntegration(unittest.TestCase):
         self.assertEqual(inspected['memory']['status'],original_status)
         self.assertEqual(inspected['memory']['project'],original_project)
 
+    def test_stemmed_search_covers_text_conditions_and_topics(self):
+        coder=self.worker()
+        ids={}
+        for key,args in {
+            'text':dict(text='Zorbleworkers must start from an isolated clean checkout',topics=['zorble']),
+            'conditions':dict(text='Zorble wall meshes need refinement',conditions='only with zorblecontainer isolation enabled'),
+            'topic':dict(text='Zorble unrelated wording',topics=['zorble-sandboxing']),
+            'identifier':dict(text='Zorble regression tracked as zorb-issue-214.v2'),
+        }.items():
+            ids[key]=self.value(self.call(coder,'record_memory',source='test',request_id='stem-'+key,**args))['memory']['id']
+        def ranked(q):
+            result=self.value(self.call(coder,'search_memory',query=q,limit=30))
+            for memory in result['memories']:
+                self.assertNotIn('search_text',memory)
+            return [m['id'] for m in result['memories']]
+        found=lambda q:set(ranked(q))
+        # Stemming: query form differs from stored form.
+        self.assertIn(ids['text'],found('zorbleworkers isolation'))
+        self.assertIn(ids['text'],found('checkouts'))
+        # Conditions and topic names are searchable.
+        self.assertIn(ids['conditions'],found('zorblecontainer'))
+        self.assertIn(ids['topic'],found('sandboxing'))
+        # Exact identifiers with punctuation still match and rank first; their split terms
+        # may also surface related records.
+        self.assertEqual(ranked('zorb-issue-214.v2')[0],ids['identifier'])
+        # Punctuation-only queries fall back to literal substring matching.
+        self.assertIn(ids['identifier'],found('214.v2'))
+        self.assertIn(ids['identifier'],found('.'))
+        self.assertNotIn('search_text',self.value(self.call(coder,'get_memory',memory_id=ids['text']))['memory'])
+
+    def test_search_hint_mentions_use_reports(self):
+        hint=self.value(self.call(self.worker(),'search_memory',query='anything'))['hint']
+        self.assertIn('record_memory_use',hint)
+
+    def test_enrich_updates_derived_search_field(self):
+        coder=self.worker()
+        ident=self.value(self.call(coder,'record_memory',text='Quoxlattice finding',source='test',request_id='derived'))['memory']['id']
+        self.assertNotIn(ident,{m['id'] for m in self.value(self.call(coder,'search_memory',query='fluxcapacitor'))['memories']})
+        self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['fluxcapacitor'],explanation='x',source='y',request_id='derived-enrich'))
+        self.assertIn(ident,{m['id'] for m in self.value(self.call(coder,'search_memory',query='fluxcapacitor'))['memories']})
+
+    def test_new_topics_return_similar_existing_suggestions(self):
+        coder=self.worker()
+        self.value(self.call(coder,'record_memory',text='Seed',source='test',request_id='suggest-seed',topics=['wakeflow-quality']))
+        result=self.value(self.call(coder,'record_memory',text='Next',source='test',request_id='suggest-new',topics=['wakeflow-qualification','wakeflow-quality']))
+        self.assertIn('wakeflow-quality',result['topic_suggestions']['wakeflow-qualification'])
+        # Existing names are not flagged, and suggestions never rewrite the stored topics.
+        self.assertNotIn('wakeflow-quality',result['topic_suggestions'])
+        self.assertEqual(result['memory']['topics'],['wakeflow-qualification','wakeflow-quality'])
+        plain=self.value(self.call(coder,'record_memory',text='Third',source='test',request_id='suggest-none',topics=['wakeflow-quality']))
+        self.assertNotIn('topic_suggestions',plain)
+        ident=plain['memory']['id']
+        enriched=self.value(self.call(coder,'enrich_memory',memory_id=ident,topics=['wakeflow-qualities'],explanation='x',source='y',request_id='suggest-enrich'))
+        self.assertIn('wakeflow-quality',enriched['topic_suggestions']['wakeflow-qualities'])
+
+
+class CredentialReloadTests(unittest.TestCase):
+    def setUp(self):
+        from starlette.responses import PlainTextResponse
+        async def echo(scope, receive, send):
+            from memory_service import CURRENT
+            await PlainTextResponse(CURRENT.get().actor)(scope, receive, send)
+        self.dir=Path(tempfile.mkdtemp())
+        self.path=self.dir/'service-auth.json'
+        self.config={'issuer_token':'i'*40,'signing_key':'k'*40,'clients':{'codex':{'role':'frontier','token':'a'*40}}}
+        self.path.write_text(json.dumps(self.config))
+        self.client=TestClient(AuthenticatedApp(echo,self.config,self.path))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def get(self, token):
+        return self.client.get('/mcp',headers={'Authorization':'Bearer '+token})
+
+    def rewrite(self, text):
+        mtime=self.path.stat().st_mtime_ns
+        self.path.write_text(text)
+        os.utime(self.path,ns=(mtime+10**9,mtime+10**9))
+
+    def test_added_client_is_accepted_without_restart(self):
+        self.assertEqual(self.get('b'*40).status_code,401)
+        self.config['clients']['claude']={'role':'frontier','token':'b'*40}
+        self.rewrite(json.dumps(self.config))
+        response=self.get('b'*40)
+        self.assertEqual((response.status_code,response.text),(200,'claude'))
+        self.assertEqual(self.get('a'*40).text,'codex')
+
+    def test_rotated_client_token_is_revoked(self):
+        self.config['clients']['codex']['token']='c'*40
+        self.rewrite(json.dumps(self.config))
+        self.assertEqual(self.get('a'*40).status_code,401)
+        self.assertEqual(self.get('c'*40).text,'codex')
+
+    def test_invalid_file_keeps_previous_configuration(self):
+        for text in ['{not json', json.dumps({'clients':{}}),
+                     json.dumps(dict(self.config,clients={'x':{'role':'admin','token':'d'*40}}))]:
+            self.rewrite(text)
+            self.assertEqual(self.get('a'*40).text,'codex')
+            self.assertEqual(self.get('d'*40).status_code,401)
+
 
 class DisposableDatabaseTests(unittest.TestCase):
     """Unit tests for disposable database profile handling and lifecycle."""
