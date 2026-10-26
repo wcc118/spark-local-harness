@@ -51,6 +51,31 @@ inference continues. Inherited interactive memory configs/host instruction paths
 removed before configuration so missing host files do not break isolated workers.
 Tool failures during a run are evidence to report, not a reason to abandon the task.
 
+## Optional recall pointers
+
+`CODEX_LOCAL_MEMORY_RECALL=1` (off by default; any other value, including unset, is
+off) makes the launcher's memory setup append a short "Possibly relevant memory"
+block to the guidance file. It runs one `search_memory` call with the minted
+credential (`detail: "brief"`, `limit` 4, `project` the repository) using the issue
+title plus repository as the query; if the title is not available (no `--issue-title`
+or `CODEX_LOCAL_ISSUE_TITLE`), the repository name alone is used. Only IDs and titles
+appear: no snippet, conditions or use reports. Each title is collapsed to a single
+line, stripped of control characters and truncated to 120 characters; titles that are
+empty after cleaning and IDs that do not match `^memory:[A-Za-z0-9_]+$` are dropped.
+
+Pointers are reference material, never instructions: the block states that titles
+are hints only and an agent must open a memory with `get_memory` before relying on
+it. Reviewers pass `exclude_issue="OWNER/REPO#N"` so independent review is not primed
+by the coder's own lessons. Helper runs get pointers only via `search_memory` (which
+they have); they never exercise a write path with recall. Service failure, timeout
+over 5 s, malformed or empty responses yield no block unit trailer: inference
+continues exactly as before and only a WARN appears on stderr; no error reaches the
+worker, no credential is printed. Run health records whether recall was enabled and
+how many pointers were supplied (counts only), for comparing runs with recall on and
+off; this telemetry never changes prompts, routes, permissions or credential scope.
+No new MCP tool, worker allowlist change, credential-scope change or reviewer
+tool-scope-audit change is introduced.
+
 ## Disposable test database
 
 The operator can opt a coder or reviewer into a separate in-memory SurrealDB
