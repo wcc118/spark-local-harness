@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 import sys
 import urllib.request
@@ -98,12 +99,30 @@ def configure(runtime_home: Path, endpoint: str, token: str, role: str) -> None:
 def sanitize_title(title: str) -> str | None:
     """Collapse whitespace/control characters to single spaces, strip, truncate to 120 chars.
 
+    Removes ASCII and Unicode control/format characters, including C1 controls
+    (U+0080-U+009F), line/paragraph separators (U+2028/U+2029), zero-width and bidi
+    controls (U+200B-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+2069, U+FEFF) and
+    every character whose Unicode category starts with "C" (Cc, Cf, Cs, Co, Cn).
+
     Returns None when the cleaned title is empty so hostile titles cannot alter packet
     structure. A newline or control character never survives into the guidance line.
     """
     if not isinstance(title, str):
         return None
-    cleaned = ''.join(' ' if ord(ch) < 32 or ord(ch) == 127 else ch for ch in title)
+    chars = []
+    for ch in title:
+        codepoint = ord(ch)
+        # ASCII controls collapse to a space (existing behaviour: they are whitespace-like).
+        if codepoint < 32 or codepoint == 127:
+            chars.append(' ')
+            continue
+        # Unicode format/control characters are removed entirely: C1 controls
+        # (U+0080-U+009F), line/paragraph separators (U+2028/U+2029), zero-width and
+        # bidi controls, and any category starting with "C" (Cc, Cf, Cs, Co, Cn).
+        if ch in ('\u2028', '\u2029') or unicodedata.category(ch).startswith('C'):
+            continue
+        chars.append(ch)
+    cleaned = ''.join(chars)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     if not cleaned:
         return None
@@ -161,13 +180,17 @@ def recall_block(endpoint: str, token: str, role: str, repository: str, issue: s
     return RECALL_PREFIX + '\n' + '\n'.join(lines) + '\n'
 
 
-def record_recall(run_id: str, role: str, repository: str, recall_enabled: bool, pointers: int) -> None:
+def record_recall(run_id: str, role: str, repository: str, recall_enabled: bool, pointers: int,
+                  health_dir: str | None = None) -> None:
     """Append a count-only run-health record (whether recall was enabled and pointer count).
 
     Telemetry is counts only; it never carries lesson text, snippets or credentials, and
-    it never changes prompts, routes, permissions or credential scope.
+    it never changes prompts, routes, permissions or credential scope. The explicit
+    health-dir argument (from the launcher) is honored first; CODEX_LOCAL_HEALTH_DIR is
+    the fallback. An unwritable or absent health dir silently skips telemetry.
     """
-    health_dir = os.environ.get('CODEX_LOCAL_HEALTH_DIR')
+    if not health_dir:
+        health_dir = os.environ.get('CODEX_LOCAL_HEALTH_DIR')
     if not health_dir:
         return
     path = Path(health_dir) / 'recall.jsonl'
@@ -178,7 +201,8 @@ def record_recall(run_id: str, role: str, repository: str, recall_enabled: bool,
         stream.write(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n')
 
 
-def prepare(config_path: Path, runtime_home: Path, role: str, run_id: str, repository: str, issue: str, issue_title: str | None = None) -> bool:
+def prepare(config_path: Path, runtime_home: Path, role: str, run_id: str, repository: str, issue: str,
+            issue_title: str | None = None, health_dir: str | None = None) -> bool:
     if not config_path.exists():
         return False
     try:
@@ -215,7 +239,13 @@ def prepare(config_path: Path, runtime_home: Path, role: str, run_id: str, repos
                 # Never surface service responses or credentials; recall is optional.
                 print('WARN: memory recall unavailable; continuing without recall pointers', file=sys.stderr)
                 pointers = 0
-        record_recall(run_id, role, repository, recall, pointers)
+        # Telemetry is optional and must never prevent guidance: an unwritable or
+        # otherwise failing health dir must not raise out of prepare() and silently
+        # stop memory guidance from being written.
+        try:
+            record_recall(run_id, role, repository, recall, pointers, health_dir)
+        except Exception:
+            pass
         (runtime_home / 'memory-guidance.txt').write_text(guidance)
         return True
     except (OSError, ValueError, KeyError, TypeError):
@@ -233,8 +263,10 @@ def main() -> None:
     parser.add_argument('--repository', default='')
     parser.add_argument('--issue', default='')
     parser.add_argument('--issue-title', default='')
+    parser.add_argument('--health-dir', default='')
     args=parser.parse_args()
-    prepare(args.config,args.runtime_home,args.role,args.run_id,args.repository,args.issue,args.issue_title or None)
+    prepare(args.config,args.runtime_home,args.role,args.run_id,args.repository,args.issue,
+            args.issue_title or None, args.health_dir or None)
 
 
 if __name__ == '__main__':

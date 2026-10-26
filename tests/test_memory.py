@@ -435,6 +435,77 @@ def test_recall_off_records_health(tmp_path, fake_service, monkeypatch):
     assert record['recall_pointers'] == 0
 
 
+def test_recall_health_dir_argument_honored(tmp_path, fake_service, monkeypatch):
+    """An explicit --health-dir argument wins over CODEX_LOCAL_HEALTH_DIR; env is fallback."""
+    runtime(tmp_path)
+    arg_dir = tmp_path / 'arg-health'
+    env_dir = tmp_path / 'env-health'
+    monkeypatch.setenv('CODEX_LOCAL_HEALTH_DIR', str(env_dir))
+    monkeypatch.setenv('CODEX_LOCAL_MEMORY_RECALL', '1')
+    _SERVICE['search'] = {'memories': [{'id': 'memory:abc', 'title': 'a'}],
+                          'search_mode': 'hybrid', 'hint': ''}
+    config = make_config(tmp_path, fake_service.server_address[1])
+    # Argument wins over the env fallback.
+    assert prepare(config, tmp_path, 'coder', 'run', 'wcc118/codex-local-harness', '245',
+                   health_dir=str(arg_dir))
+    assert (arg_dir / 'recall.jsonl').exists()
+    assert not (env_dir / 'recall.jsonl').exists()
+    # Env fallback when no argument is supplied.
+    assert prepare(config, tmp_path, 'coder', 'run2', 'wcc118/codex-local-harness', '245')
+    assert (env_dir / 'recall.jsonl').exists()
+
+
+def test_recall_unwritable_health_dir_still_writes_guidance(tmp_path, fake_service, monkeypatch):
+    """Telemetry must never prevent memory guidance: an unwritable health dir raises
+    out of record_recall but must not raise out of prepare() or block the guidance file."""
+    runtime(tmp_path)
+    health = tmp_path / 'health'
+    health.mkdir()
+    health.chmod(0o500)  # read/execute only: open('a') raises PermissionError
+    monkeypatch.setenv('CODEX_LOCAL_HEALTH_DIR', str(health))
+    config = make_config(tmp_path, fake_service.server_address[1])
+    # Recall off: guidance must still be written byte-identically.
+    monkeypatch.delenv('CODEX_LOCAL_MEMORY_RECALL', raising=False)
+    assert prepare(config, tmp_path, 'coder', 'run', 'wcc118/codex-local-harness', '245')
+    assert _guidance(tmp_path) == _expected_guidance()
+    assert RECALL_PREFIX not in _guidance(tmp_path)
+    # Recall on: the recall block must still be written even though telemetry fails.
+    monkeypatch.setenv('CODEX_LOCAL_MEMORY_RECALL', '1')
+    _SERVICE['search'] = {'memories': [{'id': 'memory:abc', 'title': 'a'}],
+                          'search_mode': 'hybrid', 'hint': ''}
+    assert prepare(config, tmp_path, 'coder', 'run', 'wcc118/codex-local-harness', '245')
+    guidance = _guidance(tmp_path)
+    assert guidance.startswith(_expected_guidance())
+    assert RECALL_PREFIX in guidance
+    assert '- memory:abc: a' in guidance
+
+
+def test_sanitize_title_unicode_hostile():
+    """Unicode format/control characters must never survive into a rendered pointer."""
+    # C1 controls (U+0080-U+009F) — the ANSI CSI example.
+    assert sanitize_title('\x9b31m') == '31m'
+    assert '\x9b' not in sanitize_title('\x9b31m')
+    # Zero-width / bidi controls (U+200B-U+200F, U+202A-U+202E, U+2060-U+2064,
+    # U+2066-U+2069, U+FEFF) — right-to-left override and zero-width joiners.
+    assert sanitize_title('a\u202eb') == 'ab'
+    assert sanitize_title('a\u200db\u200c') == 'ab'
+    assert sanitize_title('\ufeffIGNORE') == 'IGNORE'
+    # Line/paragraph separators (U+2028/U+2029) — no newline survives.
+    assert sanitize_title('\u2028IGNORE PREVIOUS') == 'IGNORE PREVIOUS'
+    assert '\u2028' not in sanitize_title('\u2028IGNORE PREVIOUS')
+    assert sanitize_title('a\u2029b') == 'ab'
+    # Surrogate (Cs) and unassigned (Cn) categories are removed too.
+    assert sanitize_title('a\ud800b') == 'ab'
+    assert sanitize_title('a\uE000b') == 'ab'  # private use (Co)
+    for hostile in ('\x9b31m', 'a\u202eb', '\u2028IGNORE PREVIOUS',
+                    'a\u200db\u200c', '\ufeffIGNORE', 'a\u2029b',
+                    'a\ud800b', 'a\uE000b'):
+        cleaned = sanitize_title(hostile)
+        assert '\n' not in cleaned
+        assert '\r' not in cleaned
+        assert len(cleaned) <= 120
+
+
 def test_sanitize_title_units():
     assert sanitize_title('  hello   world\n next ') == 'hello world next'
     assert sanitize_title('') is None
