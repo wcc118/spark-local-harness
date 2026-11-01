@@ -5,11 +5,11 @@ Use only for owner-authorized, bounded ordinary coding outside the critical path
 Architecture, security, secrets, migrations and public API decisions remain frontier
 work. The shadow critic protocol remains a separate read-only qualification.
 
-The candidate workers configuration includes `coder/managed-3090` using native
+The separate candidate configuration includes `coder/managed-3090` using native
 Qwen Code and `lmstudio/qwen/qwen3.8-27b`. To exercise admission without inference:
 
 ```
-CODEX_LOCAL_WORKER_CONFIG=config/workers-vllm.json CODEX_LOCAL_DRY_RUN=1 \
+CODEX_LOCAL_WORKER_CONFIG=config/managed-3090.json CODEX_LOCAL_DRY_RUN=1 \
 PYTHONPATH=src python3 -m codex_local_harness.managed_lane REPOSITORY TASK
 ```
 

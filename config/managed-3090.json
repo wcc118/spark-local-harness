@@ -1,0 +1,13 @@
+{
+  "routes": {
+    "coder/managed-3090": {
+      "agent": "coder",
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "runtime": "qwen-code",
+      "mode": "native"
+    }
+  },
+  "defaults": {
+    "coder": "managed-3090"
+  }
+}

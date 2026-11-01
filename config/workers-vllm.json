@@ -83,12 +83,6 @@
       "runtime": "opencode",
       "mode": "tailored",
       "model": "deepseek/deepseek-v4-flash-0731-exl3-k2"
-    },
-    "coder/managed-3090": {
-      "agent": "coder",
-      "model": "lmstudio/qwen/qwen3.8-27b",
-      "runtime": "qwen-code",
-      "mode": "native"
     }
   },
   "defaults": {
