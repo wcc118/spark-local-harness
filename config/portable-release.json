@@ -42,6 +42,7 @@
     "docs/lane.md": "cd8cb84ebd7de76ff6b36687c232a90832984d2e95875320198cb53ae4cb66e7",
     "docs/live-execution.md": "fd1cb9911c3e0d9754416a6c43de2d8f06b76f372252475172551e27441229d6",
     "docs/local-convergence.md": "abf5be90c47ad6946882ff744237a05a3476e47688fb91dac6a2ca334545db98",
+    "docs/memory-views.md": "7157dd3256fac27fcd1d255713526a78b2c1d45055a25abb3b6c2bd40b17471e",
     "docs/memory.md": "6965da49da206ebfb9640c0fb739827d79bafde823ce6014a630d5d64271121c",
     "docs/mvp-quickstart.md": "7ac7cb323cef8693f182b5ef224dced5a2dd85c4be5eab35a42a6cc9e1c936fe",
     "docs/portable-installation.md": "37ffb33fcbfc8ec17210892c968d654e8af10eed4c0ef4714d6d3047037436da",
@@ -123,6 +124,7 @@
     "src/codex_local_harness/spark_metrics.py": "4db9e5ea7212acb1b7b5c404d9e5b3f2f1790b49f70e69474692a34e3072aa78",
     "src/codex_local_harness/strategy.py": "720a7ba56f7eaa143af1670e9005533e36814206184f6275ab54faf1157214e8",
     "src/codex_local_harness/supervision.py": "fcf0224e1d67647a3dc7c088408c29c783151b0a55f05c3311359d98a475faaa",
+    "src/codex_local_harness/tool_budget.py": "dca8ef4b9400044d8662c1f1ced0819908da107f75e7a89fe8eae5a09f84e30e",
     "src/codex_local_harness/usage.py": "9aa3ea0ebb45ffa10b6d7a79a438fe3a10087f4aa18022827123ac964bc77112",
     "src/codex_local_harness/v5_runner.py": "aa0a19c4adddf1475a38bdf526c71091ab50dbee483b4d602ef71b28c9cbbe5f",
     "src/codex_local_harness/vision_judge.py": "bb80c89ce0420ea2d2942903465d154f7f3202a676d47f7a041c32d3e1adc5ea",
@@ -132,8 +134,7 @@
     "src/codex_local_harness/visual_diff.py": "9f0ca0301d0647b0722d32bdcc6f4e0cdcec1a3a17e70aa64cd5761f8712d928",
     "src/codex_local_harness/visual_render.py": "743af2ff377f241fe9e7976a64f0b83d38c05e9dd9afa43db5b93667160edff4",
     "src/codex_local_harness/visual_render_cli.py": "19fafce4227985a92712f98176a75346713d23f52e1f107a61c7c947a5dcd4a8",
-    "src/codex_local_harness/workflow.py": "00386614d2f84270fb093dc870d074f561ea89c5222593d1fa09bf783667af59",
     "src/codex_local_harness/worker_containers.py": "0a6dacb454d137567bacc9b8210e2839056d52764f5cd1029969d0573a5f1072",
-    "src/codex_local_harness/tool_budget.py": "dca8ef4b9400044d8662c1f1ced0819908da107f75e7a89fe8eae5a09f84e30e"
+    "src/codex_local_harness/workflow.py": "00386614d2f84270fb093dc870d074f561ea89c5222593d1fa09bf783667af59"
   }
 }

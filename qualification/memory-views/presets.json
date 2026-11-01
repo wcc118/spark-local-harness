@@ -1,0 +1,9 @@
+{
+  "recent-lessons": "SELECT id, title, text, conditions, source, status, project, actor, created_at FROM memory ORDER BY created_at DESC LIMIT 50;",
+  "disputed-findings": "SELECT id, title, text, conditions, source, project, created_at FROM memory WHERE status = 'disputed' ORDER BY created_at DESC LIMIT 50;",
+  "cross-project-topics": "SELECT * FROM (SELECT out AS topic, array::group(in.project) AS projects FROM concerns GROUP BY out) WHERE array::len(projects) > 1 LIMIT 50;",
+  "untagged": "SELECT id, title, project, source, created_at FROM memory WHERE topics = NONE OR array::len(topics) = 0 ORDER BY created_at DESC LIMIT 50;",
+  "correction-chains": "SELECT in, out, created_at FROM challenges LIMIT 50; SELECT in, out, created_at FROM supersedes LIMIT 50;",
+  "recent-use-reports": "SELECT target, outcome, explanation, source, actor, role, repository, issue, created_at FROM memory_event WHERE action = 'use' ORDER BY created_at DESC LIMIT 50;",
+  "lesson-detail": "SELECT id, title, text, conditions, source, status, project, topics, actor, role, repository, issue, created_at FROM type::record($memory_id); SELECT in, out FROM challenges WHERE in = type::record($memory_id) OR out = type::record($memory_id) LIMIT 50; SELECT in, out FROM supersedes WHERE in = type::record($memory_id) OR out = type::record($memory_id) LIMIT 50; SELECT target, outcome, explanation, source, actor, created_at FROM memory_event WHERE action = 'use' AND target = type::record($memory_id) ORDER BY created_at DESC LIMIT 20;"
+}
