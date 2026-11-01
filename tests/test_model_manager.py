@@ -242,4 +242,86 @@ def test_return_to_coder_recreates_auto_removed_container_via_recipe(tmp_path):
     assert state.read_text() == "Qwen/Qwen3-Coder-Next-FP8"
     commands = calls.read_text()
     assert commands.index("deepseek stop") < commands.index("recipe qwen3-coder-next-fp8")
-    assert "--gpu-mem 0.87 --max-model-len 185000 --daemon" in commands
+    assert "--gpu-mem 0.82 --max-model-len 185000 --daemon" in commands
+
+
+def test_model_manager_uses_default_gpu_mem_0_82_when_unspecified(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    # Do not set CODEX_LOCAL_VLLM_GPU_MEM to test default
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    assert state.read_text(encoding="utf-8") == "Qwen/Qwen3.8-27B-FP8"
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--gpu-memory-utilization 0.82" in docker_calls
+
+
+def test_model_manager_allows_override_via_CODEX_LOCAL_VLLM_GPU_MEM(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.85"
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    assert state.read_text(encoding="utf-8") == "Qwen/Qwen3.8-27B-FP8"
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--gpu-memory-utilization 0.85" in docker_calls
+
+
+def test_model_manager_rejects_empty_CODEX_LOCAL_VLLM_GPU_MEM(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = ""
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 1
+    assert "CODEX_LOCAL_VLLM_GPU_MEM is empty" in first.stderr
+    assert not calls.exists()
+
+
+def test_model_manager_rejects_nonfinite_CODEX_LOCAL_VLLM_GPU_MEM(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "nan"
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 1
+    assert "not a valid number" in first.stderr
+    assert not calls.exists()
+
+
+def test_model_manager_rejects_out_of_range_low_CODEX_LOCAL_VLLM_GPU_MEM(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.5"
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 1
+    assert "must be finite and in (0.5, 0.95]" in first.stderr
+    assert not calls.exists()
+
+
+def test_model_manager_rejects_out_of_range_high_CODEX_LOCAL_VLLM_GPU_MEM(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.95"
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 1
+    assert "must be finite and in (0.5, 0.95]" in first.stderr
+    assert not calls.exists()
+
+
+def test_model_manager_accepts_boundary_value_0_95_exclusive_upper(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.9499"
+    first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--gpu-memory-utilization 0.9499" in docker_calls
+
+
+def test_model_manager_qwen35_nvfp4_ignores_env_and_keeps_0_82(tmp_path):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.87"
+    first = subprocess.run([str(MANAGER), "use", "qwen35-nvfp4"], env=env, text=True, capture_output=True)
+    assert first.returncode == 0, first.stderr
+    docker_calls = calls.read_text(encoding="utf-8")
+    assert "--gpu-memory-utilization 0.82" in docker_calls
