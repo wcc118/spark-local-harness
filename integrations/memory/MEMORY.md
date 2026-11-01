@@ -37,6 +37,25 @@ Tools:
 - `resolve_memory`: Codex/frontier only; reconcile evidence by superseding an old claim
   with an active replacement and recording the rationale. History remains inspectable.
 
+All five contribution tools (`record_memory`, `correct_memory`, `record_memory_use`,
+`enrich_memory`, `resolve_memory`) support an optional `declared_context` parameter.
+This is an author-supplied claim about task metadata, never authenticated identity
+or authorization. Valid keys are `repository`, `issue`, and `session_id` (all strings).
+Example:
+
+```json
+{
+  "repository": "other/repo",
+  "issue": "other/repo#999",
+  "session_id": "session-abc-123"
+}
+```
+
+Search excludes match both the authenticated issue (from the worker credential) AND
+any declared issue in `declared_context.issue`. This allows frontier and other
+contributors to explicitly declare repository/issue/session task context without
+changing authenticated attribution or privileges.
+
 Codex, the coder, and the reviewer can contribute. Helper/investigator identities
 remain read-only. Memory contributions are permitted even when repository code is
 read-only. Worker identity, run and issue attribution come from the harness credential.
