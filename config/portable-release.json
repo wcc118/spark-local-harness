@@ -97,7 +97,7 @@
     "src/codex_local_harness/health.py": "968161ac8fb9454b091dbb192503b2fc2fbb780893eac525867382c0299ba200",
     "src/codex_local_harness/lane.py": "4aae808f3f04a8141a8dcfd168bcee28a916ebd70a945c8a5cd516fcb8a2ba4a",
     "src/codex_local_harness/lane_cli.py": "1f0e1264bfc59c80dab1dc7d7eb57716628bfe53deaff173bbb5353d4216c69a",
-    "src/codex_local_harness/learning.py": "49ff79ffb37362b98a94647cb4864adb77afb0e604df46780befc956157ac3cf",
+    "src/codex_local_harness/learning.py": "01c3ef2793e31aec8491e26fb5dc7029921ed781d2ddd50515e204b43175ded5",
     "src/codex_local_harness/live_execution.py": "f967f3a99dc3bf266cf6cabd0ac7631a4c1fea6a39bf891071e8953ede1e34ca",
     "src/codex_local_harness/memory.py": "bd6deaceb3e40d6bd1ba639dfa274c65ae504dd25fac67b08f62a6c0a12f4972",
     "src/codex_local_harness/memory_test_db.py": "dfe5c4b2ed05d60cfa5f51170020f83ce4232d37dad0439f26eef131a322caa2",

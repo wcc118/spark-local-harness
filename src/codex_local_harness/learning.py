@@ -33,7 +33,7 @@ def validate_positive_int(value: Any) -> int:
 
 def validate_nonempty_string(value: Any, name: str) -> str:
     """Validate that value is a non-empty string."""
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value.strip() or len(value) > 1000:
         raise ValueError(f"{name} must be a non-empty string")
     return value
 
@@ -50,6 +50,8 @@ def _count_prior_eligible(records: tuple[dict[str, Any], ...]) -> int:
 def _get_models(config: dict[str, Any]) -> tuple[str, str]:
     """Get standard and deepseek model names from config."""
     routes = config.get("routes", {})
+    if not isinstance(routes, dict) or any(not isinstance(routes.get(k, {}), dict) for k in ("coder/standard", "coder/deepseek")):
+        raise ValueError("invalid route configuration")
     standard_model = routes.get("coder/standard", {}).get("model")
     deepseek_model = routes.get("coder/deepseek", {}).get("model")
 
@@ -178,6 +180,12 @@ def _read_records(handle):
             raise ValueError(f"invalid JSON at line {number}") from exc
         if not isinstance(record, dict):
             raise ValueError(f"invalid record at line {number}")
+        required = {"schema_version", "plan_version", "repository", "issue", "task_class",
+                    "decision", "reason", "observed_at", "sequence", "coder_model", "reviewer_model", "role_env"}
+        if set(record) != required or record.get("schema_version") != 1 or record.get("plan_version") != 1:
+            raise ValueError(f"invalid record schema at line {number}")
+        for key in ("task_class", "reason", "observed_at"):
+            validate_nonempty_string(record[key], key)
         validate_repository(record.get("repository"))
         validate_positive_int(record.get("issue"))
         identity = (record["repository"], record["issue"])

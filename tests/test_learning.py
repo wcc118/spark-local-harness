@@ -395,12 +395,9 @@ class TestMalformedLedger:
     def test_malformed_ledger_preserves_history(self, tmp_path: pytest.Path, config_with_models: dict):
         """Malformed ledger should fail without resetting history."""
         ledger = tmp_path / "ledger.jsonl"
-        # Write some valid records then malformed (on a new line)
-        ledger.write_text(
-            '{"repository":"owner/repo","issue":1,"decision":"eligible","sequence":0}\n'
-            'not valid json\n',
-            encoding="utf-8"
-        )
+        assign(ledger, config_with_models, "owner/repo", 1, "impl", "eligible", "first")
+        with ledger.open("a") as stream:
+            stream.write("not valid json\n")
 
         with pytest.raises(ValueError, match="invalid JSON"):
             assign(
@@ -410,7 +407,7 @@ class TestMalformedLedger:
 
         # First record should still exist - read directly to avoid list_assignments error
         content = ledger.read_text(encoding="utf-8")
-        assert '"issue":1' in content
+        assert '"issue": 1' in content
 
 
 class TestCLI:
@@ -565,3 +562,12 @@ def test_digest_exact_repository_identity_unknowns_and_adjudication():
     assert row["runs"][0]["frontier_tokens"] is None
     assert [a["source"] for a in row["adjudicated_observations"]] == ["codex"]
     assert result["unjoined_runs"] == 1
+
+
+@pytest.mark.parametrize("content", ['[]\n', '{"repository":"owner/repo","issue":1}\n'])
+def test_valid_json_invalid_record_is_rejected(tmp_path, config_with_models, content):
+    ledger = tmp_path / "ledger"
+    ledger.write_text(content)
+    with pytest.raises(ValueError):
+        assign(ledger, config_with_models, "owner/repo", 2, "impl", "eligible", "new")
+    assert ledger.read_text() == content
