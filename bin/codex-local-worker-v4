@@ -586,6 +586,11 @@ worker_env=(env -i HOME="$worker_runtime_home" USER="${USER:-worker}" LOGNAME="$
   PATH="$worker_path" XDG_CONFIG_HOME="$worker_runtime_home/.config"
   XDG_DATA_HOME="$worker_runtime_home/.local/share" XDG_CACHE_HOME="$worker_runtime_home/.cache"
   LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM="${TERM:-dumb}" NO_COLOR=1)
+if [[ $worker_sandbox == container ]]; then
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.worker_containers \
+    --health "$health_dir" --max-age "$((worker_timeout + 60))" >/dev/null || \
+    echo "WARN: worker-container sweep unavailable" >&2
+fi
 execution_env=()
 if [[ $worker_role == reviewer ]]; then
   execution_env=(PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$review_runtime_tmp/pycache" \
@@ -606,7 +611,14 @@ if [[ $worker_sandbox == container ]]; then
   if [[ $worker_memory_test_db == 1 ]]; then
     container_env+=(MEMORY_TEST_PROFILE="$worker_runtime_home/memory-test-db.json" MEMORY_INTEGRATION=1)
   fi
-  docker_args=(run --rm --network host --read-only --cap-drop ALL
+  worker_server_container="codex-worker-$worker_run_id"
+  worker_wrapper_ticks=$(python3 -c 'import sys; from pathlib import Path; print(Path("/proc/"+sys.argv[1]+"/stat").read_text().rsplit(")",1)[1].split()[19])' "$$")
+  docker_args=(run --rm --sig-proxy=false --name "$worker_server_container"
+    --label io.codex.worker.managed=1 --label "io.codex.worker.uid=$(id -u)"
+    --label "io.codex.worker.run=$worker_run_id" --label "io.codex.worker.role=$worker_role"
+    --label "io.codex.worker.pid=$$" --label "io.codex.worker.start_ticks=$worker_wrapper_ticks"
+    --label "io.codex.worker.started=$(date +%s)"
+    --network host --read-only --cap-drop ALL
     --security-opt no-new-privileges --pids-limit 512 --user "$(id -u):$(id -g)"
     --tmpfs /tmp:rw,nosuid,nodev,size=1g
     --mount "$repository_mount"
@@ -648,13 +660,14 @@ if [[ $worker_sandbox == container ]]; then
     if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]; then
       qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)
     fi
-    [[ $convergence != 1 ]] || { worker_server_container="codex-worker-$worker_run_id"; docker_args+=(--name "$worker_server_container"); }
-    timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+    timeout --foreground --signal=TERM --kill-after=5s "$worker_timeout" \
       docker "${docker_args[@]}" \
       --env OPENAI_API_KEY=not-needed --env "OPENAI_BASE_URL=${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" \
       "${qwen_env[@]}" \
       "$worker_container_image" qwen --auth-type openai --approval-mode yolo --model "$qwen_model" \
-      --output-format stream-json --prompt "$worker_task" >"$worker_log"
+      --output-format stream-json --prompt "$worker_task" >"$worker_log" &
+    worker_server_pid=$!
+    wait "$worker_server_pid"
   elif [[ $worker_mode == tailored && ${CODEX_LOCAL_SESSION_BRIDGE:-1} == 1 ]]; then
     worker_server_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
     worker_server_password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
@@ -663,8 +676,7 @@ if [[ $worker_sandbox == container ]]; then
     printf '%s\n' "$worker_server_password" >"$worker_control_secret"
     chmod 600 "$worker_server_env" "$worker_control_secret"
     unset worker_server_password
-    worker_server_container="codex-worker-$worker_run_id"
-    docker "${docker_args[@]}" --name "$worker_server_container" \
+    docker "${docker_args[@]}" \
       --env-file "$worker_server_env" "$worker_container_image" \
       opencode serve --hostname 127.0.0.1 --port "$worker_server_port" \
       >"$worker_runtime_home/opencode-server.log" 2>&1 &
@@ -695,9 +707,11 @@ if [[ $worker_sandbox == container ]]; then
   else
     opencode_args=(run --format json --dir "$worker_repo_path")
     [[ $worker_mode != tailored ]] || opencode_args+=(--agent "$worker_agent")
-    timeout --foreground --signal=TERM --kill-after=30s "$worker_timeout" \
+    timeout --foreground --signal=TERM --kill-after=5s "$worker_timeout" \
       docker "${docker_args[@]}" "$worker_container_image" \
-      opencode "${opencode_args[@]}" --model "$worker_model" "$worker_task" >"$worker_log"
+      opencode "${opencode_args[@]}" --model "$worker_model" "$worker_task" >"$worker_log" &
+    worker_server_pid=$!
+    wait "$worker_server_pid"
   fi
 else
   [[ $worker_runtime == opencode ]] || { echo "ERROR: qwen-code requires container confinement" >&2; exit 2; }
