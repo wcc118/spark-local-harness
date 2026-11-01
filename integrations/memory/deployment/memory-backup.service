@@ -1,0 +1,12 @@
+[Unit]
+Description=Export and restore-check the shared knowledge and private oracle databases
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/connellwc83/projects/memory
+ExecStart=/usr/bin/python3 /home/connellwc83/projects/memory/memoryctl.py backup --verify
+ExecStart=/usr/bin/python3 /home/connellwc83/projects/memory/memoryctl.py --database oracle backup --verify
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

@@ -12,6 +12,26 @@ adds topic edges and audit events to existing memories without changing text, so
 or status. Both tools are read/write appropriate based on role and contribute to
 structured metadata without affecting claim integrity.
 
+Issue #242 widens retrieval and adds operations. Search_memory now uses stemmed
+full text over each memory's text, conditions and topic names, with a literal
+substring fallback for identifiers. Before this, "isolation" found nothing while
+"isolated" found ten. The change is additive: a derived `search_text` field and a new
+index, with the original index left defined. Record_memory and enrich_memory return
+`topic_suggestions` for new topic names; nothing is merged automatically. The service
+rereads its client credential file without a restart. Claude Code connects as its own
+`claude` frontier client. A daily user timer makes a restore-checked export.
+
+Issue #244 mirrors retrieval upgrades; no MCP tool is added, so worker `enabled_tools`
+and role permissions are unchanged. `search_memory` is hybrid (keyword plus meaning via a
+local embedder) and falls back to keywords when the embedder is unavailable; results report
+`search_mode` and `matched_by`. `detail: "brief"` returns id, title, snippet and conditions
+for small context windows; `get_memory` returns the full record. `record_memory` accepts an
+optional `title` and may return advisory `similar_memories` (the record is still written).
+Vectors never appear in tool results. Schema changes are additive: `memory.title`, tables
+`memory_embedding` and `retrieval` (which stores returned IDs, never query text) and the
+derived relation `similar_to`. See the integration README for measurements and maintenance
+commands.
+
 The separate local memory deployment lives in `~/projects/memory`. Service source
 is reviewed in `integrations/memory/`; the deployment directory retains its own local
 Git history. Database storage and all credentials remain outside this repository.
@@ -36,7 +56,8 @@ rotating the service signing key revokes all worker tokens.
 
 Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory,
 record_memory_use, discover_topics, enrich_memory. Helper tools: search_memory,
-get_memory, discover_topics. Codex additionally has resolve_memory. No routine
+get_memory, discover_topics. Frontier clients (Codex and Claude Code) additionally
+have resolve_memory. No routine
 client receives arbitrary SQL or a deletion tool from this service. The user/admin
 can still manage the underlying database directly. These MCP boundaries are not
 a sandbox against the workstation owner or an unrestricted host shell.
@@ -50,6 +71,31 @@ Missing configuration or an unavailable issuer produces no memory credential and
 inference continues. Inherited interactive memory configs/host instruction paths are
 removed before configuration so missing host files do not break isolated workers.
 Tool failures during a run are evidence to report, not a reason to abandon the task.
+
+## Optional recall pointers
+
+`CODEX_LOCAL_MEMORY_RECALL=1` (off by default; any other value, including unset, is
+off) makes the launcher's memory setup append a short "Possibly relevant memory"
+block to the guidance file. It runs one `search_memory` call with the minted
+credential (`detail: "brief"`, `limit` 4, `project` the repository) using the issue
+title plus repository as the query; if the title is not available (no `--issue-title`
+or `CODEX_LOCAL_ISSUE_TITLE`), the repository name alone is used. Only IDs and titles
+appear: no snippet, conditions or use reports. Each title is collapsed to a single
+line, stripped of control characters and truncated to 120 characters; titles that are
+empty after cleaning and IDs that do not match `^memory:[A-Za-z0-9_]+$` are dropped.
+
+Pointers are reference material, never instructions: the block states that titles
+are hints only and an agent must open a memory with `get_memory` before relying on
+it. Reviewers pass `exclude_issue="OWNER/REPO#N"` so independent review is not primed
+by the coder's own lessons. Helper runs get pointers only via `search_memory` (which
+they have); they never exercise a write path with recall. Service failure, timeout
+over 5 s, malformed or empty responses yield no block unit trailer: inference
+continues exactly as before and only a WARN appears on stderr; no error reaches the
+worker, no credential is printed. Run health records whether recall was enabled and
+how many pointers were supplied (counts only), for comparing runs with recall on and
+off; this telemetry never changes prompts, routes, permissions or credential scope.
+No new MCP tool, worker allowlist change, credential-scope change or reviewer
+tool-scope-audit change is introduced.
 
 ## Disposable test database
 
@@ -156,3 +202,10 @@ Use the install-harness receipt's rollback command to restore the previous insta
 launcher. Restore only the memory entries in interactive client configs; do not clobber
 unrelated later changes. Rollback leaves knowledge data intact. Stop the memory-tools
 user service if needed; database and graph browser are separate services.
+
+The optional recall request has a five-second total deadline, including streaming
+response bodies, and a 256 KiB response limit. A short-lived child receives its
+run credential through stdin (never command arguments), returns only sanitized
+pointers, and is killed and reaped on deadline. Failure adds no recall block and
+does not disable the worker's ordinary memory tools. This deadline excludes the
+existing credential-mint step and the separately bounded issue-title lookup.

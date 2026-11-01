@@ -1,0 +1,38 @@
+{
+  "schema": "bounded-improvement-outcome-v1",
+  "decision": "reject-candidate-retain-replay",
+  "production_change": false,
+  "run_id": "20261101T034503Z-2159522",
+  "candidate_head": "eab4dc84336c5a1369cbd60060f056d434978d74",
+  "candidate_sha256": "e96b277a1248c0cf152c8f879d5e7a5dbbfd92ac275737b8b654aa121a4f44b3",
+  "baseline_private_passed": 0,
+  "candidate_private_passed": 5,
+  "private_total": 6,
+  "private_includes_one_development_overlap": true,
+  "baseline_development_passed": 0,
+  "candidate_development_passed": 2,
+  "development_total": 2,
+  "accepted_reference_private_passed": 6,
+  "check_validation": {
+    "behavioral_mutations_rejected": 2,
+    "equivalent_controls_accepted": 1
+  },
+  "escape": "missing flight_condition still claims root load",
+  "recurrence_status": "published-after-evaluation; no longer held out",
+  "primary_candidate_corrections": 0,
+  "primary_test_corrections": "Run existing assertions in separate processes under pytest to prevent stale package resources; candidate unchanged.",
+  "runtime_reported_usage": {
+    "input": 4982920,
+    "output": 27730,
+    "tool_calls": 91,
+    "tool_errors": 15,
+    "note": "runtime-reported totals, not frontier tokens or uncached compute estimate"
+  },
+  "evaluation_sha256": "05f7be1daf85e07931aa898236c6ce5539ab690e8ed189a4cdb31ac2d279f657",
+  "limits": [
+    "one supplied failure snapshot and one local attempt",
+    "no estimate of generalization or causal prompt benefit",
+    "candidate retains other known original pilot limitations",
+    "no production routing or oracle-grade promotion"
+  ]
+}

@@ -38,7 +38,7 @@ codex-local-model status
 ```
 
 Coder-Next runs in `vllm_node` on port 8000 with context 185000 and GPU utilization
-0.87. DeepSeek runs in its pinned EXL3 Compose image on port 8011, with exact
+0.82 by default. DeepSeek runs in its pinned EXL3 Compose image on port 8011, with exact
 served identity `deepseek-v4-flash-0731-exl3-k2`, context 1000000, GPU utilization
 0.85, and thinking enabled at high reasoning effort. It cannot be launched by
 adding EXL3 flags to the Coder-Next image. The manager stops the current container
@@ -50,6 +50,15 @@ using the existing `qwen3-coder-next-fp8` recipe before checking readiness.
 DeepSeek startup requires the cached pinned image and recipe. The reasoning
 overlay is `config/deepseek-v4-reasoning.yaml`; the launcher also accepts
 `CODEX_LOCAL_DEEPSEEK_OVERLAY` for an explicit installed location.
+
+The vLLM runtime supports GPU memory control via the optional `CODEX_LOCAL_VLLM_GPU_MEM`
+environment variable. When unset, the manager defaults to `0.82` for Coder-Next and
+qwen38 profiles. The `qwen35-nvfp4` profile keeps its own fixed `0.82` launch value. All `use` commands validate the
+setting before touching containers, including switches to other profiles.
+Valid values are finite numbers in the interval `(0.5, 0.95]`. An empty value,
+nonfinite value (NaN, Inf), or value outside the range causes the launch to fail
+before any container mutation. This setting does not affect the DeepSeek backend,
+which uses its own pinned recipe with `0.85`.
 
 Installation must update the worker, manager, DeepSeek launcher, investigator
 entry point, routing JSON, and reasoning overlay together. Preserve a backup of

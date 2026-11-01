@@ -1,7 +1,14 @@
-"""Supply the Codex MCP credential without embedding it in client configuration."""
+"""Supply an MCP client credential without embedding it in client configuration.
+
+Usage: client_headers.py [CLIENT]   (default: codex)
+"""
 import json
+import sys
 from pathlib import Path
 
 if __name__ == '__main__':
-    config=json.loads((Path(__file__).resolve().parent/'.local/service-auth.json').read_text())
-    print(json.dumps({'Authorization':'Bearer '+config['clients']['codex']['token']}))
+    client = sys.argv[1] if len(sys.argv) > 1 else 'codex'
+    database = sys.argv[2] if len(sys.argv) > 2 else 'knowledge'
+    from memoryctl import private_directory
+    config=json.loads((private_directory(database)/'service-auth.json').read_text())
+    print(json.dumps({'Authorization':'Bearer '+config['clients'][client]['token']}))

@@ -88,3 +88,20 @@ two minutes between retained events. Command bodies, test
 commands, prompts, output, and private reasoning are excluded. File names are
 bounded to retained changed-path evidence. Raw artifact download is disabled;
 source references are identifiers rather than browser-accessible file paths.
+
+### Reviewer repetition enforcement
+
+The OpenCode bridge aborts reviewer and convergence-reviewer sessions after 20
+completed calls with the same nonempty tool request. Call IDs are deduplicated.
+Empty bash commands, failed calls, and stage-budget signals do not trigger this
+policy; existing diagnostic thresholds remain unchanged. This also applies when
+the convergence session has no wall-clock deadline.
+
+The bridge records the fingerprint, count, and termination reason, then requests
+abort for that session with a five-second request timeout. It exits as failed even
+if abort fails; the worker wrapper stops its own worker container during cleanup.
+It never stops the model server or automatically retries.
+
+This initial heuristic can stop legitimate repeated polling and cannot detect
+loops that continually vary their requests. It does not protect the native Qwen
+runtime. Neither stage-budget warnings nor this threshold prove lack of progress.
