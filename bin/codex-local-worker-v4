@@ -473,10 +473,24 @@ esac
 # Optional role-scoped memory. The issuer credential stays outside the sandbox;
 # only a run-specific contributor/reader token reaches the worker.
 memory_source=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../src" && pwd)
+memory_args=(--config "${CODEX_LOCAL_MEMORY_CONFIG:-${HOME}/.config/codex-local/memory.json}"
+  --runtime-home "$worker_runtime_home" --role "$worker_role"
+  --run-id "$worker_run_id" --repository "$worker_repository" --issue "$worker_issue")
+# Telemetry lands in the launcher's health directory only when recorded execution
+# is on; CODEX_LOCAL_HEALTH_DIR remains the module-level fallback.
+if [[ $record_run == 1 && -n $health_dir ]]; then
+  memory_args+=(--health-dir "$health_dir")
+fi
+# The feature needs the issue title for a useful query. Fetch it only when recall
+# is on AND an issue number and repository are known; a failed or slow fetch yields
+# no title and never stops the run. With recall off this behaves exactly as before
+# (no gh call).
+if [[ ${CODEX_LOCAL_MEMORY_RECALL:-0} == 1 && -n $worker_issue && -n $worker_repository ]]; then
+  issue_title=$(timeout 5 gh issue view "$worker_issue" --repo "$worker_repository" --json title --jq .title 2>/dev/null || true)
+  memory_args+=(--issue-title "$issue_title")
+fi
 if ! env PYTHONPATH="$memory_source" python3 -m codex_local_harness.memory \
-  --config "${CODEX_LOCAL_MEMORY_CONFIG:-${HOME}/.config/codex-local/memory.json}" \
-  --runtime-home "$worker_runtime_home" --role "$worker_role" \
-  --run-id "$worker_run_id" --repository "$worker_repository" --issue "$worker_issue"; then
+  "${memory_args[@]}"; then
   echo "WARN: optional memory setup failed; continuing without memory guidance" >&2
 fi
 if [[ -f "$worker_runtime_home/memory-guidance.txt" ]]; then

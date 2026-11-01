@@ -1,0 +1,24 @@
+{
+  "schema": "flight-replay-v1",
+  "status": "prepared",
+  "origin": {
+    "repository": "wcc118/flight-loads",
+    "issue": 323,
+    "pr": 324,
+    "raw_commit": "5d075c2662def5039f409b18ac5fb81c407857bf",
+    "raw_run": "20261101T023859Z-1980681"
+  },
+  "fixture_sha256": "7541c3ba964ff8a9c3949660ade1340310debe266892ca35ebacf4640f35171c",
+  "baseline_module_sha256": "f23e4ed97aa982cf06ccadcf55527e0c2fe6118a4c2cc7643f3c4dbc21234945",
+  "task_classes": [
+    "input-immutability",
+    "invalid-definition-isolation"
+  ],
+  "limitations": [
+    "Within-case repair experiment; not a model success rate",
+    "No production physics changes",
+    "Original accepted reference and private variants excluded"
+  ],
+  "task_sha256": "b3fcbeaf9b650f7208aab6b774bd324a1c21752f45d9c4e457f5341dc3dfd495",
+  "development_check_sha256": "fcc7da5df2d5edb79c73ab9fdc1bff88df1ae5f5a97b5d138f33399bd44240f0"
+}

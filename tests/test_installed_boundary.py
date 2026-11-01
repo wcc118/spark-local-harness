@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -45,7 +46,26 @@ def test_reviewer_runtime_disables_checkout_cache_writes():
 def test_installed_worker_matches_a_qualified_project_copy():
     release = json.loads(RELEASE_MANIFEST.read_text(encoding="utf-8"))
     installed_digest = hashlib.sha256(INSTALLED_WORKER.read_bytes()).hexdigest()
-    assert installed_digest in release["qualified_worker_sha256"]
+    if installed_digest in release["qualified_worker_sha256"]:
+        return  # Legacy monolithic installation.
+    # Portable installs use a generated, location-dependent wrapper. Verify its
+    # exact template and qualified executable content, not a machine-specific hash.
+    root = RELEASE_MANIFEST.parent.parent
+    installer = runpy.run_path(str(root / "bin/install-harness"))
+    home = INSTALLED_WORKER.parents[2]
+    data = home / ".local/share/codex-local-harness"
+    receipt = json.loads((data / "installation.json").read_text())
+    runtime = Path(receipt["release"])
+    assert runtime.parent == data / "runtime"
+    assert runtime.name == hashlib.sha256((runtime / "config/portable-release.json").read_bytes()).hexdigest()
+    assert (data / "runtime/current").resolve() == runtime
+    installer["verify"](runtime)
+    qualified = json.loads((root / "config/portable-release.json").read_text())["files"]
+    for name in ("bin/codex-local-worker-candidate", "bin/codex-local-worker-v4"):
+        assert hashlib.sha256((runtime / name).read_bytes()).hexdigest() == qualified[name]
+    expected = installer["wrapper"](runtime, home / ".config/codex-local", "codex-local-worker")
+    assert INSTALLED_WORKER.read_text() == expected
+    assert receipt["installed"][str(INSTALLED_WORKER)] == installed_digest
 
 
 def test_candidate_worker_does_not_require_self_promotion():
