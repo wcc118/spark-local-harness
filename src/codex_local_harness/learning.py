@@ -55,14 +55,14 @@ def _get_models(config: dict[str, Any]) -> tuple[str, str]:
     routes = config.get("routes", {})
     standard_model = routes.get("coder/standard", {}).get("model")
     deepseek_model = routes.get("coder/deepseek", {}).get("model")
-    
+
     if not standard_model or not isinstance(standard_model, str) or not standard_model.strip():
         raise ValueError("config.routes['coder/standard'].model must be a non-empty string")
     if not deepseek_model or not isinstance(deepseek_model, str) or not deepseek_model.strip():
         raise ValueError("config.routes['coder/deepseek'].model must be a non-empty string")
     if standard_model == deepseek_model:
         raise ValueError("standard and deepseek models must be distinct")
-    
+
     return standard_model.strip(), deepseek_model.strip()
 
 
@@ -70,7 +70,7 @@ def _build_role_env(sequence: int, standard_model: str, deepseek_model: str, is_
     """Build role_env dict for the assignment."""
     if is_exception:
         return None
-    
+
     if sequence % 2 == 0:
         # Even: coder=standard, reviewer=deepseek
         return {
@@ -102,7 +102,7 @@ def _build_assignment_record(
 ) -> dict[str, Any]:
     """Build the assignment record dict."""
     now = datetime.now(timezone.utc).isoformat()
-    
+
     record: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "plan_version": PLAN_VERSION,
@@ -113,7 +113,7 @@ def _build_assignment_record(
         "reason": reason,
         "observed_at": now,
     }
-    
+
     if is_exception:
         record["sequence"] = None
         record["coder_model"] = None
@@ -124,7 +124,7 @@ def _build_assignment_record(
         record["coder_model"] = deepseek_model if sequence % 2 == 1 else standard_model
         record["reviewer_model"] = deepseek_model if sequence % 2 == 0 else standard_model
         record["role_env"] = _build_role_env(sequence, standard_model, deepseek_model, False)
-    
+
     return record
 
 
@@ -138,7 +138,7 @@ def assign(
     reason: str,
 ) -> dict[str, Any]:
     """Assign a worker to an issue and record it in the ledger.
-    
+
     Returns the recorded assignment dict.
     """
     # Validate inputs
@@ -147,15 +147,15 @@ def assign(
     validate_nonempty_string(reason, "reason")
     validate_positive_int(issue)
     validate_repository(repository)
-    
+
     if decision not in ("eligible", "exception"):
         raise ValueError("decision must be exactly 'eligible' or 'exception'")
-    
+
     is_exception = decision == "exception"
-    
+
     # Get models from config (raises if unavailable)
     standard_model, deepseek_model = _get_models(config)
-    
+
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     # Read existing records with shared lock
@@ -261,9 +261,9 @@ def list_assignments(path: Path) -> tuple[dict[str, Any], ...]:
     """List all assignment records from the ledger."""
     if not path.exists():
         return ()
-    
+
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    
+
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
@@ -277,7 +277,7 @@ def list_assignments(path: Path) -> tuple[dict[str, Any], ...]:
                     raise ValueError(f"invalid JSON at line {line_number}: {exc}") from exc
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    
+
     return tuple(records)
 
 
@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Manage issue-bound worker assignments in a durable ledger"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    
+
     # assign command
     assign_parser = subparsers.add_parser("assign", help="Record a new assignment")
     assign_parser.add_argument("--ledger", type=Path, required=True, help="Path to JSONL ledger file")
@@ -297,13 +297,13 @@ def main(argv: list[str] | None = None) -> int:
     assign_parser.add_argument("--task-class", required=True, help="Task classification string")
     assign_parser.add_argument("--decision", required=True, choices=["eligible", "exception"], help="Assignment decision")
     assign_parser.add_argument("--reason", required=True, help="Reason for the assignment")
-    
+
     # list command
     list_parser = subparsers.add_parser("list", help="List all assignment records")
     list_parser.add_argument("--ledger", type=Path, required=True, help="Path to JSONL ledger file")
-    
+
     args = parser.parse_args(argv)
-    
+
     try:
         if args.command == "assign":
             # Load config
@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"config file not found: {args.config}")
             config_content = args.config.read_text(encoding="utf-8")
             config = json.loads(config_content)
-            
+
             result = assign(
                 path=args.ledger,
                 config=config,
@@ -323,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps(result, sort_keys=True))
             return 0
-            
+
         elif args.command == "list":
             records = list_assignments(args.ledger)
             for record in records:
@@ -332,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    
+
     return 0
 
 
