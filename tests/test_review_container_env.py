@@ -17,6 +17,7 @@ def test_effective_reviewer_container_arguments(tmp_path, convergence):
     checkout, runtime, scratch = (tmp_path / name for name in ("checkout", "runtime", "scratch"))
     env = os.environ | {
         "worker_role": "reviewer", "worker_sandbox": "container",
+        "worker_run_id": "20261101T000000Z-12345",
         "worker_runtime": "opencode", "worker_memory_test_db": "0",
         "worker_repo_path": str(checkout), "worker_runtime_home": str(runtime),
         "review_runtime_tmp": str(scratch), "worker_opencode": "/fixture/opencode",

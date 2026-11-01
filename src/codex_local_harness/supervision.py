@@ -84,9 +84,15 @@ def launch(command: list[str]) -> int:
         health = Path(os.environ.get("CODEX_LOCAL_HEALTH_DIR", str(Path.home() / ".local/share/codex-local-harness/health")))
         item = None
         offset = 0
+        next_container_sweep = 0.0
+
         log_identity = None
         while process.poll() is None:
             try:
+                if time.monotonic() >= next_container_sweep:
+                    from .worker_containers import reap
+                    reap(health)
+                    next_container_sweep = time.monotonic() + 60
                 if item is None:
                     item = next((e for e in records(health / "ownership.jsonl") if e.get("pid") == process.pid
                                  and e.get("process_start") == process_start(process.pid)), None)

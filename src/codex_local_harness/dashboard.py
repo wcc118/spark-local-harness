@@ -24,6 +24,7 @@ from .operation_usage import OperationUsageSnapshot, derive_usage
 from .plan_event import derive_plans, read_plan_records
 from .read_model import RunView, build_run_views, summarize_views
 from .strategy import derive_strategy, read_annotations
+from .worker_containers import snapshot as container_snapshot
 from .spark_metrics import SparkMetricsSampler
 from .workflow import derive_operations, read_workflow_records
 
@@ -543,6 +544,7 @@ class DashboardSource:
                 for item in attention_queue
             ],
             "attention_total": attention_total,
+            "worker_containers": container_snapshot(self.runs.parent),
             "live_execution": live_execution,
             "strategy": strategy,
             "benchmark_manifest": benchmark_manifest.as_dict() if benchmark_manifest else None,
@@ -1775,6 +1777,15 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     strategy_html = _render_strategy(
         snapshot.get("strategy", {}), views, snapshot.get("selected_session"),
     )
+    containers = snapshot.get("worker_containers", {})
+    container_html = ""
+    if containers.get("status") != "unknown" and containers:
+        container_html = ('<p class="subtitle">Worker container sweep: ' +
+            html.escape(str(containers.get("status", "unknown"))) +
+            ' · stale ' + html.escape(str(containers.get("stale", "unknown"))) +
+            ' · stopped ' + html.escape(str(containers.get("stopped", "unknown"))) +
+            ' · errors ' + html.escape(str(containers.get("errors", "unknown"))) +
+            ' · observed ' + html.escape(str(containers.get("observed_at", "unknown"))) + '</p>')
     benchmark_html = _render_benchmark(snapshot)
     context_efficiency_html = _context_efficiency_html(snapshot)
     return f"""<!doctype html>
@@ -1898,6 +1909,7 @@ th.sortable{{cursor:pointer;user-select:none}} th.sortable:hover{{color:var(--in
 {session_picker}
 {current_run_html}
 {spark_pulse_html}
+{container_html}
 {source_banner}
 {brain_html}
 {strategy_html}
