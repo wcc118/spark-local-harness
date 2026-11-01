@@ -56,8 +56,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "completed"},
-                "input": {"command": "echo hello"}
+                "state": {"status": "completed", "input": {"command": "echo hello"}}
             }
         }
         budget.observe(event)
@@ -70,8 +69,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "completed"},
-                "input": {"command": "   "}
+                "state": {"status": "completed", "input": {"command": "   "}}
             }
         }
         budget.observe(event)
@@ -84,8 +82,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "completed"},
-                "input": {"command": ""}
+                "state": {"status": "completed", "input": {"command": ""}}
             }
         }
         budget.observe(event)
@@ -98,8 +95,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "completed"},
-                "input": {"other_key": "value"}
+                "state": {"status": "completed", "input": {"other_key": "value"}}
             }
         }
         budget.observe(event)
@@ -113,8 +109,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "error"},
-                "input": {"command": "echo test"}
+                "state": {"status": "error", "input": {"command": "echo test"}}
             }
         }
         budget.observe(event)
@@ -127,8 +122,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "pending"},
-                "input": {"command": "echo test"}
+                "state": {"status": "pending", "input": {"command": "echo test"}}
             }
         }
         budget.observe(event)
@@ -141,8 +135,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "running"},
-                "input": {"command": "echo test"}
+                "state": {"status": "running", "input": {"command": "echo test"}}
             }
         }
         budget.observe(event)
@@ -156,8 +149,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "pending"},
-                "input": {"command": "echo test"}
+                "state": {"status": "pending", "input": {"command": "echo test"}}
             }
         })
         assert budget.count == 0
@@ -175,8 +167,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-2",
                 "tool": "bash",
-                "state": {"status": "running"},
-                "input": {"command": "echo test"}
+                "state": {"status": "running", "input": {"command": "echo test"}}
             }
         })
         budget.observe({
@@ -190,7 +181,7 @@ class TestToolCallBudgetObserve:
 
     def test_qwen_native_tool_use_counts(self):
         budget = ToolCallBudget(5)
-        event = {
+        budget.observe({
             "message": {
                 "content": [
                     {
@@ -201,13 +192,27 @@ class TestToolCallBudgetObserve:
                     }
                 ]
             }
-        }
-        budget.observe(event)
-        assert budget.count == 1
+        })
+        # tool_use only records issuance, count is 0 until tool_result
+        assert budget.count == 0
 
     def test_qwen_native_tool_result_counts(self):
         budget = ToolCallBudget(5)
-        event = {
+        # First track pending
+        budget.observe({
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tooluse-1",
+                        "name": "bash",
+                        "input": {"command": "echo hello"}
+                    }
+                ]
+            }
+        })
+        # Then count on result
+        budget.observe({
             "message": {
                 "content": [
                     {
@@ -216,8 +221,7 @@ class TestToolCallBudgetObserve:
                     }
                 ]
             }
-        }
-        budget.observe(event)
+        })
         assert budget.count == 1
 
     def test_distinct_callids_count_separately(self):
@@ -228,8 +232,7 @@ class TestToolCallBudgetObserve:
                 "part": {
                     "callID": f"call-{i}",
                     "tool": "bash",
-                    "state": {"status": "completed"},
-                    "input": {"command": "echo hello"}
+                    "state": {"status": "completed", "input": {"command": "echo hello"}}
                 }
             })
         assert budget.count == 3
@@ -243,8 +246,7 @@ class TestToolCallBudgetObserve:
                 "part": {
                     "callID": f"distinct-{i}",
                     "tool": "bash",
-                    "state": {"status": "completed"},
-                    "input": {"command": "echo hello"}  # Same command
+                    "state": {"status": "completed", "input": {"command": "echo hello"}}
                 }
             })
         assert budget.count == 3
@@ -256,8 +258,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "completed"},
-                "input": {"command": "echo hello"}
+                "state": {"status": "completed", "input": {"command": "echo hello"}}
             }
         }
         # Multiple observes of same call ID should only count once
@@ -273,8 +274,7 @@ class TestToolCallBudgetObserve:
             "part": {
                 "callID": "call-1",
                 "tool": "bash",
-                "state": {"status": "completed"},
-                "input": None
+                "state": {"status": "completed", "input": None}
             }
         }
         budget.observe(event)
@@ -288,8 +288,7 @@ class TestToolCallBudgetObserve:
                 "part": {
                     "callID": f"call-{i}",
                     "tool": "bash",
-                    "state": {"status": "completed"},
-                    "input": {"command": "echo test"}
+                    "state": {"status": "completed", "input": {"command": "echo test"}}
                 }
             })
         assert budget.count == 3
@@ -303,8 +302,7 @@ class TestToolCallBudgetObserve:
                 "part": {
                     "callID": f"call-{i}",
                     "tool": "bash",
-                    "state": {"status": "completed"},
-                    "input": {"command": "echo test"}
+                    "state": {"status": "completed", "input": {"command": "echo test"}}
                 }
             })
         assert budget.count == 4
@@ -315,17 +313,17 @@ class TestToolCallBudgetObserve:
         assert not budget.exceeded
         budget.observe({
             "type": "tool_use",
-            "part": {"callID": "c1", "tool": "bash", "state": {"status": "completed"}, "input": {"command": "a"}}
+            "part": {"callID": "c1", "tool": "bash", "state": {"status": "completed", "input": {"command": "a"}}}
         })
         assert not budget.exceeded
         budget.observe({
             "type": "tool_use",
-            "part": {"callID": "c2", "tool": "bash", "state": {"status": "completed"}, "input": {"command": "b"}}
+            "part": {"callID": "c2", "tool": "bash", "state": {"status": "completed", "input": {"command": "b"}}}
         })
         assert not budget.exceeded
         budget.observe({
             "type": "tool_use",
-            "part": {"callID": "c3", "tool": "bash", "state": {"status": "completed"}, "input": {"command": "c"}}
+            "part": {"callID": "c3", "tool": "bash", "state": {"status": "completed", "input": {"command": "c"}}}
         })
         assert budget.exceeded
 
@@ -335,19 +333,19 @@ class TestToolCallBudgetCLI:
 
     def test_cli_valid_log_within_budget(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"completed"},"input":{"command":"echo hi"}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"completed","input":{"command":"echo hi"}}}}\n')
         result = main(["--log", str(log_file), "--limit", "5"])
         assert result == 0
 
     def test_cli_valid_log_exceeds_budget(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
         lines = [
-            '{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"completed"},"input":{"command":"a"}}}',
-            '{"type":"tool_use","part":{"callID":"c2","tool":"bash","state":{"status":"completed"},"input":{"command":"b"}}}',
-            '{"type":"tool_use","part":{"callID":"c3","tool":"bash","state":{"status":"completed"},"input":{"command":"c"}}}',
-            '{"type":"tool_use","part":{"callID":"c4","tool":"bash","state":{"status":"completed"},"input":{"command":"d"}}}',
-            '{"type":"tool_use","part":{"callID":"c5","tool":"bash","state":{"status":"completed"},"input":{"command":"e"}}}',
-            '{"type":"tool_use","part":{"callID":"c6","tool":"bash","state":{"status":"completed"},"input":{"command":"f"}}}',
+            '{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"completed","input":{"command":"a"}}}}',
+            '{"type":"tool_use","part":{"callID":"c2","tool":"bash","state":{"status":"completed","input":{"command":"b"}}}}',
+            '{"type":"tool_use","part":{"callID":"c3","tool":"bash","state":{"status":"completed","input":{"command":"c"}}}}',
+            '{"type":"tool_use","part":{"callID":"c4","tool":"bash","state":{"status":"completed","input":{"command":"d"}}}}',
+            '{"type":"tool_use","part":{"callID":"c5","tool":"bash","state":{"status":"completed","input":{"command":"e"}}}}',
+            '{"type":"tool_use","part":{"callID":"c6","tool":"bash","state":{"status":"completed","input":{"command":"f"}}}}',
         ]
         log_file.write_text("\n".join(lines) + "\n")
         result = main(["--log", str(log_file), "--limit", "5"])
@@ -374,46 +372,46 @@ class TestToolCallBudgetCLI:
     def test_cli_nonexistent_log(self, tmp_path: Path):
         log_file = tmp_path / "nonexistent.jsonl"
         result = main(["--log", str(log_file), "--limit", "5"])
-        assert result == 0
+        assert result == 2
 
     def test_cli_empty_bash_ignored(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"completed"},"input":{"command":"   "}}}\n')
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c2","tool":"bash","state":{"status":"completed"},"input":{"command":""}}}\n')
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c3","tool":"bash","state":{"status":"completed"},"input":{"command":"echo"}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"completed","input":{"command":"   "}}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c2","tool":"bash","state":{"status":"completed","input":{"command":""}}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c3","tool":"bash","state":{"status":"completed","input":{"command":"echo"}}}}\n')
         result = main(["--log", str(log_file), "--limit", "1"])
-        assert result == 0  # Only 1 non-empty call
+        assert result == 0
 
     def test_cli_distinct_commands_count_separately(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
-        lines = [f'{{"type":"tool_use","part":{{"callID":"c{i}","tool":"bash","state":{{"status":"completed"}},"input":{{"command":"echo {i}"}}}}}}' for i in range(5)]
+        lines = [f'{{"type":"tool_use","part":{{"callID":"c{i}","tool":"bash","state":{{"status":"completed","input":{{"command":"echo {i}"}}}}}}}}' for i in range(5)]
         log_file.write_text("\n".join(lines) + "\n")
         result = main(["--log", str(log_file), "--limit", "4"])
-        assert result == 75  # 5 > 4
+        assert result == 75
 
     def test_cli_pending_not_counted(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"pending"},"input":{"command":"echo"}}}\n')
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c2","tool":"bash","state":{"status":"running"},"input":{"command":"echo"}}}\n')
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c3","tool":"bash","state":{"status":"completed"},"input":{"command":"echo"}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"pending","input":{"command":"echo"}}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c2","tool":"bash","state":{"status":"running","input":{"command":"echo"}}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c3","tool":"bash","state":{"status":"completed","input":{"command":"echo"}}}}\n')
         result = main(["--log", str(log_file), "--limit", "1"])
-        assert result == 0  # Only 1 completed
+        assert result == 0
 
     def test_cli_error_status_counts(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"error"},"input":{"command":"echo"}}}\n')
-        result = main(["--log", str(log_file), "--limit", "0"])
-        assert result == 2  # Invalid limit (not positive)
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"error","input":{"command":"echo"}}}}\n')
+        result = main(["--log", str(log_file), "--limit", "1"])
+        assert result == 0
 
     def test_cli_qwen_native_format(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
         log_file.write_text('{"message":{"content":[{"type":"tool_use","id":"t1","name":"bash","input":{"command":"echo"}}]}}\n')
         result = main(["--log", str(log_file), "--limit", "1"])
-        assert result == 0  # 1 == 1, not exceeded
+        assert result == 0
 
     def test_cli_tool_result_counts(self, tmp_path: Path):
         log_file = tmp_path / "test.jsonl"
-        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"pending"},"input":{"command":"echo"}}}\n')
+        log_file.write_text('{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"pending","input":{"command":"echo"}}}}\n')
         log_file.write_text('{"type":"tool_result","tool_use_id":"c1"}\n')
         result = main(["--log", str(log_file), "--limit", "1"])
-        assert result == 0  # 1 == 1, not exceeded
+        assert result == 0

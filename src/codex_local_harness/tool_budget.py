@@ -1,16 +1,6 @@
 """Bounded pure counting slice for tool call budget enforcement.
 
 Tracks unique completed nonempty tool calls from OpenCode stream events.
-Supports OpenCode type tool_use part.callID, part.tool, state.status completed/error,
-state.input. Ignores pending/running, repeated updates same call, empty input.
-Bash command whitespace empty is empty even other fields.
-
-Results may include is_error and still count. Never count identical command
-in different callIDs as one; total budget must catch distinct command churn.
-
-CLI: python -m codex_local_harness.tool_budget --log PATH --limit N
-     reads JSONL incrementally and prints counts/limit/exceeded.
-     Exit 75 if exceeded, 0 if within, 2 malformed JSON/config.
 """
 from __future__ import annotations
 
@@ -18,7 +8,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 
 class ToolCallBudget:
@@ -30,7 +19,7 @@ class ToolCallBudget:
             raise ValueError("limit must be a positive integer")
         self._limit = limit
         self._completed_ids: set[str] = set()
-        self._pending_calls: dict[str, dict[str, Any]] = {}
+        self._pending_calls: dict[str, object] = {}
 
     @property
     def count(self) -> int:
@@ -42,149 +31,129 @@ class ToolCallBudget:
         """Return whether count exceeds limit."""
         return self.count > self._limit
 
-    def _is_empty_input(self, input_val: Any) -> bool:
-        """Check if input is empty. Empty bash command whitespace is empty."""
+    def _is_empty_input(self, input_val: object, tool: str | None = None) -> bool:
+        """Check if input is empty. Bash requires command key."""
         if input_val is None:
             return True
         if isinstance(input_val, dict):
-            # For OpenCode events, input is typically a dict
+            if not input_val:
+                return True
             cmd = input_val.get("command")
-            if cmd is None:
-                return True
-            if isinstance(cmd, str) and cmd.strip() == "":
-                return True
-            # If command is present and nonempty (or other keys present), not empty
+            if tool == "bash":
+                if cmd is None:
+                    return True
+                if isinstance(cmd, str) and cmd.strip() == "":
+                    return True
+                return False
             return False
         if isinstance(input_val, str):
             return input_val.strip() == ""
-        return False
+        return True
 
-    def _get_call_id(self, part: dict[str, Any]) -> str | None:
-        """Extract call ID from part, supporting both OpenCode type."""
-        # OpenCode type: part.callID (or id)
+    def _get_call_id(self, part: dict[str, object]) -> str | None:
+        """Extract call ID from part."""
         call_id = part.get("callID")
         if call_id is None:
             call_id = part.get("id")
         return call_id if isinstance(call_id, str) and call_id else None
 
-    def _get_state_status(self, part: dict[str, Any]) -> str | None:
-        """Extract state status from part."""
-        state = part.get("state")
-        if isinstance(state, dict):
-            return state.get("status")
-        return None
-
-    def _get_tool(self, part: dict[str, Any]) -> str | None:
+    def _get_tool(self, part: dict[str, object]) -> str | None:
         """Extract tool name from part."""
         tool = part.get("tool")
         if isinstance(tool, str) and tool:
             return tool
         return None
 
-    def _get_input(self, part: dict[str, Any]) -> Any:
-        """Extract input from part."""
-        return part.get("input")
-
-    def _get_part(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        """Extract part from event."""
-        part = event.get("part")
-        if isinstance(part, dict):
-            return part
+    def _get_state_input(self, part: dict[str, object]) -> object:
+        """Extract input from part.state."""
+        state = part.get("state")
+        if isinstance(state, dict):
+            return state.get("input")
         return None
 
-    def observe(self, event: dict[str, Any]) -> bool:
-        """Record event and return whether count exceeds limit.
+    def _count_call(self, call_id: str, input_val: object, tool: str | None = None) -> None:
+        """Count a call if not already counted and input is nonempty."""
+        if call_id in self._completed_ids:
+            return
+        if input_val is not None and not self._is_empty_input(input_val, tool):
+            self._completed_ids.add(call_id)
 
-        Supports:
-        - OpenCode tool_use events: type=tool_use, part with callID/tool/state
-        - OpenCode tool_result events: type=tool_result with tool_use_id
-        - Qwen native: message.content tool_use/tool_result events
-
-        Only count once result is known (completed/error state, or tool_result).
-        Ignore pending/running, repeated updates same call, empty input.
-        Results with is_error still count.
-        """
+    def observe(self, event: dict[str, object]) -> bool:
+        """Record event and return whether count exceeds limit."""
         if not isinstance(event, dict):
-            return self._exceeded
+            return self.exceeded
 
-        # Check for OpenCode tool_use event
-        if event.get("type") == "tool_use":
-            part = self._get_part(event)
-            if part is None:
-                return self._exceeded
+        event_type = event.get("type")
+        if event_type == "tool_use":
+            part = event.get("part")
+            if isinstance(part, dict):
+                call_id = self._get_call_id(part)
+                if call_id is None:
+                    return self.exceeded
+                tool = self._get_tool(part)
+                status = part.get("state", {}).get("status") if isinstance(part.get("state"), dict) else None
+                input_val = self._get_state_input(part)
 
-            call_id = self._get_call_id(part)
-            if call_id is None:
-                return self._exceeded
+                if status in ("completed", "error"):
+                    self._count_call(call_id, input_val, tool)
+                elif status in ("pending", "running"):
+                    self._pending_calls[call_id] = (input_val, tool)
+                else:
+                    self._pending_calls[call_id] = (input_val, tool)
+            return self.exceeded
 
-            status = self._get_state_status(part)
-            tool = self._get_tool(part)
-
-            if status in ("completed", "error"):
-                # Completed or error - check input and record
-                input_val = self._get_input(part)
-                if not self._is_empty_input(input_val):
-                    self._completed_ids.add(call_id)
-                return self._exceeded
-
-            # Pending/running - track for later completion
-            if status in ("pending", "running"):
-                self._pending_calls[call_id] = {"tool": tool, "input": self._get_input(part)}
-                return self._exceeded
-
-            return self._exceeded
-
-        # Check for OpenCode tool_result event
-        if event.get("type") == "tool_result":
-            # tool_result at top level has tool_use_id
+        if event_type == "tool_result":
             tool_use_id = event.get("tool_use_id")
-            if isinstance(tool_use_id, str) and tool_use_id and tool_use_id in self._pending_calls:
-                del self._pending_calls[tool_use_id]
-                # tool_result counts as completion
-                self._completed_ids.add(tool_use_id)
-                return self._exceeded
+            if isinstance(tool_use_id, str) and tool_use_id:
+                if tool_use_id not in self._completed_ids:
+                    val = self._pending_calls.pop(tool_use_id, None)
+                    if val is not None:
+                        input_val, tool = val if isinstance(val, tuple) else (val, None)
+                        if input_val is not None and not self._is_empty_input(input_val, tool):
+                            self._completed_ids.add(tool_use_id)
 
-            # Or nested part structure
-            part = self._get_part(event)
-            if part is not None:
-                tool_use_id = self._get_call_id(part)
-                if isinstance(tool_use_id, str) and tool_use_id and tool_use_id in self._pending_calls:
-                    del self._pending_calls[tool_use_id]
-                    self._completed_ids.add(tool_use_id)
-                    return self._exceeded
+            part = event.get("part")
+            if isinstance(part, dict):
+                call_id = self._get_call_id(part)
+                if call_id and call_id not in self._completed_ids:
+                    val = self._pending_calls.pop(call_id, None)
+                    if val is not None:
+                        input_val, tool = val if isinstance(val, tuple) else (val, None)
+                        if input_val is not None and not self._is_empty_input(input_val, tool):
+                            self._completed_ids.add(call_id)
+            return self.exceeded
 
-        # Check for Qwen native assistant message with tool_use in content
-        message = event.get("message") or {}
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return self.exceeded
+
         content = message.get("content")
+        if isinstance(content, str):
+            return self.exceeded
         if not isinstance(content, list):
-            content = []
+            return self.exceeded
 
-        for part in content:
-            if not isinstance(part, dict):
+        for item in content:
+            if not isinstance(item, dict):
                 continue
-
-            if part.get("type") == "tool_use":
-                call_id = part.get("id")
+            item_type = item.get("type")
+            if item_type == "tool_use":
+                call_id = item.get("id")
                 if isinstance(call_id, str) and call_id:
-                    tool = part.get("name")
-                    input_val = part.get("input")
-                    if tool and not self._is_empty_input(input_val):
-                        self._completed_ids.add(call_id)
-                        return self._exceeded
-
-            if part.get("type") == "tool_result":
-                tool_use_id = part.get("tool_use_id")
+                    input_val = item.get("input")
+                    tool = item.get("name")
+                    self._pending_calls[call_id] = (input_val, tool)
+            if item_type == "tool_result":
+                tool_use_id = item.get("tool_use_id")
                 if isinstance(tool_use_id, str) and tool_use_id:
-                    # tool_result counts as completion
-                    self._completed_ids.add(tool_use_id)
-                    return self._exceeded
+                    if tool_use_id not in self._completed_ids:
+                        val = self._pending_calls.pop(tool_use_id, None)
+                        if val is not None:
+                            input_val, tool = val if isinstance(val, tuple) else (val, None)
+                            if input_val is not None and not self._is_empty_input(input_val, tool):
+                                self._completed_ids.add(tool_use_id)
 
-        return self._exceeded
-
-    @property
-    def _exceeded(self) -> bool:
-        """Return whether count exceeds limit."""
-        return self.count > self._limit
+        return self.exceeded
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -193,26 +162,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log", type=Path, required=True, help="Path to JSONL log file")
     parser.add_argument("--limit", type=int, required=True, help="Budget limit (positive integer)")
 
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit:
-        return 2
+    args = parser.parse_args(argv)
 
-    # Validate limit
     if isinstance(args.limit, bool) or args.limit <= 0:
         return 2
 
-    try:
-        log_path = args.log
-        if not log_path.exists():
-            # Empty log means zero calls, within budget
-            print(json.dumps({"count": 0, "limit": args.limit, "exceeded": False}))
-            return 0
+    log_path = args.log
+    if not log_path.exists():
+        return 2
 
+    try:
         budget = ToolCallBudget(args.limit)
 
         with log_path.open("r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
@@ -223,13 +186,11 @@ def main(argv: list[str] | None = None) -> int:
 
                 budget.observe(event)
 
-        exceeded = budget._exceeded
-        print(json.dumps({"count": budget.count, "limit": args.limit, "exceeded": exceeded}))
+        if budget.exceeded:
+            return 75
+        return 0
 
-        return 75 if exceeded else 0
-
-    except (OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
+    except (OSError, ValueError):
         return 2
 
 
