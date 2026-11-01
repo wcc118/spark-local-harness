@@ -258,3 +258,31 @@ the worker. Explicitly invalid/empty/missing profiles fail closed. Test fixture
 cleanup handles setup/teardown failures; the host owns container/network cleanup.
 Without the profile variable, the existing operator-only host fixture is retained.
 See the harness's `docs/memory.md` for build/launch commands, limits and recovery.
+
+## Private oracle memory (#254)
+
+`memoryctl.py --database oracle bootstrap` adds `personal/oracle` without changing
+`personal/knowledge`. Each database has independent database-user passwords and
+service clients. The oracle MCP service binds only `127.0.0.1:9603`; use
+`deployment/oracle-memory-tools.service`. It accepts frontier static identities
+only and refuses `/sessions` and all signed worker tokens, even if someone copies
+a worker credential into its configuration. The shared issuer and worker configs
+continue to use port 9602. Database administration is trusted and can access both.
+
+`memoryctl.py --database oracle stats|review|backfill|backup|prune` selects the
+oracle profile. Credentials stay under ignored `.local/oracle`, backups under
+`backups/oracle`; the daily backup unit exports and restore-checks both profiles.
+`client_headers.py claude oracle` supplies the distinct private MCP identity;
+never print its output into logs. Register it as `oracle_memory` in frontier
+clients, not in worker runtime configuration. Search uses the same hybrid engine
+and keyword fallback as shared memory.
+
+For public lessons, author a fresh JSON proposal for `export_lesson.py`. Allowed
+fields are text, source, request_id, conditions, topics, project, reviewed_by,
+review_note and approved_digest. Review every field for expected values, hidden
+case details and private sources. Use `--digest` after review, then place that
+value in approved_digest and invoke without `--digest`. Changed content is refused;
+accepted text is always a hypothesis pending later confirmation. No private
+record is fetched or copied by this tool. This is a reviewed publication process,
+not an automatic sanitizer or a proof that prose is safe. Routine oracle notes
+stay private; reusable public lessons are curated rather than exported wholesale.

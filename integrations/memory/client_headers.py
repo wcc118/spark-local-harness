@@ -8,5 +8,7 @@ from pathlib import Path
 
 if __name__ == '__main__':
     client = sys.argv[1] if len(sys.argv) > 1 else 'codex'
-    config=json.loads((Path(__file__).resolve().parent/'.local/service-auth.json').read_text())
+    database = sys.argv[2] if len(sys.argv) > 2 else 'knowledge'
+    from memoryctl import private_directory
+    config=json.loads((private_directory(database)/'service-auth.json').read_text())
     print(json.dumps({'Authorization':'Bearer '+config['clients'][client]['token']}))
