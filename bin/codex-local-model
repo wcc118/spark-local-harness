@@ -14,6 +14,27 @@ deepseek_endpoint=${CODEX_LOCAL_DEEPSEEK_ENDPOINT:-http://127.0.0.1:8011}
 deepseek_launcher=${CODEX_LOCAL_DEEPSEEK_LAUNCHER:-$(dirname -- "$0")/codex-local-deepseek-v4}
 recipe_launcher=${CODEX_LOCAL_RECIPE_LAUNCHER:-${HOME}/spark-vllm-docker/run-recipe.sh}
 
+gpu_mem_default=0.82
+
+validate_gpu_mem() {
+  local value="$1"
+  if [[ -z "$value" ]]; then
+    echo "ERROR: CODEX_LOCAL_VLLM_GPU_MEM is empty; unset to use default ${gpu_mem_default}, or set to a finite value in (0.5, 0.95]" >&2
+    return 1
+  fi
+  if ! [[ "$value" =~ ^-?[0-9]+\.?[0-9]*$ ]]; then
+    echo "ERROR: CODEX_LOCAL_VLLM_GPU_MEM '$value' is not a valid number" >&2
+    return 1
+  fi
+  local is_valid
+  is_valid=$(awk -v val="$value" 'BEGIN { print (val > 0.5 && val <= 0.95 && val == val) ? 1 : 0 }')
+  if [[ "$is_valid" -ne 1 ]]; then
+    echo "ERROR: CODEX_LOCAL_VLLM_GPU_MEM '$value' must be finite and in (0.5, 0.95]" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
 usage() {
   echo "usage: codex-local-model status | use {qwen38|coder-next|qwen35-nvfp4|deepseek-v4-reasoning}" >&2
   exit 2
@@ -72,14 +93,15 @@ stop_server() {
 launch() {
   local profile=$1 model log extra
   model=$(profile_model "$profile") || usage
+
   case "$profile" in
     qwen38)
       log=/root/.cache/vllm/qwen38-27b-fp8.log
-      extra='--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 185000 --gpu-memory-utilization 0.87 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000'
+      extra="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 185000 --gpu-memory-utilization $gpu_mem --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000"
       ;;
     coder-next)
       log=/root/.cache/vllm/qwen3-coder-next-fp8.log
-      extra='--enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 185000 --gpu-memory-utilization 0.87 --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000'
+      extra="--enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 185000 --gpu-memory-utilization $gpu_mem --load-format fastsafetensors --attention-backend flashinfer --enable-prefix-caching --host 0.0.0.0 --port 8000"
       ;;
     qwen35-nvfp4)
       log=/root/.cache/vllm/qwen35-nvfp4-122b.log
@@ -112,6 +134,7 @@ case ${1:-} in
     (( $# == 2 )) || usage
     target=$2
     expected=$(profile_model "$target") || usage
+    gpu_mem=$(validate_gpu_mem "${CODEX_LOCAL_VLLM_GPU_MEM-$gpu_mem_default}") || exit 1
     acquire_lock
     current=$(active_model)
     deepseek_current=$(active_model "$deepseek_endpoint")
@@ -150,7 +173,7 @@ case ${1:-} in
         # The production recipe uses an auto-removed container. Recreate it
         # through that same recipe when returning from DeepSeek.
         "$recipe_launcher" qwen3-coder-next-fp8 --solo --port 8000 \
-          --gpu-mem 0.87 --max-model-len 185000 --daemon
+          --gpu-mem "$gpu_mem" --max-model-len 185000 --daemon
         wait_for_model "$(profile_model coder-next)"
         [[ $target != coder-next ]] || exit 0
       fi
