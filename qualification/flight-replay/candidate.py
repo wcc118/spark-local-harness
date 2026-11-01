@@ -86,9 +86,8 @@ def _validate_input_spec(spec):
         if cfg_name in seen_names:
             raise ValueError(f'duplicate configuration name: "{cfg_name}"')
         seen_names.add(cfg_name)
-        # Deepcopy before validating definition to avoid mutation
-        cfg['definition'] = deepcopy(cfg['definition'])
-        validate_definition(cfg['definition'])
+        # Note: we don't validate definition here - we validate during row evaluation
+        # to allow invalid definitions to produce rows with null metrics
 
     # Validate cases: list of 1-12 {name, speed_ft_s, load_factor} objects
     cases = spec.get('cases')
@@ -104,10 +103,9 @@ def _validate_input_spec(spec):
             raise ValueError(f'duplicate case name: "{case_name}"')
         seen_case_names.add(case_name)
 
-        case['speed_ft_s'] = _validate_number(
-            case['speed_ft_s'], f'case {i} speed_ft_s', lo=SPEED_MIN, hi=SPEED_MAX)
-        case['load_factor'] = _validate_number(
-            case['load_factor'], f'case {i} load_factor', lo=LOAD_FACTOR_MIN, hi=LOAD_FACTOR_MAX)
+        # Validate without mutating caller's data - just check bounds
+        _validate_number(case['speed_ft_s'], f'case {i} speed_ft_s', lo=SPEED_MIN, hi=SPEED_MAX)
+        _validate_number(case['load_factor'], f'case {i} load_factor', lo=LOAD_FACTOR_MIN, hi=LOAD_FACTOR_MAX)
 
     # Return deep copy to ensure caller data is never mutated
     return deepcopy(spec)
@@ -137,9 +135,10 @@ def _copy_definition_with_load_case(definition, load_factor, speed_ft_s):
         'kind': 'vertical-translation',
         'a_up_g': load_factor - 1.0
     }
-    # Only set speed if flight_condition exists (required)
-    if 'flight_condition' in d:
-        d['flight_condition'] = deepcopy(d['flight_condition'])
+    # Only set speed if flight_condition exists and is not None (required)
+    fc = d.get('flight_condition')
+    if fc is not None:
+        d['flight_condition'] = deepcopy(fc)
         d['flight_condition']['speed_ft_s'] = speed_ft_s
     return d
 
@@ -365,7 +364,27 @@ def compare_designs(spec):
             load_factor = case['load_factor']
 
             # Evaluate this configuration/case combination
-            eval_result = _evaluate_configuration(definition, load_factor, speed_ft_s)
+            # Wrap in try/except to handle invalid definitions gracefully
+            try:
+                eval_result = _evaluate_configuration(definition, load_factor, speed_ft_s)
+            except Exception as e:
+                # Invalid definition - create row with null metrics and explanation
+                eval_result = {
+                    'metrics': {
+                        'weight_lbf': None,
+                        'cg_station_in': None,
+                        'dynamic_pressure_psi': None,
+                        'wing_up_lbf': None,
+                        'tail_up_lbf': None,
+                        'root_Fz_lbf': None,
+                        'root_Mx_in_lbf': None,
+                        'cut_Fz_lbf': None,
+                        'cut_My_in_lbf': None
+                    },
+                    'status': 'invalid-definition',
+                    'load_reasons': [f'Invalid aircraft definition: {e}'],
+                    'trim': {'converged': False, 'feasible': False, 'domain_violations': []}
+                }
 
             # Build row
             row = {
