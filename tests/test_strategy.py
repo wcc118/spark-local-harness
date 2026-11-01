@@ -124,3 +124,18 @@ def test_strategy_history_is_bounded_and_exclusions_are_reported() -> None:
     assert strategy["facts"]["runs"] == MAX_RUNS
     assert strategy["facts"]["run_history_exclusions"] == 3
     assert strategy["limits"]["runs"] == MAX_RUNS
+
+
+def test_unknown_usage_is_excluded_not_zero_or_crash():
+    views = (_view("known"), _view("unknown", local_tokens=None, frontier_tokens=None))
+    result = derive_strategy(views, {"nodes": [], "signals": []}, 0, 0)
+    tokens = result["derivations"]["cohorts"][0]["metrics"]["tokens"]
+    assert tokens["value"] == 100
+    assert tokens["denominator"] == 1
+    assert tokens["exclusions"] == 1
+
+
+def test_missing_annotation_source_stays_unknown(tmp_path):
+    path = tmp_path / 'annotations.jsonl'
+    path.write_text(json.dumps({'kind': 'reviewer-catch', 'run_ids': ['run-1']}) + '\n')
+    assert read_annotations(path)[0]['source'] == 'unknown'

@@ -135,7 +135,7 @@ def _build_view(run_id: str, run: RunHealth | None, adjudication: Adjudication |
         evidence_refs=adjudication.evidence_refs if adjudication else (),
         wall_seconds=wall_seconds,
         local_tokens=run.local_tokens if run else None,
-        frontier_tokens=run.frontier_tokens if run else 0,
+        frontier_tokens=run.frontier_tokens if run else None,
         turns=run.turns if run else 0,
         tool_calls=run.tool_calls if run else 0,
         tool_errors=run.tool_errors if run else 0,
