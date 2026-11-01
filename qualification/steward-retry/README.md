@@ -148,3 +148,7 @@ The test uses Node.js `vm` module to execute the workspace JavaScript in a sandb
 4. **Index Calculation**:
    - Raw: Uses `nextPlaybackIndex()` which calculates based on current index
    - Fix: Uses `playbackIndexAt()` which finds index based on accumulated clock time
+
+## Primary evaluation
+
+See outcome.json for both attempts and the primary-held evaluation identity. The corrected candidate rejected all four fresh broken variants and accepted both equivalent correct controls. Syntax and timer exceptions returned2, separately from behavioral rejection1. Replaying the first evaluation also rejected all four earlier defects. Admission is probationary and awaits independent review. This is not a browser qualification or a general autonomous-authoring claim.

@@ -1,0 +1,57 @@
+{
+  "status": "probation-pending-independent-review",
+  "scope": "One playback-check authoring trial, template plus one frontier correction; not general autonomous oracle capability.",
+  "origin_issue": "https://github.com/wcc118/oracles/issues/5",
+  "issue": "https://github.com/wcc118/codex-local-harness/issues/257",
+  "memory_lesson": "memory:ed3295869c44cab29815495e668fd8e7",
+  "attempts": [
+    {
+      "run_id": "20261101T013843Z-1812515",
+      "commit": "b52e4d2",
+      "execution": "cancelled143 after local commit and unavailable publication retries",
+      "raw_rejected": true,
+      "fix_accepted": true,
+      "broken_rejected": 2,
+      "broken_total": 4,
+      "equivalent_accepted": 2,
+      "equivalent_total": 2,
+      "admitted": false,
+      "contract_violations": [
+        "source rewriting",
+        "swallowed timer exceptions",
+        "runtime errors reported as behavioral failures"
+      ]
+    },
+    {
+      "run_id": "20261101T015631Z-1850966",
+      "commit": "30ee0bb77368598b66bf454e3de08daaad409a1a",
+      "execution": "completed0, host published PR259",
+      "raw_rejected": true,
+      "fix_accepted": true,
+      "broken_rejected": 4,
+      "broken_total": 4,
+      "equivalent_accepted": 2,
+      "equivalent_total": 2,
+      "syntax_and_timer_errors_exit": 2
+    }
+  ],
+  "candidate_sha256": "10a2a770515bd674184b56d5c80ceac9b3d92921b88de3842bdfc422b8a4128c",
+  "evaluation_manifests": [
+    "22070c2722fe9c52db81a0864128de93977f6a6ec43b38cccd852fd131c6cee5",
+    "091e5e369cca365f65910815dd2b8b9c2081f005c6a7f97c48f08449f94a10e9"
+  ],
+  "recurrence_replay": {
+    "earlier_broken_rejected": 4,
+    "earlier_broken_total": 4,
+    "equivalent_accepted": 2,
+    "equivalent_total": 2,
+    "claim": "Known failure recurrence detected in replay, not measured real-world escape-rate reduction."
+  },
+  "reproduction": "Operator: python3 ~/.local/share/codex-local-harness/evaluations/steward-257-v2/evaluate.py qualification/steward-retry/check.mjs. Evaluation workspaces remain outside worker checkout; public development commands are in README.",
+  "limits": [
+    "VM/DOM simulation, not browser qualification",
+    "One case and one model route",
+    "No prompt/model routing promotion",
+    "Private variants retained on operator host, hashes recorded here; not included in this worker-accessible repository"
+  ]
+}
