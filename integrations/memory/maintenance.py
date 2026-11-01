@@ -13,7 +13,7 @@ import re
 import subprocess
 
 import embedding
-from memory_service import Database, make_title, project_key
+from memory_service import Database, clean_label, make_title, project_key
 from memoryctl import ROOT, private_write
 
 STALE_DAYS, UNRETRIEVED_DAYS, DISPUTED_DAYS = 90, 60, 14
@@ -83,6 +83,99 @@ def stats(db=None):
     if returned:
         lines.append('most returned: ' + '; '.join(f'{titles.get(i, i)[:50]} x{n}' for i, n in returned.most_common(3)))
     return '\n'.join(lines)
+
+
+def usage(db=None, days=7, recent=12, as_dict=False):
+    """How agents actually use memory: the funnel (searched, returned, opened, applied), who, and which lessons.
+
+    Opens and use reports are agent behaviour; a returned lesson that was never opened or reported is
+    not evidence it was ignored or ignorable, only that nothing was recorded. Use reports are the
+    agents' own account, not verified measurements.
+    """
+    db = db or Database()
+    window = {'d': f'{days}d'}
+    logs = db.query('SELECT kind, created_at, actor, role, repository, issue, project, count, results FROM retrieval '
+                    'WHERE created_at > time::now() - <duration> $d ORDER BY created_at DESC;', window)[0]
+    uses = db.query("SELECT target, outcome, explanation, actor, role, repository, issue, created_at FROM memory_event "
+                    "WHERE action = 'use' AND created_at > time::now() - <duration> $d ORDER BY created_at DESC;", window)[0]
+    memories = {str(m['id']): m for m in db.query('SELECT id, title, text, project, status FROM memory;')[0]}
+    title = lambda i: (memories.get(str(i), {}).get('title') or make_title(memories.get(str(i), {}).get('text', '')) or str(i))
+    # Worker credentials already carry the issue as OWNER/REPO#N; other identities carry none.
+    where = lambda r: (str(r['issue']) if '#' in str(r.get('issue') or '') else (r.get('project') or '-'))
+
+    searches = [r for r in logs if (r.get('kind') or 'search') == 'search']  # rows before `kind` existed are searches
+    opens = [r for r in logs if r.get('kind') == 'open']
+    returned = collections.Counter(str(i) for r in searches for i in r.get('results', []))
+    opened = collections.Counter(str(i) for r in opens for i in r.get('results', []))
+    applied = collections.Counter(str(u['target']) for u in uses)
+    live = [i for i, m in memories.items() if m['status'] in {'active', 'disputed'}]
+
+    who = collections.defaultdict(lambda: collections.Counter())
+    for r in searches: who[r['actor']]['searches'] += 1
+    for r in opens: who[r['actor']]['opens'] += 1
+    for u in uses: who[u['actor']]['use reports'] += 1
+
+    funnel = {'days': days, 'searches': len(searches), 'zero_result_searches': sum(1 for r in searches if not r.get('count')),
+              'lessons_returned': len(returned), 'opens': len(opens), 'lessons_opened': len(opened),
+              'use_reports': len(uses), 'lessons_applied': len(applied),
+              'outcomes': dict(collections.Counter(u['outcome'] for u in uses)),
+              'returned_not_opened': len(set(returned) - set(opened) - set(applied)),
+              'opened_not_reported': len(set(opened) - set(applied)), 'live_lessons': len(live),
+              'live_never_returned': len(set(live) - set(returned))}
+
+    events = []
+    for r in searches:
+        shown = [title(i) for i in r.get('results', [])[:2]]
+        events.append({'at': r['created_at'], 'type': 'search', 'who': r['actor'], 'where': where(r), 'detail': f"{r.get('count', 0)} returned" + (': ' + '; '.join(shown) if shown else '')})
+    for r in opens:
+        events.append({'at': r['created_at'], 'type': 'open', 'who': r['actor'], 'where': where(r), 'detail': title(r['results'][0]) if r.get('results') else ''})
+    for u in uses:
+        events.append({'at': u['created_at'], 'type': 'use', 'who': u['actor'], 'where': where(u), 'detail': f"{u['outcome']}: {title(u['target'])} | {(u.get('explanation') or '')[:160]}"})
+    events.sort(key=lambda e: e['at'], reverse=True)
+
+    result = {'funnel': funnel, 'who': {k: dict(v) for k, v in who.items()}, 'events': events[:recent],
+              'applied': [{'at': u['created_at'], 'who': u['actor'], 'where': where(u), 'outcome': u['outcome'], 'lesson': title(u['target']), 'why': (u.get('explanation') or '')[:200]} for u in uses[:10]],
+              'returned_unused': [{'lesson': title(i), 'returned': n} for i, n in returned.most_common() if i not in opened and i not in applied][:5]}
+    if as_dict:
+        return result
+    f = funnel
+    lines = [f"MEMORY USE, last {days} days",
+             f"  searched {f['searches']}x ({f['zero_result_searches']} with no result) -> {f['lessons_returned']} lessons returned -> "
+             f"{f['lessons_opened']} opened in full -> {f['lessons_applied']} applied (use reports: {f['use_reports']}, outcomes {f['outcomes'] or 'none'})",
+             f"  returned but not opened or reported: {f['returned_not_opened']}; opened but not reported: {f['opened_not_reported']}; "
+             f"live lessons never returned: {f['live_never_returned']} of {f['live_lessons']}",
+             'WHO', *[f"  {a}: " + ', '.join(f'{k} {v}' for k, v in c.items()) for a, c in sorted(who.items())],
+             'APPLIED BY AGENTS (their own reports, not verified)']
+    lines += [f"  {x['at'][:16]} {x['who']} {x['where']} [{x['outcome']}] {x['lesson'][:70]}\n      {x['why'][:150]}" for x in result['applied']] or ['  none yet']
+    lines += ['RETURNED A LOT, NEVER OPENED OR REPORTED (maybe weak titles, maybe not relevant)']
+    lines += [f"  x{x['returned']} {x['lesson'][:80]}" for x in result['returned_unused']] or ['  none']
+    lines += ['RECENT'] + [f"  {e['at'][5:16]} {e['type']:6} {e['who']:11} {e['where'][:28]:28} {e['detail'][:90]}" for e in result['events']]
+    return '\n'.join(lines)
+
+
+def retitle(changes, source, actor='claude', db=None, revert=False):
+    """Change display titles with an audit event each. `changes` maps memory id to {'old': ..., 'new': ...}.
+
+    Titles are display labels; claim text is never touched. A change applies only if the stored title still
+    equals `old` (or, when reverting, `new`), so a title someone else changed meanwhile is left alone.
+    Each applied change writes a memory_event (action 'retitle') recording both titles and the source.
+    """
+    db = db or Database()
+    applied, skipped = 0, []
+    for ident, change in changes.items():
+        before, after = (change['new'], change['old']) if revert else (change['old'], change['new'])
+        after = clean_label(after) if not revert else after  # same one-line, colon-safe form every other path stores
+        current = db.query('SELECT VALUE title FROM type::record($id);', {'id': ident})[0]
+        if not current or current[0] != before:
+            skipped.append(ident)
+            continue
+        db.query("""BEGIN TRANSACTION;
+            UPDATE type::record($id) SET title=$after;
+            CREATE memory_event SET action='retitle', target=type::record($id), old_title=$before, new_title=$after,
+                source=$source, actor=$actor, role='frontier', reverted=$revert, created_at=time::now();
+            COMMIT TRANSACTION;""", {'id': ident, 'before': before, 'after': after, 'source': source, 'actor': actor, 'revert': revert})
+        applied += 1
+    return {'applied': applied, 'skipped_title_changed': skipped}
 
 
 def cosine(a, b):

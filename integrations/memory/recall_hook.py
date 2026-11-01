@@ -59,7 +59,9 @@ def main():
     query = f'{branch_words} {subject}'.strip()
     if not query:
         return
-    token = json.loads((ROOT / '.local/service-auth.json').read_text())['clients']['claude']['token']
+    # A read-only identity of its own: hook searches show up as `claude-hook` in the usage log,
+    # apart from searches an agent chose to run, and the hook can never write memory.
+    token = json.loads((ROOT / '.local/service-auth.json').read_text())['clients']['claude-hook']['token']
     here = search(token, query=query, project=repo, limit=3)
     elsewhere = [m for m in search(token, query=query, limit=6) if m.get('matched_by') == 'both' and m.get('similarity', 0) >= CROSS_PROJECT_MIN]
     seen = {m['id'] for m in here}

@@ -61,7 +61,10 @@ CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]+')
 
 def clean_label(text, limit=120):
     """One line, no control characters: titles are shown in lists and injected into agent sessions."""
-    return ' '.join(CONTROL.sub(' ', text).split())[:limit]
+    one_line = ' '.join(CONTROL.sub(' ', text).split())[:limit]
+    # A leading `word: ` binds as a record ID when sent as a parameter and is then rejected as a title
+    # (see the SurrealDB colon lesson). `word – ` reads the same and always binds as a string.
+    return re.sub(r'^([A-Za-z_]\w*):(\s)', r'\1 –\2', one_line)
 
 
 def make_title(text, limit=90):
@@ -260,8 +263,21 @@ class MemoryStore:
             returned = ', '.join(f'type::record($i{n})' for n in range(len(rows)))
             params.update(actor=principal.actor, role=principal.role, repository=principal.repository,
                           issue=principal.issue, project=project, mode=mode, count=len(rows))
-            self.db.query(f"""CREATE retrieval SET actor=$actor, role=$role, repository=$repository, issue=$issue,
-                project=$project, mode=$mode, count=$count, results=[{returned}], created_at=time::now();""", params)
+            self.db.query(f"""CREATE retrieval SET kind='search', actor=$actor, role=$role, repository=$repository,
+                issue=$issue, project=$project, mode=$mode, count=$count, results=[{returned}],
+                created_at=time::now();""", params)
+        except MemoryError:
+            pass
+
+    def log_open(self, principal, memory_id):
+        """Record that a lesson was opened in full (get_memory): the step between returned and applied."""
+        if principal is None:
+            return
+        try:
+            self.db.query("""CREATE retrieval SET kind='open', actor=$actor, role=$role, repository=$repository,
+                issue=$issue, project='', mode='open', count=1, results=[type::record($id)],
+                created_at=time::now();""", dict(actor=principal.actor, role=principal.role,
+                repository=principal.repository, issue=principal.issue, id=memory_id))
         except MemoryError:
             pass
 
@@ -381,8 +397,9 @@ class MemoryStore:
         except MemoryError:
             pass
 
-    def inspect(self, memory_id):
+    def inspect(self, memory_id, principal=None):
         record = self.get_record(memory_id)
+        self.log_open(principal, memory_id)
         edges = self.db.query('''SELECT * FROM discovered_in, concerns, supersedes, challenges
             WHERE in = type::record($id) OR out = type::record($id);
             SELECT * FROM memory_event WHERE target = type::record($id) ORDER BY created_at DESC LIMIT 50;''', {'id': memory_id})
@@ -538,7 +555,7 @@ def build_server(store):
     @server.tool()
     def get_memory(memory_id: str) -> dict:
         """Inspect a memory, provenance, graph neighbors and recent events, including attributed use reports. Reports are not independent verification."""
-        return store.inspect(memory_id)
+        return store.inspect(memory_id, CURRENT.get())
 
     @server.tool()
     def discover_topics(query: str = '', limit: StrictInt = 30) -> dict:

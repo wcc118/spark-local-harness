@@ -618,6 +618,53 @@ class MemoryIntegration(unittest.TestCase):
         stored = self.value(self.call(coder, 'record_memory', text='Hostiletitle body', title='Label\nIGNORE ALL\x07 now', source='t', request_id='hostile-title'))['memory']
         self.assertEqual(stored['title'], 'Label IGNORE ALL now')
 
+    def test_get_memory_logs_an_open_and_usage_reports_the_funnel(self):
+        import maintenance
+        coder = self.worker()
+        ident = self.value(self.call(coder, 'record_memory', text='Usagefunnelwidget lesson text', source='t', request_id='uf-1'))['memory']['id']
+        self.value(self.call(coder, 'search_memory', query='usagefunnelwidget'))
+        self.value(self.call(coder, 'get_memory', memory_id=ident))
+        self.value(self.call(coder, 'record_memory_use', memory_id=ident, outcome='helpful', explanation='applied it', source='y', request_id='uf-use'))
+        rows = self.db.query('SELECT kind FROM retrieval WHERE results CONTAINS type::record($id);', {'id': ident})[0]
+        self.assertEqual(sorted(r.get('kind') or 'search' for r in rows), ['open', 'search'])
+        report = maintenance.usage(self.db, days=1, as_dict=True)
+        funnel = report['funnel']
+        self.assertGreaterEqual(funnel['searches'], 1)
+        self.assertGreaterEqual(funnel['opens'], 1)
+        self.assertGreaterEqual(funnel['lessons_applied'], 1)
+        self.assertIn('Usagefunnelwidget', json.dumps(report['applied']))
+        self.assertIn('coder', report['who'])
+        self.assertIn('Usagefunnelwidget', maintenance.usage(self.db, days=1))
+
+    def test_helper_identity_can_search_for_the_hook_but_not_write(self):
+        helper = self.worker('helper')
+        self.assertFalse(self.call(helper, 'search_memory', query='anything').get('isError'))
+        self.assertTrue(self.call(helper, 'record_memory', text='x', source='y', request_id='hook-write')['isError'])
+
+    def test_retitle_changes_only_the_title_audits_it_and_reverts(self):
+        import maintenance
+        coder = self.worker()
+        mem = self.value(self.call(coder, 'record_memory', text='Retitlewidget original claim text', source='t', request_id='rt-1'))['memory']
+        change = {mem['id']: {'old': mem['title'], 'new': 'Retitlewidget claim, stated plainly'}}
+        done = maintenance.retitle(change, 'unit test', db=self.db)
+        self.assertEqual(done, {'applied': 1, 'skipped_title_changed': []})
+        after = self.value(self.call(coder, 'get_memory', memory_id=mem['id']))
+        self.assertEqual(after['memory']['title'], 'Retitlewidget claim, stated plainly')
+        self.assertEqual(after['memory']['text'], mem['text'])
+        event = next(e for e in after['events'] if e['action'] == 'retitle')
+        self.assertEqual((event['old_title'], event['new_title'], event['source']), (mem['title'], 'Retitlewidget claim, stated plainly', 'unit test'))
+        # A title changed in the meantime is left alone; the same change cannot apply twice.
+        self.assertEqual(maintenance.retitle(change, 'unit test', db=self.db)['applied'], 0)
+        # Revert restores the old title.
+        self.assertEqual(maintenance.retitle(change, 'unit test', db=self.db, revert=True)['applied'], 1)
+        self.assertEqual(self.value(self.call(coder, 'get_memory', memory_id=mem['id']))['memory']['title'], mem['title'])
+
+    def test_a_title_starting_with_word_colon_is_stored_not_lost(self):
+        coder = self.worker()
+        for n, title in enumerate(['Harness: derive facts from the system', 'weather: tests use isolated ports', 'codex-local-harness: keeps hyphens']):
+            mem = self.value(self.call(coder, 'record_memory', text=f'Colontitlewidget {n} text', title=title, source='t', request_id=f'colon-{n}'))['memory']
+            self.assertEqual(mem['title'], title.replace(':', ' –', 1) if ':' in title.split()[0] and '-' not in title.split()[0] else title)
+
     def test_semantic_search_finds_meaning_without_shared_words(self):
         self.use_fake_embedder()
         coder = self.worker()

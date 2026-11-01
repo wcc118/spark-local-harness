@@ -115,11 +115,15 @@ def verify_backup(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['bootstrap', 'query', 'backup', 'verify-backup', 'headers', 'connection',
-                                            'backfill', 'stats', 'review', 'prune', 'offsite', 'link-similar'])
+                                            'backfill', 'stats', 'review', 'prune', 'offsite', 'link-similar', 'usage', 'retitle'])
     parser.add_argument('path', nargs='?', help='verify-backup: export to check (default: newest)')
     parser.add_argument('--verify', action='store_true', help='backup: restore-check the new export')
     parser.add_argument('--apply', action='store_true', help='prune: actually delete (default prints the plan)')
     parser.add_argument('--min', type=float, default=0.85, help='link-similar: minimum cosine')
+    parser.add_argument('--source', default='', help='retitle: where the titles came from (recorded in each audit event)')
+    parser.add_argument('--revert', action='store_true', help='retitle: restore the old titles')
+    parser.add_argument('--days', type=int, default=7, help='usage: window in days')
+    parser.add_argument('--json', action='store_true', help='usage: machine-readable output')
     parser.add_argument('--refresh', action='store_true', help='backfill: re-embed memories that already have a vector')
     parser.add_argument('--role', choices=['admin', 'memory_writer', 'memory_reader'], default='memory_reader')
     args = parser.parse_args()
@@ -133,7 +137,7 @@ def main():
         user, password = credentials(args.role)
         print(f'Endpoint: {URL}\nNamespace: {NS}\nDatabase: {DB}\nAuthentication: '+('Root' if args.role == 'admin' else 'Database'))
         print(f'Username: {user}\nPassword: {password}')
-    elif args.command in {'backfill', 'stats', 'review', 'prune', 'offsite', 'link-similar'}:
+    elif args.command in {'backfill', 'stats', 'review', 'prune', 'offsite', 'link-similar', 'usage', 'retitle'}:
         import maintenance
         if args.command == 'backfill':
             print(json.dumps(maintenance.backfill(refresh=args.refresh)))
@@ -141,6 +145,14 @@ def main():
             print(json.dumps(maintenance.prune(apply=args.apply)))
         elif args.command == 'offsite':
             print(json.dumps(maintenance.offsite()))
+        elif args.command == 'retitle':
+            if not args.path or not args.source:
+                sys.exit('retitle needs a JSON file of {id: {old, new}} and --source')
+            done = maintenance.retitle(json.loads(Path(args.path).read_text()), args.source, revert=args.revert)
+            print(json.dumps({'applied': done['applied'], 'skipped_title_changed': len(done['skipped_title_changed'])}))
+        elif args.command == 'usage':
+            result = maintenance.usage(days=args.days, as_dict=args.json)
+            print(json.dumps(result) if args.json else result)
         elif args.command == 'link-similar':
             print(json.dumps(maintenance.link_similar(minimum=args.min)))
         else:
