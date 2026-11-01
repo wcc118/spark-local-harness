@@ -1,0 +1,62 @@
+{
+  "database": "shared knowledge",
+  "observed_at": "2026-11-01",
+  "read_only": true,
+  "results": [
+    {
+      "preset": "recent-lessons",
+      "result_sets": 1,
+      "row_counts": [
+        50
+      ]
+    },
+    {
+      "preset": "disputed-findings",
+      "result_sets": 1,
+      "row_counts": [
+        8
+      ]
+    },
+    {
+      "preset": "cross-project-topics",
+      "result_sets": 1,
+      "row_counts": [
+        38
+      ]
+    },
+    {
+      "preset": "untagged",
+      "result_sets": 1,
+      "row_counts": [
+        25
+      ]
+    },
+    {
+      "preset": "correction-chains",
+      "result_sets": 2,
+      "row_counts": [
+        16,
+        12
+      ]
+    },
+    {
+      "preset": "recent-use-reports",
+      "result_sets": 1,
+      "row_counts": [
+        36
+      ]
+    },
+    {
+      "preset": "lesson-detail",
+      "result_sets": 4,
+      "row_counts": [
+        1,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "cross_project_distinct_nonempty_verified": true,
+  "limits": "Point-in-time query evidence, no browser UI or owner usability claim."
+}
