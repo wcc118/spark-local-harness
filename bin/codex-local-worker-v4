@@ -656,13 +656,21 @@ if [[ $worker_sandbox == container ]]; then
   fi
   if [[ $worker_runtime == qwen-code ]]; then
     qwen_model=${worker_model#vllm/}
+    qwen_endpoint="${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1"
+    export OPENAI_API_KEY=not-needed
+    if [[ $worker_model == lmstudio/* ]]; then
+      qwen_model=${worker_model#lmstudio/}
+      qwen_endpoint=${LMSTUDIO_BASE_URL:-http://10.0.0.92:1234/v1}
+      export OPENAI_API_KEY=${LMSTUDIO_API_TOKEN:-not-needed}
+    fi
     qwen_env=()
+    [[ $worker_model != lmstudio/* ]] || qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)
     if [[ $qwen_model == nvidia/Qwen3.5-122B-A10B-NVFP4 ]]; then
       qwen_env+=(--env QWEN_CODE_MAX_OUTPUT_TOKENS=8192)
     fi
     timeout --foreground --signal=TERM --kill-after=5s "$worker_timeout" \
       docker "${docker_args[@]}" \
-      --env OPENAI_API_KEY=not-needed --env "OPENAI_BASE_URL=${CODEX_LOCAL_VLLM_ENDPOINT:-http://127.0.0.1:8000}/v1" \
+      --env OPENAI_API_KEY --env "OPENAI_BASE_URL=$qwen_endpoint" \
       "${qwen_env[@]}" \
       "$worker_container_image" qwen --auth-type openai --approval-mode yolo --model "$qwen_model" \
       --output-format stream-json --prompt "$worker_task" >"$worker_log" &
