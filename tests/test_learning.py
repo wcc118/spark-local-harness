@@ -121,7 +121,7 @@ class TestAssignBasic:
             decision="eligible",
             reason="Standard bug fix",
         )
-        
+
         assert result["schema_version"] == 1
         assert result["plan_version"] == 1
         assert result["repository"] == "owner/repo"
@@ -149,7 +149,7 @@ class TestAssignBasic:
             decision="exception",
             reason="Security review required",
         )
-        
+
         assert result["decision"] == "exception"
         assert result["sequence"] is None
         assert result["coder_model"] is None
@@ -168,7 +168,7 @@ class TestAssignBasic:
             decision="eligible",
             reason="Test",
         )
-        
+
         stat = os.stat(ledger)
         assert (stat.st_mode & 0o777) == 0o600
 
@@ -184,7 +184,7 @@ class TestAssignBasic:
             decision="eligible",
             reason="Test",
         )
-        
+
         stat = os.stat(ledger.parent)
         assert (stat.st_mode & 0o777) == 0o700
 
@@ -195,27 +195,27 @@ class TestSequenceLogic:
     def test_sequence_counts_prior_eligible(self, tmp_path: pytest.Path, config_with_models: dict):
         """Sequence should count prior eligible assignments."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         # First eligible
         result1 = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="First"
         )
         assert result1["sequence"] == 0
-        
+
         # Second eligible
         result2 = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=2,
             task_class="impl", decision="eligible", reason="Second"
         )
         assert result2["sequence"] == 1
-        
+
         # Exception doesn't count
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=3,
             task_class="review", decision="exception", reason="Exception"
         )
-        
+
         # Third eligible
         result3 = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=4,
@@ -226,7 +226,7 @@ class TestSequenceLogic:
     def test_model_alternation_even(self, tmp_path: pytest.Path, config_with_models: dict):
         """Even sequence (0,2,4,...) should use standard coder, deepseek reviewer."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         result = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Even"
@@ -239,13 +239,13 @@ class TestSequenceLogic:
     def test_model_alternation_odd(self, tmp_path: pytest.Path, config_with_models: dict):
         """Odd sequence (1,3,5,...) should use deepseek coder, standard reviewer."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         # First eligible (sequence 0)
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Even"
         )
-        
+
         # Second eligible (sequence 1)
         result = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=2,
@@ -263,17 +263,17 @@ class TestRepeatHandling:
     def test_repeat_exact_eligible_returns_stored(self, tmp_path: pytest.Path, config_with_models: dict):
         """Repeat with exact same values should return stored record."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         result1 = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Same reason"
         )
-        
+
         result2 = assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Same reason"
         )
-        
+
         assert result1 == result2
         # Should still have only one record
         records = list_assignments(ledger)
@@ -282,12 +282,12 @@ class TestRepeatHandling:
     def test_repeat_different_reason_raises(self, tmp_path: pytest.Path, config_with_models: dict):
         """Repeat with different reason should raise ValueError."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Original reason"
         )
-        
+
         with pytest.raises(ValueError, match="conflicting assignment"):
             assign(
                 path=ledger, config=config_with_models, repository="owner/repo", issue=1,
@@ -297,12 +297,12 @@ class TestRepeatHandling:
     def test_repeat_different_task_class_raises(self, tmp_path: pytest.Path, config_with_models: dict):
         """Repeat with different task_class should raise ValueError."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Reason"
         )
-        
+
         with pytest.raises(ValueError, match="conflicting assignment"):
             assign(
                 path=ledger, config=config_with_models, repository="owner/repo", issue=1,
@@ -312,12 +312,12 @@ class TestRepeatHandling:
     def test_repeat_different_decision_raises(self, tmp_path: pytest.Path, config_with_models: dict):
         """Repeat with different decision should raise ValueError."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="Reason"
         )
-        
+
         with pytest.raises(ValueError, match="conflicting assignment"):
             assign(
                 path=ledger, config=config_with_models, repository="owner/repo", issue=1,
@@ -332,7 +332,7 @@ class TestConfigValidation:
         """Missing standard model should raise."""
         config = {"routes": {"coder/deepseek": {"model": "deepseek-model"}}}
         ledger = tmp_path / "ledger.jsonl"
-        
+
         with pytest.raises(ValueError, match="coder/standard.*model.*non-empty string"):
             assign(
                 path=ledger, config=config, repository="owner/repo", issue=1,
@@ -343,7 +343,7 @@ class TestConfigValidation:
         """Missing deepseek model should raise."""
         config = {"routes": {"coder/standard": {"model": "standard-model"}}}
         ledger = tmp_path / "ledger.jsonl"
-        
+
         with pytest.raises(ValueError, match="coder/deepseek.*model.*non-empty string"):
             assign(
                 path=ledger, config=config, repository="owner/repo", issue=1,
@@ -359,7 +359,7 @@ class TestConfigValidation:
             }
         }
         ledger = tmp_path / "ledger.jsonl"
-        
+
         with pytest.raises(ValueError, match="standard and deepseek models must be distinct"):
             assign(
                 path=ledger, config=config, repository="owner/repo", issue=1,
@@ -370,7 +370,7 @@ class TestConfigValidation:
         """Empty standard model string should raise."""
         config = {"routes": {"coder/standard": {"model": ""}, "coder/deepseek": {"model": "deep"}}}
         ledger = tmp_path / "ledger.jsonl"
-        
+
         with pytest.raises(ValueError, match="coder/standard.*model.*non-empty string"):
             assign(
                 path=ledger, config=config, repository="owner/repo", issue=1,
@@ -385,7 +385,7 @@ class TestMalformedLedger:
         """Invalid JSON line should raise with line number."""
         ledger = tmp_path / "ledger.jsonl"
         ledger.write_text("not valid json\n", encoding="utf-8")
-        
+
         with pytest.raises(ValueError, match="invalid JSON"):
             assign(
                 path=ledger, config=config_with_models, repository="owner/repo", issue=1,
@@ -401,13 +401,13 @@ class TestMalformedLedger:
             'not valid json\n',
             encoding="utf-8"
         )
-        
+
         with pytest.raises(ValueError, match="invalid JSON"):
             assign(
                 path=ledger, config=config_with_models, repository="owner/repo", issue=2,
                 task_class="impl", decision="eligible", reason="Reason"
             )
-        
+
         # First record should still exist - read directly to avoid list_assignments error
         content = ledger.read_text(encoding="utf-8")
         assert '"issue":1' in content
@@ -421,11 +421,11 @@ class TestCLI:
         ledger = tmp_path / "ledger.jsonl"
         config = tmp_path / "config.json"
         config.write_text(json.dumps(config_with_models), encoding="utf-8")
-        
+
         result = main(["assign", "--ledger", str(ledger), "--config", str(config),
                       "--repository", "owner/repo", "--issue", "1",
                       "--task-class", "impl", "--decision", "eligible", "--reason", "Test"])
-        
+
         assert result == 0
 
     def test_cli_assign_stderr_on_error(self, tmp_path: pytest.Path):
@@ -433,11 +433,11 @@ class TestCLI:
         ledger = tmp_path / "ledger.jsonl"
         config = tmp_path / "config.json"
         config.write_text("{}", encoding="utf-8")  # Invalid config
-        
+
         result = main(["assign", "--ledger", str(ledger), "--config", str(config),
                       "--repository", "owner/repo", "--issue", "1",
                       "--task-class", "impl", "--decision", "eligible", "--reason", "Test"])
-        
+
         assert result == 2
 
     def test_cli_list_prints_records(self, tmp_path: pytest.Path, config_with_models: dict):
@@ -445,7 +445,7 @@ class TestCLI:
         ledger = tmp_path / "ledger.jsonl"
         config = tmp_path / "config.json"
         config.write_text(json.dumps(config_with_models), encoding="utf-8")
-        
+
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="First"
@@ -454,19 +454,19 @@ class TestCLI:
             path=ledger, config=config_with_models, repository="owner/repo", issue=2,
             task_class="impl", decision="eligible", reason="Second"
         )
-        
+
         result = main(["list", "--ledger", str(ledger)])
-        
+
         assert result == 0
 
     def test_cli_assign_missing_config(self, tmp_path: pytest.Path):
         """CLI assign with missing config should exit 2."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         result = main(["assign", "--ledger", str(ledger), "--config", "/nonexistent/config.json",
                       "--repository", "owner/repo", "--issue", "1",
                       "--task-class", "impl", "--decision", "eligible", "--reason", "Test"])
-        
+
         assert result == 2
 
 
@@ -476,10 +476,10 @@ class TestConcurrentAccess:
     def test_concurrent_assign_produces_unique_sequences(self, tmp_path: pytest.Path, config_with_models: dict):
         """Concurrent assignments should produce unique consecutive sequences."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         # Create file first
         ledger.touch()
-        
+
         # Simulate concurrent access by manually acquiring lock
         # and adding records
         for i in range(3):
@@ -501,7 +501,7 @@ class TestConcurrentAccess:
                 }) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
-        
+
         records = list_assignments(ledger)
         sequences = sorted([r["sequence"] for r in records])
         assert sequences == [0, 1, 2]
@@ -526,7 +526,7 @@ class TestListAssignments:
     def test_list_returns_all_records(self, tmp_path: pytest.Path, config_with_models: dict):
         """List should return all records."""
         ledger = tmp_path / "ledger.jsonl"
-        
+
         assign(
             path=ledger, config=config_with_models, repository="owner/repo", issue=1,
             task_class="impl", decision="eligible", reason="First"
@@ -535,7 +535,7 @@ class TestListAssignments:
             path=ledger, config=config_with_models, repository="owner/repo", issue=2,
             task_class="impl", decision="eligible", reason="Second"
         )
-        
+
         records = list_assignments(ledger)
         assert len(records) == 2
         assert records[0]["issue"] == 1
