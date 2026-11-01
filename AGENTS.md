@@ -71,3 +71,17 @@ without model inference; read incremental evidence and avoid replaying full logs
 Keep packets focused on current criteria, unresolved findings and relevant evidence.
 Inspect and acknowledge each terminal execution before checkpoint continuation.
 Record meaningful outcomes and next actions in GitHub so a new session can resume.
+
+## Learning ownership during ordinary work
+
+The frontier orchestrator runs the proportional learning loop in
+`docs/learning-routine.md` without a separate user request: retrieve, define
+independent evidence, assign, assess, capture consequential failures, evaluate,
+retain a promote/reject/hold decision, and provide a durable digest/handoff.
+After this upgrade is accepted, suitable issues on longer runs use explicit
+stable assignments alternating Coder-Next and DeepSeek implementation/review.
+Keep high-risk decisions frontier-owned, record exceptions, and preserve the
+normal worker lock and sequential roles. Defaults do not change implicitly.
+Shared memory carries reusable lessons; private oracle memory remains restricted.
+Do not infer correctness from publication, reviewer merit from its own verdict,
+or learning gains from memory-use counts. Missing usage is unknown, not zero.

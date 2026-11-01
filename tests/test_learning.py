@@ -133,8 +133,8 @@ class TestAssignBasic:
         assert result["coder_model"] == "qwen-coder-next"  # Even: standard
         assert result["reviewer_model"] == "deepseek-v4-flash"  # Even: deepseek
         assert result["role_env"] is not None
-        assert result["role_env"]["CODEX_LOCAL_TIER"] == "standard"
-        assert result["role_env"]["CODEX_LOCAL_MODEL"] == "qwen-coder-next"
+        assert result["role_env"]["coder"]["CODEX_LOCAL_TIER"] == "standard"
+        assert result["role_env"]["coder"]["CODEX_LOCAL_MODEL"] == "qwen-coder-next"
         assert "observed_at" in result
 
     def test_assign_exception_creates_record(self, tmp_path: pytest.Path, config_with_models: dict):
@@ -234,7 +234,7 @@ class TestSequenceLogic:
         assert result["sequence"] == 0
         assert result["coder_model"] == "qwen-coder-next"
         assert result["reviewer_model"] == "deepseek-v4-flash"
-        assert result["role_env"]["CODEX_LOCAL_TIER"] == "standard"
+        assert result["role_env"]["coder"]["CODEX_LOCAL_TIER"] == "standard"
 
     def test_model_alternation_odd(self, tmp_path: pytest.Path, config_with_models: dict):
         """Odd sequence (1,3,5,...) should use deepseek coder, standard reviewer."""
@@ -254,7 +254,7 @@ class TestSequenceLogic:
         assert result["sequence"] == 1
         assert result["coder_model"] == "deepseek-v4-flash"
         assert result["reviewer_model"] == "qwen-coder-next"
-        assert result["role_env"]["CODEX_LOCAL_TIER"] == "deepseek"
+        assert result["role_env"]["coder"]["CODEX_LOCAL_TIER"] == "deepseek"
 
 
 class TestRepeatHandling:
@@ -477,34 +477,19 @@ class TestConcurrentAccess:
         """Concurrent assignments should produce unique consecutive sequences."""
         ledger = tmp_path / "ledger.jsonl"
 
-        # Create file first
-        ledger.touch()
-
-        # Simulate concurrent access by manually acquiring lock
-        # and adding records
-        for i in range(3):
-            with ledger.open("a") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.seek(0, 2)  # End of file
-                f.write(json.dumps({
-                    "repository": "owner/repo",
-                    "issue": i + 1,
-                    "decision": "eligible",
-                    "sequence": i,
-                    "task_class": "impl",
-                    "reason": f"Concurrent {i}",
-                    "schema_version": 1,
-                    "plan_version": 1,
-                    "coder_model": "model",
-                    "reviewer_model": "model",
-                    "observed_at": "2026-01-01T00:00:00Z",
-                }) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-
+        import multiprocessing
+        context = multiprocessing.get_context("fork")
+        processes = [context.Process(target=assign, kwargs=dict(
+            path=ledger, config=config_with_models, repository="owner/repo", issue=i + 1,
+            task_class="impl", decision="eligible", reason="Concurrent",
+        )) for i in range(24)]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(10)
+            assert process.exitcode == 0
         records = list_assignments(ledger)
-        sequences = sorted([r["sequence"] for r in records])
-        assert sequences == [0, 1, 2]
+        assert [r["sequence"] for r in records] == list(range(24))
 
 
 class TestListAssignments:
@@ -540,3 +525,43 @@ class TestListAssignments:
         assert len(records) == 2
         assert records[0]["issue"] == 1
         assert records[1]["issue"] == 2
+
+
+@pytest.mark.parametrize("decision", ["eligible", "exception"])
+def test_repeat_survives_missing_config(tmp_path, config_with_models, decision):
+    args = dict(path=tmp_path / "ledger", repository="owner/repo", issue=1,
+                task_class="impl", decision=decision, reason="stable")
+    first = assign(config=config_with_models, **args)
+    assert assign(config={}, **args) == first
+    if decision == "eligible":
+        assert set(first["role_env"]) == {"coder", "reviewer"}
+        assert first["role_env"]["reviewer"]["CODEX_LOCAL_MODEL"] == first["reviewer_model"]
+
+
+@pytest.mark.parametrize("repository", ["a/b/c", " a/b", "a/b\n", "a/b c"])
+def test_repository_rejects_ambiguous_identity(repository):
+    with pytest.raises(ValueError):
+        validate_repository(repository)
+
+
+def test_digest_exact_repository_identity_unknowns_and_adjudication():
+    from types import SimpleNamespace
+    from codex_local_harness.learning import digest
+    assignment = dict(repository="one/repo", issue=1, coder_model="expected")
+    fields = dict(role="coder", model="actual", delivery_ready=True, adjudicated=False,
+                  effective_outcome="passed", correction_cycle=1, intervention_depth="unknown",
+                  failure_class=None, lifecycle_state="completed", local_tokens=None,
+                  frontier_tokens=None, codex_decision=None, evidence_refs=())
+    views = [SimpleNamespace(run_id=i, **fields) for i in ("match", "other", "ambiguous")]
+    workflow = [SimpleNamespace(run_id=i, repository=r, issue=1) for i, r in
+                (("match", "one/repo"), ("other", "two/repo"),
+                 ("ambiguous", "one/repo"), ("ambiguous", "two/repo"))]
+    annotations = [dict(source=s, kind="reviewer-catch", run_ids=["match"]) for s in ("reviewer", "codex")]
+    result = digest([assignment], views, workflow, annotations)
+    row = result["issues"][0]
+    assert len(row["runs"]) == 1
+    assert row["runs"][0]["identity_match"] is False
+    assert row["runs"][0]["acceptance"] is None
+    assert row["runs"][0]["frontier_tokens"] is None
+    assert [a["source"] for a in row["adjudicated_observations"]] == ["codex"]
+    assert result["unjoined_runs"] == 1

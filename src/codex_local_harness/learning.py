@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,13 +17,9 @@ PLAN_VERSION = 1
 
 def validate_repository(repo: str) -> tuple[str, str]:
     """Validate repository format and return (owner, name)."""
-    if not repo or "/" not in repo:
+    if not isinstance(repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("repository must be in OWNER/REPO format")
-    parts = repo.split("/", 1)
-    owner, name = parts[0], parts[1]
-    if not owner.strip() or not name.strip():
-        raise ValueError("repository must be in OWNER/REPO format")
-    return owner, name
+    return tuple(repo.split("/"))
 
 
 def validate_positive_int(value: Any) -> int:
@@ -60,33 +57,21 @@ def _get_models(config: dict[str, Any]) -> tuple[str, str]:
         raise ValueError("config.routes['coder/standard'].model must be a non-empty string")
     if not deepseek_model or not isinstance(deepseek_model, str) or not deepseek_model.strip():
         raise ValueError("config.routes['coder/deepseek'].model must be a non-empty string")
-    if standard_model == deepseek_model:
+    if standard_model.strip() == deepseek_model.strip():
         raise ValueError("standard and deepseek models must be distinct")
 
     return standard_model.strip(), deepseek_model.strip()
 
 
-def _build_role_env(sequence: int, standard_model: str, deepseek_model: str, is_exception: bool) -> dict[str, str] | None:
-    """Build role_env dict for the assignment."""
+def _build_role_env(sequence, standard_model, deepseek_model, is_exception):
     if is_exception:
         return None
-
-    if sequence % 2 == 0:
-        # Even: coder=standard, reviewer=deepseek
-        return {
-            "CODEX_LOCAL_TIER": "standard",
-            "CODEX_LOCAL_MODEL": standard_model,
-            "CODEX_LOCAL_REVIEWER_TIER": "standard",
-            "CODEX_LOCAL_REVIEWER_MODEL": deepseek_model,
-        }
-    else:
-        # Odd: coder=deepseek, reviewer=standard
-        return {
-            "CODEX_LOCAL_TIER": "deepseek",
-            "CODEX_LOCAL_MODEL": deepseek_model,
-            "CODEX_LOCAL_REVIEWER_TIER": "standard",
-            "CODEX_LOCAL_REVIEWER_MODEL": standard_model,
-        }
+    return {
+        "coder": {"CODEX_LOCAL_TIER": "deepseek" if sequence % 2 else "standard",
+                  "CODEX_LOCAL_MODEL": deepseek_model if sequence % 2 else standard_model},
+        "reviewer": {"CODEX_LOCAL_TIER": "standard",
+                     "CODEX_LOCAL_MODEL": standard_model if sequence % 2 else deepseek_model},
+    }
 
 
 def _build_assignment_record(
@@ -153,108 +138,59 @@ def assign(
 
     is_exception = decision == "exception"
 
-    # Get models from config (raises if unavailable)
-    standard_model, deepseek_model = _get_models(config)
-
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-
-    # Read existing records with shared lock
-    existing_records: list[dict[str, Any]] = []
-    if path.exists():
-        with path.open("r", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
-            try:
-                for line_number, line in enumerate(handle, 1):
-                    if not line.strip():
-                        continue
-                    try:
-                        existing_records.append(json.loads(line))
-                    except json.JSONDecodeError as exc:
-                        raise ValueError(f"invalid JSON at line {line_number}: {exc}") from exc
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-    # Check for existing record for this repository/issue
-    matching_records = [
-        r for r in existing_records
-        if r.get("repository") == repository and r.get("issue") == issue
-    ]
-
-    if matching_records:
-        # Check if it's an exact repeat of eligible
-        for record in matching_records:
-            if (record.get("decision") == decision and
-                record.get("task_class") == task_class and
-                record.get("reason") == reason):
-                # Exact repeat - return existing record (even if it's exception, we don't overwrite)
-                # But per spec, repeat eligible returns stored record
-                if decision == "eligible":
-                    return record
-
-        # Conflicting assignment exists
-        raise ValueError(
-            f"conflicting assignment exists for {repository}/{issue}: "
-            f"existing decision={matching_records[0].get('decision')}, "
-            f"task_class={matching_records[0].get('task_class')}"
-        )
-
-    # Count prior eligible assignments for sequence
-    sequence = _count_prior_eligible(tuple(existing_records))
-
-    # Build new record
-    record = _build_assignment_record(
-        repository=repository,
-        issue=issue,
-        task_class=task_class,
-        decision=decision,
-        reason=reason,
-        sequence=sequence,
-        standard_model=standard_model,
-        deepseek_model=deepseek_model,
-        is_exception=is_exception,
-    )
-
-    # Append with exclusive lock - need to open for read+write to allow both reading and appending
-    with path.open("a+", encoding="utf-8") as handle:
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(descriptor, "r+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        os.fchmod(handle.fileno(), 0o600)
+        records = _read_records(handle)
+        for record in records:
+            if (record["repository"], record["issue"]) != (repository, issue):
+                continue
+            if all(record.get(key) == value for key, value in {
+                "task_class": task_class, "decision": decision, "reason": reason,
+            }.items()):
+                return record
+            raise ValueError(f"conflicting assignment exists for {repository}#{issue}")
+        # Sequence, identity lookup and append are one locked transaction.
+        models = (None, None) if is_exception else _get_models(config)
+        record = _build_assignment_record(
+            repository, issue, task_class, decision, reason,
+            _count_prior_eligible(tuple(records)), *models, is_exception,
+        )
+        handle.seek(0, os.SEEK_END)
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        return record
+
+
+def _read_records(handle):
+    records = []
+    identities = set()
+    sequence = 0
+    for number, line in enumerate(handle, 1):
+        if not line.strip():
+            continue
         try:
-            # Read current content to check for race conditions
-            handle.seek(0)
-            current_content = handle.read()
-
-            # Re-parse to check for concurrent additions
-            concurrent_records: list[dict[str, Any]] = []
-            for line_number, line in enumerate(current_content.splitlines(), 1):
-                if not line.strip():
-                    continue
-                try:
-                    concurrent_records.append(json.loads(line))
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"invalid JSON at line {line_number}: {exc}") from exc
-
-            # Check for conflicts after concurrent additions
-            matching_after_concurrent = [
-                r for r in concurrent_records
-                if r.get("repository") == repository and r.get("issue") == issue
-            ]
-
-            if matching_after_concurrent:
-                raise ValueError(
-                    f"conflicting assignment added concurrently for {repository}/{issue}"
-                )
-
-            # Write new record at end
-            handle.seek(0, 2)  # End of file
-            handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-    # Set file permissions
-    os.chmod(path, 0o600)
-
-    return record
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON at line {number}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"invalid record at line {number}")
+        validate_repository(record.get("repository"))
+        validate_positive_int(record.get("issue"))
+        identity = (record["repository"], record["issue"])
+        if identity in identities or record.get("decision") not in {"eligible", "exception"}:
+            raise ValueError(f"invalid or duplicate assignment at line {number}")
+        identities.add(identity)
+        expected = sequence if record["decision"] == "eligible" else None
+        if record.get("sequence") != expected or isinstance(record.get("sequence"), bool):
+            raise ValueError(f"invalid sequence at line {number}")
+        if expected is not None:
+            sequence += 1
+        records.append(record)
+    return records
 
 
 def list_assignments(path: Path) -> tuple[dict[str, Any], ...]:
@@ -262,23 +198,46 @@ def list_assignments(path: Path) -> tuple[dict[str, Any], ...]:
     if not path.exists():
         return ()
 
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-
-    records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
-        try:
-            for line_number, line in enumerate(handle, 1):
-                if not line.strip():
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"invalid JSON at line {line_number}: {exc}") from exc
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return tuple(_read_records(handle))
 
-    return tuple(records)
+
+def digest(assignments, views, workflow, annotations=()):
+    """Join existing evidence by exact repository/issue; never infer reviewer merit."""
+    identities = {}
+    for event in workflow:
+        if event.run_id and event.repository:
+            identities.setdefault(event.run_id, set()).add((event.repository, event.issue))
+    rows = []
+    for assignment in assignments[-64:]:
+        key = (assignment["repository"], assignment["issue"])
+        runs = []
+        for view in views:
+            if identities.get(view.run_id) != {key}:
+                continue
+            planned = assignment.get(f"{view.role}_model")
+            runs.append({
+                "run_id": view.run_id, "role": view.role, "actual_model": view.model,
+                "planned_model": planned,
+                "identity_match": None if not planned or not view.model else planned == view.model,
+                "delivery_ready": view.delivery_ready,
+                "acceptance": view.effective_outcome if view.adjudicated else None,
+                "corrections": view.correction_cycle, "intervention": view.intervention_depth,
+                "failure_class": view.failure_class, "lifecycle": view.lifecycle_state,
+                "local_tokens": view.local_tokens, "frontier_tokens": view.frontier_tokens,
+                "decision": view.codex_decision, "evidence_refs": list(view.evidence_refs),
+            })
+        ids = {run["run_id"] for run in runs}
+        judgments = [a for a in annotations if a.get("source") in {"codex", "operator"}
+                     and a.get("kind") in {"reviewer-catch", "reviewer-miss", "reviewer-false-alarm",
+                                            "learning-promote", "learning-reject", "learning-hold"}
+                     and ids.intersection(a.get("run_ids", []))]
+        rows.append({"assignment": assignment, "runs": runs[-32:],
+                     "adjudicated_observations": judgments[-16:]})
+    return {"schema_version": 1, "issues": rows,
+            "unjoined_runs": sum(len(identities.get(v.run_id, ())) != 1 for v in views),
+            "limits": "Observational evidence, not a controlled model comparison. Missing evidence is unknown; no automatic promotion."}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -302,6 +261,10 @@ def main(argv: list[str] | None = None) -> int:
     list_parser = subparsers.add_parser("list", help="List all assignment records")
     list_parser.add_argument("--ledger", type=Path, required=True, help="Path to JSONL ledger file")
 
+    digest_parser = subparsers.add_parser("digest", help="Join existing outcome evidence")
+    for name in ("ledger", "runs", "adjudications", "lifecycle", "workflow", "annotations"):
+        digest_parser.add_argument("--" + name, type=Path, required=True)
+
     args = parser.parse_args(argv)
 
     try:
@@ -322,6 +285,20 @@ def main(argv: list[str] | None = None) -> int:
                 reason=args.reason,
             )
             print(json.dumps(result, sort_keys=True))
+            return 0
+
+        elif args.command == "digest":
+            from .health import read_jsonl
+            from .diagnostics import read_records, Adjudication, LifecycleEvent
+            from .read_model import build_run_views
+            from .workflow import read_workflow_records
+            from .strategy import read_annotations
+            views = build_run_views(read_jsonl(args.runs),
+                                    read_records(args.adjudications, Adjudication),
+                                    read_records(args.lifecycle, LifecycleEvent))
+            print(json.dumps(digest(list_assignments(args.ledger), views,
+                                   read_workflow_records(args.workflow),
+                                   read_annotations(args.annotations)), sort_keys=True))
             return 0
 
         elif args.command == "list":

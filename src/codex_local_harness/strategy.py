@@ -49,7 +49,7 @@ def _cohort(items: list[RunView], key: tuple[str, str, str]) -> dict[str, Any]:
     delivery_known = [item for item in items if item.delivery_ready is not None]
     adjudicated = [item for item in items if item.adjudicated]
     latency_known = [item.wall_seconds for item in items if item.wall_seconds > 0]
-    token_known = [item.local_tokens + item.frontier_tokens for item in items if item.claimed_status is not None]
+    token_known = [item.local_tokens + item.frontier_tokens for item in items if item.claimed_status is not None and item.local_tokens is not None and item.frontier_tokens is not None]
     tool_observed = [item for item in items if item.tool_calls > 0]
     infrastructure = [
         item for item in items
