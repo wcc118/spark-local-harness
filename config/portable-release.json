@@ -44,6 +44,7 @@
     "docs/live-execution.md": "fd1cb9911c3e0d9754416a6c43de2d8f06b76f372252475172551e27441229d6",
     "docs/local-convergence.md": "abf5be90c47ad6946882ff744237a05a3476e47688fb91dac6a2ca334545db98",
     "docs/managed-3090.md": "5fba6a3f2937333f133ae4a4e3619bc64fa09b5d53df0b536c7bebb1a2b5df6f",
+    "docs/memory-views.md": "7157dd3256fac27fcd1d255713526a78b2c1d45055a25abb3b6c2bd40b17471e",
     "docs/memory.md": "6965da49da206ebfb9640c0fb739827d79bafde823ce6014a630d5d64271121c",
     "docs/mvp-quickstart.md": "7ac7cb323cef8693f182b5ef224dced5a2dd85c4be5eab35a42a6cc9e1c936fe",
     "docs/portable-installation.md": "37ffb33fcbfc8ec17210892c968d654e8af10eed4c0ef4714d6d3047037436da",
