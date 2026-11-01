@@ -12,6 +12,26 @@ adds topic edges and audit events to existing memories without changing text, so
 or status. Both tools are read/write appropriate based on role and contribute to
 structured metadata without affecting claim integrity.
 
+Issue #242 widens retrieval and adds operations. Search_memory now uses stemmed
+full text over each memory's text, conditions and topic names, with a literal
+substring fallback for identifiers. Before this, "isolation" found nothing while
+"isolated" found ten. The change is additive: a derived `search_text` field and a new
+index, with the original index left defined. Record_memory and enrich_memory return
+`topic_suggestions` for new topic names; nothing is merged automatically. The service
+rereads its client credential file without a restart. Claude Code connects as its own
+`claude` frontier client. A daily user timer makes a restore-checked export.
+
+Issue #244 mirrors retrieval upgrades; no MCP tool is added, so worker `enabled_tools`
+and role permissions are unchanged. `search_memory` is hybrid (keyword plus meaning via a
+local embedder) and falls back to keywords when the embedder is unavailable; results report
+`search_mode` and `matched_by`. `detail: "brief"` returns id, title, snippet and conditions
+for small context windows; `get_memory` returns the full record. `record_memory` accepts an
+optional `title` and may return advisory `similar_memories` (the record is still written).
+Vectors never appear in tool results. Schema changes are additive: `memory.title`, tables
+`memory_embedding` and `retrieval` (which stores returned IDs, never query text) and the
+derived relation `similar_to`. See the integration README for measurements and maintenance
+commands.
+
 The separate local memory deployment lives in `~/projects/memory`. Service source
 is reviewed in `integrations/memory/`; the deployment directory retains its own local
 Git history. Database storage and all credentials remain outside this repository.
@@ -36,7 +56,8 @@ rotating the service signing key revokes all worker tokens.
 
 Coder/reviewer tools: search_memory, get_memory, record_memory, correct_memory,
 record_memory_use, discover_topics, enrich_memory. Helper tools: search_memory,
-get_memory, discover_topics. Codex additionally has resolve_memory. No routine
+get_memory, discover_topics. Frontier clients (Codex and Claude Code) additionally
+have resolve_memory. No routine
 client receives arbitrary SQL or a deletion tool from this service. The user/admin
 can still manage the underlying database directly. These MCP boundaries are not
 a sandbox against the workstation owner or an unrestricted host shell.
@@ -138,8 +159,12 @@ End-of-run summaries can mention useful retrieved, created or challenged memory 
 No mandatory new JSON field, minimum number of searches, approval gate or invented
 lesson is imposed. A reviewer may write a memory while code remains read-only.
 Use exclude_issue="OWNER/REPO#N" to avoid current-issue claims during independent
-review. Full-text and literal matching are available; no semantic embeddings or
-weight updates are performed.
+review. Hybrid retrieval combines local semantic embeddings with full-text and
+literal matching, and falls back to keywords when embeddings are unavailable.
+This is retrieval, not a model weight update. Returned IDs, opens and self-reported
+use are distinct observations; none independently proves a lesson improved an outcome.
+Titles are supplied or derived; administrative retitle records its source and preserves
+the claim text.
 
 Discover_topics allows optional agent-directed discovery of existing topic names
 with case-insensitive substring matching. Use this to identify existing topics

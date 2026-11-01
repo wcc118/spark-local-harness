@@ -58,14 +58,65 @@ python3 memoryctl.py query < examples.surql
 ```
 
 For writes, add `--role memory_writer`. Sources and conditions should accompany
-findings. Full-text search is enabled; semantic embeddings and automatic extraction
-are not. See `MEMORY.md` for shared usage conventions.
+findings. Search is stemmed full text (English snowball) over each memory's text,
+conditions and topic names, held in the derived `search_text` field. A literal substring
+fallback keeps exact identifiers matchable. Multi-word queries match any term and rank
+by BM25 after common stopwords are dropped. The original `memory_search` index remains defined
+but unused by the service. See `MEMORY.md` for shared usage conventions.
+
+### Semantic search, titles and usage statistics
+
+`search_memory` also ranks by meaning. Each memory has a vector in the separate
+`memory_embedding` table (so records stay readable), made by `nomic-embed-text` v1.5 on the
+local Ollama (`embedding.py`; `MEMORY_EMBED_URL`/`MEMORY_EMBED_MODEL`/`MEMORY_EMBED_TAG` override).
+Keyword and semantic rankings are blended by reciprocal-rank fusion. A hit that keywords missed
+must reach cosine 0.65 and every semantic hit must be within 0.10 of the best. The vector
+space name includes the dimension, so vectors from different models are never compared. If
+Ollama is down, search falls back to keywords (`search_mode: keyword`) and writes store no
+vector; `python3 memoryctl.py backfill` adds any missing ones. LM Studio's copy of the same
+model gives cosine ~0.94 against Ollama's, so the two must not be mixed.
+
+Measured on 40 lessons with LLM-written queries (`search_mode` hybrid vs keyword, recall@5):
+queries that reuse the lesson's wording 0.97 vs 0.95 (no gain); queries told to avoid its
+wording 0.82 keyword, 0.90 hybrid (MRR 0.67 to 0.76). Semantic search helps most when the
+searcher uses different words than the author. Thresholds are insensitive within 0.55-0.70.
+
+- `title` is a short readable label (supplied, or the first sentence). It is what graph and
+  table views should display; the hashed record IDs stay as the stable keys.
+- `record_memory` may return `similar_memories` (cosine >= 0.88) so the writer can corroborate
+  or enrich instead of duplicating. The record is still written.
+- `search_memory` results carry `use_reports` counts for context. They do not affect ranking.
+- A `project` filter treats `repo` and `owner/repo` as the same project.
+- Each search logs actor, mode and returned IDs (never the query) to the `retrieval` table.
+
+Maintenance, all in `memoryctl.py`: `stats` (counts, embedding coverage, use reports, search
+usage), `review` (read-only proposals: near-duplicates, stale versioned lessons, long-disputed
+claims, similar topic names, project spelling aliases, memories with no topics), `backfill`
+(titles and vectors for older records; `--refresh` re-embeds), `prune` (retention plan; add
+`--apply` to delete) and `offsite`. `review` only proposes; act with `resolve_memory`,
+`enrich_memory` or `correct_memory`.
+
+`recall_hook.py` is a Claude Code SessionStart hook (registered in `~/.claude/settings.json`
+for `startup|clear|compact`). It searches by repository, branch and last commit and injects up to
+five titles with IDs, marked as reference material. Cross-project suggestions must match on both
+keywords and meaning. It prints nothing on any failure. Remove the `SessionStart` entry to disable.
+
+`extract_candidates.py OWNER/REPO#N` has a local model (any OpenAI-compatible endpoint via `MEMORY_LLM_URL`, default LM Studio on localhost; `--model`) draft
+candidate lessons from a PR. It prints by default; `--record` stores them as `hypothesis` records
+tagged `auto-extracted` with a source naming the drafting model, for an orchestrator to confirm.
 
 ## Agent connections installed on this workstation
 
 - `~/.codex/config.toml`: narrow memory tools with the Codex/frontier identity;
   `client_headers.py` supplies the private bearer credential. Codex can record,
   propose corrections, reconcile and enrich. Discover_topics is also available.
+  `enabled_tools` must list every tool; it listed only five until issue #242. Codex
+  0.164 defers MCP tools behind a metadata catalog, so a session may report "no memory
+  tools" until it searches that catalog. A fresh session found
+  `mcp__memory__record_memory_use` there after the allowlist fix.
+- Claude Code (user scope, `~/.claude.json`): all tools with its own `claude`
+  frontier identity, registered via `headersHelper` running
+  `client_headers.py claude`. Authorship is recorded as `claude`, not `codex`.
 - Interactive OpenCode uses a contributor identity. Headless workers do not inherit
   interactive MCP servers: issue #214 explicitly provisions per-run credentials into
   Qwen Code and OpenCode configurations, permitting coder/reviewer contributions.
@@ -91,12 +142,30 @@ model context; use the local model runtime for inference that must remain local.
 ## Backups and recovery
 
 ```sh
-python3 memoryctl.py backup
+python3 memoryctl.py backup --verify
+python3 memoryctl.py verify-backup [backups/NAME.surql]   # default: newest
+systemctl --user list-timers memory-backup.timer
 ```
 
 This exports `personal/knowledge` into a timestamped `backups/*.surql` file with
-owner-only permissions. Backups can contain database user definitions/password hashes;
-keep them private. This is an on-demand export, not a scheduled or off-machine backup.
+owner-only permissions, plus a `.counts.json` table-count snapshot. Restore checks count only
+the tables a snapshot recorded, so backups from before a table existed still verify. The snapshot is
+re-taken if writes land during the export. `--verify` and `verify-backup` import the
+export into a temporary `restore_check_*` database, compare counts, record
+`.verify.json`, and always remove the temporary database. Backups can contain
+database user definitions/password hashes; keep them private.
+
+The enabled user timer `memory-backup.timer` (template in `deployment/`) runs a
+verified export daily around 03:30 local time; `Persistent=true` catches up after
+downtime. It is on-machine only, not an off-machine backup, and old exports are never
+deleted automatically. Pruning is an owner decision. Check failures with
+`journalctl --user -u memory-backup.service`.
+`python3 memoryctl.py prune` prints a retention plan (everything under 14 days, then one verified
+backup per week for 12 weeks, always the newest verified one) and deletes nothing unless run
+with `--apply`. `python3 memoryctl.py offsite` encrypts the newest verified backup with gpg
+(AES256) and copies it with rsync to the destination in `.local/offsite.json`
+(`{"destination": "user@host:/path/", "passphrase_file": ".local/offsite.pass"}`); it refuses to
+run unconfigured and never copies an unencrypted export. Keep the passphrase off the backup host.
 Preserve `.env` and `.local/accounts.json` separately in secure storage. Root users are
 outside the database export. For recovery, import an export into a fresh instance
 using SurrealDB's import command; do not overwrite a live database casually.
@@ -142,6 +211,11 @@ The workstation-specific unit template is in `deployment/`. Adjust paths if movi
 Service/client secrets are owner-only files in `.local`. Do not copy these into
 worker packets or logs. Rotate the signing key to revoke all run credentials; rotate
 individual client/issuer tokens to revoke those identities and update their consumers.
+The service rereads `.local/service-auth.json` when its modification time changes, so
+adding, rotating or revoking clients needs no restart. An unreadable or invalid file is
+ignored and the last valid configuration stays in force (the journal logs which happened).
+Client roles: `frontier` (codex, claude), `coder` (opencode); worker roles are issued
+per run.
 The service protects its MCP surface, not an unrestricted workstation owner's shell.
 Direct SQL administration and the human graph-browser login remain separate.
 
@@ -151,6 +225,8 @@ corrections. `memory_event` records lifecycle actions. Writes use request_id for
 retry deduplication and transactions for records/edges/state together. Codex can
 reconcile competing claims by superseding either with an active or disputed
 replacement, marking that replacement active and preserving both histories.
+Four records seeded by direct SQL during installation have no attested actor; each
+carries a `provenance` memory_event saying so, without changing the record.
 No routine MCP operation deletes records. Owner-directed administrative deletion
 must also consider relationships and copies in backups; it is not automated here.
 
