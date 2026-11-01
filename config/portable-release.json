@@ -11,7 +11,7 @@
   },
   "files": {
     "AGENTS.md": "439274d71d4e83624102bb7a76b9a9308f682c1d44c472ee66950cb9dcb317ee",
-    "README.md": "e370b19d2d268984d06da8d48ee5b8517940942de74dd422af2cdbd33f7c1054",
+    "README.md": "cb5ff0e3e863e3c1f5a34a3a92825984fa8cf76dcd6e43e87c315704ce3e1cbc",
     "agents/advisory.md": "53a5ba1d703c59a833bee101b451473211fd7ea1c9aad55f0171da81f49d3ea2",
     "agents/coder.md": "8313923ff3012824f75bd25c5b96f62daefbb70fb165d437a00ffc22c51dcb52",
     "agents/convergence-reviewer.md": "d52e658e6deee604ffebcf288086eda144963335e02c0e61697d7b963500997d",
@@ -22,7 +22,7 @@
     "bin/codex-local-model": "651303665226f78680e72258bbe6c509ccfdce79e05e798fb6d81215e034c721",
     "bin/codex-local-supervise": "2a4ed80ef002818af57b53bf6d71b57f2b9bc109ab3c6a346eb38720d3dbc62b",
     "bin/codex-local-worker-candidate": "e570d9e707b7120a308d060cfa474e78e861725b23ae0a229a08f05b08133721",
-    "bin/codex-local-worker-v4": "dd575f473df540352ff62f2a9b85b9fb14cf0f23885e399084e9476137b49005",
+    "bin/codex-local-worker-v4": "92b4640a87ac54e8a4c6ff5f8c77f76ced70cd073522935ebc6d64cfb92f22cd",
     "bin/install-harness": "a0497315dc8388baa8836330dfe3efc197a79821bfe84138c3aa95e6430a8229",
     "config/deepseek-v4-compose.codex.yaml": "817eeb90e14245b027a42075fffef26a87322f33275290523ea76f64739df7b6",
     "config/deepseek-v4-reasoning.yaml": "c9e523c829f32444e2549d252384c6ee1eb3772c8b9796ef0fa7f249ea34bea9",
@@ -74,7 +74,7 @@
     "src/codex_local_harness/benchmark_cli.py": "ec8968f79899133be6729a6fc7b1d7f3439380135cd9e1468024561cd36f0724",
     "src/codex_local_harness/checkpoint_cli.py": "663abf658701b43517a78fdf15601577b83fbb57084ef8a6b4f33bd6c2bb34aa",
     "src/codex_local_harness/claude_usage.py": "5d41daf294fc4416d19c6d3937fec8b13dfd9de651d72db8e0f53c9c6fa45f45",
-    "src/codex_local_harness/coder.py": "9d2110469fe7da53e160235095f7a4c9c82875699f14e1238105a7e6bb16eb86",
+    "src/codex_local_harness/coder.py": "3edb4e31ea1e0e6ddbcd38b31d95098d41caf2eb2d07af94f947fefc0ebe001a",
     "src/codex_local_harness/codex_app_server.py": "9cdd57c9da73031643e00936c1c824452d0008e9522fe768aa86420628271c45",
     "src/codex_local_harness/collect.py": "e5e015b625db9a20d3aff0ba638455d3fc25959fa7c3b748cb3df7a44ade3f74",
     "src/codex_local_harness/compaction_cli.py": "0df6a6a87875bb21345d15edf9de4df1d52ecb9ba4636d715186b8d01164ba8a",
@@ -109,7 +109,7 @@
     "src/codex_local_harness/plan_event.py": "879ea6411ff8ca56477fbdbfc26de61d7da9bf2cc265564af720760f8535f666",
     "src/codex_local_harness/publication_cli.py": "fbc032e2efa21946daf6f59400bbb28a4f11d6789f3179460e6479f6cfcbc43a",
     "src/codex_local_harness/read_model.py": "aef01ccacf286852ac97c1600657980b46aea9754cb04da35125aa6d4b1c8906",
-    "src/codex_local_harness/review.py": "9368721aaa76c3bd3d6ec0b39888240be58d5b68cd8d8391e392fc7fe6f97e99",
+    "src/codex_local_harness/review.py": "1fb3014a701464671a07ad6e170d8cb810217b8b09a125e708dd9ae083e0d16c",
     "src/codex_local_harness/review_profile.py": "b7015aca7c8c34703c89b57f71be713d91f43e7ac568dc91d6b2c7f5514f5168",
     "src/codex_local_harness/roles.py": "ead3d76bb0fbc5f829e23cf02524253caedaccc29a274d2a01c02c205395a6da",
     "src/codex_local_harness/routing.py": "277c4e2128e5120262284a4490025a6ad118e7294f9d671497557d53ff93639d",
@@ -129,6 +129,7 @@
     "src/codex_local_harness/visual_diff.py": "9f0ca0301d0647b0722d32bdcc6f4e0cdcec1a3a17e70aa64cd5761f8712d928",
     "src/codex_local_harness/visual_render.py": "743af2ff377f241fe9e7976a64f0b83d38c05e9dd9afa43db5b93667160edff4",
     "src/codex_local_harness/visual_render_cli.py": "19fafce4227985a92712f98176a75346713d23f52e1f107a61c7c947a5dcd4a8",
-    "src/codex_local_harness/workflow.py": "00386614d2f84270fb093dc870d074f561ea89c5222593d1fa09bf783667af59"
+    "src/codex_local_harness/workflow.py": "00386614d2f84270fb093dc870d074f561ea89c5222593d1fa09bf783667af59",
+    "src/codex_local_harness/base_resolution.py": "975df3a51aa0bd616cb08934c5cc787aff12868e4212e2adee68a50a7a96e17b"
   }
 }

@@ -177,3 +177,17 @@ def test_publisher_preflight_no_publication_mutations_on_failure(tmp_path):
     assert not runner.pushed
     assert not runner.created
     assert not runner.commented
+
+
+def test_postflight_uses_pinned_base_not_mutable_remote(tmp_path):
+    runner = CoderRun(tmp_path)
+    observed = []
+    def run(args, cwd=None):
+        observed.append(args)
+        if args == ['git', 'cat-file', '-e', STALE+'^{commit}']: return ''
+        if args == ['git', 'merge-base', STALE, SHA]: return STALE
+        assert args != ['git', 'merge-base', 'origin/main', SHA]
+        return runner(args, cwd)
+    finalize_coder(tmp_path, REPO, 7, run, publish=True, base_sha=STALE)
+    assert ['git', 'merge-base', STALE, SHA] in observed
+    assert any(args[:3] == ['git', 'diff', '--check'] and f'{STALE}..{SHA}' in args for args in observed)

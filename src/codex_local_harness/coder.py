@@ -10,46 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .base_resolution import BaseResolutionError, materialize_missing_object
 from .diagnostics import PublicationFailure, append_record
 from .review import WORKFLOW_LABELS, ReviewError, normalize_remote, run_command
 
 
 Run = Callable[[Sequence[str], Path | None], str]
 GENERATED = re.compile(r"(^|/)(?:__pycache__|\.pytest_cache)(?:/|$)|\.pyc$|(^|/)\.coverage(?:\.|$)")
-
-
-def _materialize_base_object_if_needed(checkout: Path, base_sha: str, run: Run) -> None:
-    """Materialize the base object if absent from the local clone.
-
-    Verifies the SHA is valid and fetches it if missing.
-    """
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
-        raise ReviewError(f"Invalid base SHA format: {base_sha!r}")
-
-    # Check if object exists locally
-    try:
-        run(["git", "cat-file", "-e", base_sha], checkout)
-        # Object exists, nothing to do
-        return
-    except ReviewError:
-        # Object doesn't exist; proceed to fetch
-        pass
-
-    # Fetch the exact object from remote
-    try:
-        run(["git", "fetch", "origin", base_sha], checkout)
-    except ReviewError as exc:
-        raise ReviewError(
-            f"Failed to fetch base object {base_sha} from origin: {exc}"
-        )
-
-    # Verify the object is now present
-    try:
-        run(["git", "cat-file", "-e", base_sha], checkout)
-    except ReviewError as exc:
-        raise ReviewError(
-            f"Base object {base_sha} not present after fetch: {exc}"
-        )
 
 
 def _json(run: Run, argv: Sequence[str], cwd: Path | None = None) -> Any:
@@ -184,7 +151,7 @@ def finalize_coder(
 
     # Materialize the pinned base SHA if provided
     if base_sha is not None:
-        _materialize_base_object_if_needed(canonical, base_sha, run)
+        materialize_missing_object(canonical, base_sha, lambda args: run(args, canonical))
 
     unexpected = _unexpected_status(run(["git", "status", "--porcelain=v1"], canonical))
     if unexpected:
@@ -192,8 +159,8 @@ def finalize_coder(
 
     if publish:
         # Use pinned base_sha if provided, otherwise resolve via merge-base
-        diff_check_base = base_sha if base_sha is not None else run(
-            ["git", "merge-base", "origin/main", head_sha], canonical
+        diff_check_base = run(
+            ["git", "merge-base", base_sha or "origin/main", head_sha], canonical
         ).strip()
         _run_diff_check(diff_check_base, head_sha, run, canonical)
         run(["git", "push", "--set-upstream", "origin", branch], canonical)

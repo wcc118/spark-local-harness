@@ -20,8 +20,7 @@ from .evidence_packet import (
     discover_test_executables,
 )
 
-# Import base_resolution for optional pinned base support
-from .base_resolution import SHA40_PATTERN
+from .base_resolution import BaseResolutionError, materialize_missing_object
 
 
 RESULT_PREFIX = "REVIEW_RESULT_JSON="
@@ -113,41 +112,6 @@ def _json_command(run: Run, argv: Sequence[str], cwd: Path | None = None) -> Any
         raise ReviewError(f"invalid JSON from {' '.join(argv)}") from exc
 
 
-def _materialize_base_object(checkout: Path, base_sha: str, run: Run) -> None:
-    """Materialize the base object if absent from the local clone.
-
-    Verifies the SHA is valid and fetches it if missing. Raises if the object
-    cannot be materialized, ensuring failure before worker inference.
-    """
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
-        raise ReviewError(f"Invalid base SHA format: {base_sha!r}")
-
-    # Check if object exists locally
-    try:
-        run(["git", "cat-file", "-e", base_sha], checkout)
-        # Object exists, nothing to do
-        return
-    except ReviewError:
-        # Object doesn't exist; proceed to fetch
-        pass
-
-    # Fetch the exact object from remote
-    try:
-        run(["git", "fetch", "origin", base_sha], checkout)
-    except ReviewError as exc:
-        raise ReviewError(
-            f"Failed to fetch base object {base_sha} from origin: {exc}"
-        )
-
-    # Verify the object is now present
-    try:
-        run(["git", "cat-file", "-e", base_sha], checkout)
-    except ReviewError as exc:
-        raise ReviewError(
-            f"Base object {base_sha} not present after fetch: {exc}"
-        )
-
-
 def build_envelope(
     checkout: Path,
     repository: str,
@@ -201,7 +165,6 @@ def build_envelope(
         # Validate and materialize the pinned base SHA
         if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
             raise ReviewError(f"Invalid pinned base SHA format: {base_sha!r}")
-        _materialize_base_object(canonical, base_sha, run)
     else:
         # Resolve base SHA via GitHub API
         base_sha = run(
@@ -210,6 +173,7 @@ def build_envelope(
         ).strip()
         if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
             raise ReviewError("GitHub returned an invalid base SHA")
+    materialize_missing_object(canonical, base_sha, lambda args: run(args, canonical))
     labels = {item["name"] for item in issue_data.get("labels", [])}
     workflow = labels & WORKFLOW_LABELS
     if workflow != {"status/review"}:

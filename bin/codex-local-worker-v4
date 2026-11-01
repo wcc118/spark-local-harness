@@ -316,6 +316,7 @@ if [[ $record_run == 1 && ( -z $worker_repository || -z $worker_issue ) ]]; then
   exit 2
 fi
 
+candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
 checkout_kind=source-read-only
 checkout_id=$(printf '%s' "$(realpath "$worker_source_repo_path")" | sha256sum | cut -d' ' -f1)
 if [[ $worker_role == coder || $worker_role == reviewer ]]; then
@@ -354,76 +355,14 @@ if [[ $worker_role == coder || $worker_role == reviewer ]]; then
     git -C "$worker_repo_path" checkout --quiet -B "$source_branch" "$source_head"
   fi
 
-  # Authoritative base resolution: host-side GitHub API resolution before worker inference.
-  # Coder uses main as base; reviewer uses PR baseRefName. Fetch missing objects and pin refs.
-  if [[ $worker_role == coder ]]; then
-    base_branch="main"
-  elif [[ $worker_role == reviewer ]]; then
-    base_branch=$(git -C "$worker_repo_path" ls-remote origin --heads "refs/heads/*" | \
-      grep "$(git -C "$worker_repo_path" rev-parse HEAD)" | cut -f2 | sed 's|^refs/heads/||' || true)
-    # For reviewer, we need the PR's base branch, not HEAD's branch
-    base_branch=$(env PYTHONPATH="$candidate_source" python3 -c "
-import subprocess, sys, os
-repo = os.environ.get('CODEX_LOCAL_REPOSITORY', '')
-pr_num = os.environ.get('CODEX_LOCAL_PR', '')
-try:
-    result = subprocess.run(
-        ['gh', 'pr', 'view', pr_num, '--repo', repo, '--json', 'baseRefName'],
-        capture_output=True, text=True, check=True
-    )
-    import json
-    data = json.loads(result.stdout)
-    print(data.get('baseRefName', ''))
-except Exception:
-    print('', file=sys.stderr)
-" 2>/dev/null || echo "main")
-  else
-    base_branch=""
-  fi
-
-  if [[ -n "$base_branch" && -n "$worker_repository" ]]; then
-    # Resolve exact SHA via GitHub API
-    base_sha=$(env PYTHONPATH="$candidate_source" python3 -c "
-import subprocess, sys, os
-repo = os.environ.get('CODEX_LOCAL_REPOSITORY', '')
-branch = os.environ.get('CODEX_LOCAL_BASE_BRANCH', '$base_branch')
-try:
-    result = subprocess.run(
-        ['gh', 'api', f'repos/{repo}/git/ref/heads/{branch}', '--jq', '.object.sha'],
-        capture_output=True, text=True, check=True
-    )
-    sha = result.stdout.strip()
-    import re
-    if not re.fullmatch(r'[0-9a-f]{40}', sha):
-        raise ValueError(f'Invalid SHA: {sha}')
-    print(sha)
-except Exception as e:
-    print(f'ERROR: base resolution failed: {e}', file=sys.stderr)
-    sys.exit(1)
-" 2>/dev/null) || {
-      echo "ERROR: failed to resolve authoritative base SHA for $worker_repository/$base_branch" >&2
-      exit 1
-    }
-
-    if [[ -n "$base_sha" ]]; then
-      # Materialize the object if absent from local clone
-      if ! git -C "$worker_repo_path" cat-file -e "$base_sha" 2>/dev/null; then
-        if ! git -C "$worker_repo_path" fetch origin "$base_sha" 2>/dev/null; then
-          echo "ERROR: failed to fetch base object $base_sha for $worker_repository" >&2
-          exit 1
-        fi
-        if ! git -C "$worker_repo_path" cat-file -e "$base_sha" 2>/dev/null; then
-          echo "ERROR: base object $base_sha not present after fetch" >&2
-          exit 1
-        fi
-      fi
-
-      # Pin refs/remotes/origin/<base> to the exact resolved SHA
-      git -C "$worker_repo_path" update-ref "refs/remotes/origin/$base_branch" "$base_sha" || {
-        echo "ERROR: failed to pin refs/remotes/origin/$base_branch to $base_sha" >&2
-        exit 1
-      }
-    fi
+  # Resolve on the host; neither the source clone's refs nor model echoes are authoritative.
+  base_sha=""
+  if [[ -n "$worker_repository" ]]; then
+    base_args=(--checkout "$worker_repo_path" --repository "$worker_repository" --role "$worker_role")
+    [[ $worker_role != reviewer ]] || base_args+=(--pr "$worker_pr")
+    base_result=$(env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.base_resolution "${base_args[@]}") || exit 65
+    IFS=$'\t' read -r base_branch base_sha <<< "$base_result"
+    worker_task="AUTHORITATIVE_BASE branch=$base_branch sha=$base_sha"$'\n\n'"$worker_task"
   fi
 
   if [[ $convergence == 1 ]]; then
@@ -444,7 +383,6 @@ if [[ $worker_role == coder ]]; then
   git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
 fi
 
-candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
 [[ -d $candidate_source/codex_local_harness ]] || {
   echo "ERROR: installed harness runtime is missing: $candidate_source" >&2
   exit 69

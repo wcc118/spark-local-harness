@@ -1,249 +1,102 @@
-"""Tests for authoritative base resolution module."""
-from __future__ import annotations
-
-import re
+"""Exercise the production resolver against real local Git repositories."""
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
-
-from codex_local_harness.base_resolution import (
-    BaseResolutionError,
-    ResolvedBase,
-    materialize_missing_object,
-    pin_remote_ref,
-    resolve_base_sha,
-    resolve_and_materialize_base,
-    verify_base_sha_in_checkout,
-    SHA40_PATTERN,
-)
+from codex_local_harness import base_resolution as base
 
 
-class FakeRun:
-    """Fake runner for testing base resolution functions."""
-
-    def __init__(self):
-        self.calls = []
-        self.base_sha = "a" * 40
-        self.object_exists = False
-        self.fetch_failures = set()
-        self.cat_file_call_count = 0
-
-    def __call__(self, argv, cwd=None):
-        self.calls.append(tuple(argv))
-        cmd = tuple(argv)
-
-        # Check for GitHub API call
-        api_arg_str = " ".join(argv)
-        if "gh" in argv and "api" in argv and "repos" in api_arg_str:
-            if "/git/ref/heads/main" in api_arg_str:
-                return self.base_sha + "\n"
-            raise ValueError(f"Unexpected API call: {cmd}")
-
-        if cmd[:2] == ("git", "cat-file"):
-            self.cat_file_call_count += 1
-            # If object_exists is True, return success immediately
-            if self.object_exists:
-                return ""
-            # First call returns error (object missing), subsequent calls succeed after fetch
-            if self.cat_file_call_count == 1:
-                raise BaseResolutionError("cat-file failed")  # Object missing
-            return ""  # Success after fetch
-
-        if cmd[:2] == ("git", "fetch"):
-            # git fetch origin <ref> - ref is at index 3
-            ref = argv[3] if len(argv) > 3 else ""
-            if ref in self.fetch_failures:
-                raise BaseResolutionError("fetch failed")
-            return ""
-
-        if cmd[:2] == ("git", "update-ref"):
-            return ""
-
-        raise AssertionError(f"Unexpected command: {cmd}")
+def git(path, *args):
+    return subprocess.check_output(['git', *args], cwd=path, text=True,
+                                   stderr=subprocess.DEVNULL).strip()
 
 
-class TestSHA40Pattern:
-    """Tests for the SHA40_PATTERN regex."""
-
-    def test_valid_sha_matches(self):
-        """Valid 40-char lowercase hex SHAs match."""
-        assert SHA40_PATTERN.fullmatch("a" * 40)
-        assert SHA40_PATTERN.fullmatch("0" * 40)
-        assert SHA40_PATTERN.fullmatch("f" * 40)
-        assert SHA40_PATTERN.fullmatch("0123456789abcdef" * 2 + "01234567")  # 40 chars
-
-    def test_invalid_sha_does_not_match(self):
-        """Invalid SHAs don't match."""
-        assert not SHA40_PATTERN.fullmatch("a" * 39)  # Too short
-        assert not SHA40_PATTERN.fullmatch("a" * 41)  # Too long
-        assert not SHA40_PATTERN.fullmatch("g" * 40)  # Invalid char
-        assert not SHA40_PATTERN.fullmatch("A" * 40)  # Uppercase
-
-
-class TestResolveBaseSha:
-    """Tests for resolve_base_sha function."""
-
-    def test_resolve_success(self):
-        """Successfully resolves base SHA from GitHub API."""
-        runner = FakeRun()
-
-        result = resolve_base_sha(
-            repository="owner/repo",
-            base_branch="main",
-            gh_api_command=runner,
-        )
-
-        assert isinstance(result, ResolvedBase)
-        assert result.branch == "main"
-        assert result.exact_sha == "a" * 40
-        assert "GitHub API" in result.resolved_via
-
-    def test_rejects_invalid_sha_format(self):
-        """Rejects SHAs that aren't 40-char lowercase hex."""
-        runner = FakeRun()
-        # Use 40 chars but with invalid character (g is not hex)
-        runner.base_sha = "g" * 40
-
-        with pytest.raises(BaseResolutionError, match="GitHub returned an invalid base SHA"):
-            resolve_base_sha(
-                repository="owner/repo",
-                base_branch="main",
-                gh_api_command=runner,
-            )
-
-    def test_rejects_api_failure(self):
-        """Raises BaseResolutionError when API call fails."""
-        def failing_runner(args):
-            raise Exception("API unavailable")
-
-        with pytest.raises(BaseResolutionError, match="API unavailable"):
-            resolve_base_sha(
-                repository="owner/repo",
-                base_branch="main",
-                gh_api_command=failing_runner,
-            )
+@pytest.fixture
+def history(tmp_path):
+    remote = tmp_path / 'remote'; remote.mkdir()
+    git(remote, 'init', '-b', 'main')
+    git(remote, 'config', 'user.name', 'Fixture')
+    git(remote, 'config', 'user.email', 'fixture@example.invalid')
+    (remote / 'base.txt').write_text('initial\n')
+    git(remote, 'add', '.'); git(remote, 'commit', '-m', 'initial')
+    first = git(remote, 'rev-parse', 'HEAD')
+    clone = tmp_path / 'clone'
+    git(tmp_path, 'clone', '--no-local', str(remote), str(clone))
+    (remote / 'base.txt').write_text('advanced\n')
+    git(remote, 'commit', '-am', 'advance')
+    tip = git(remote, 'rev-parse', 'HEAD')
+    return remote, clone, first, tip
 
 
-class TestMaterializeMissingObject:
-    """Tests for materialize_missing_object function."""
-
-    def test_materialize_fetches_missing_object(self):
-        """Fetches object when absent, succeeds when present."""
-        runner = FakeRun()
-        runner.object_exists = False  # Object absent initially
-
-        materialize_missing_object(Path("/checkout"), "a" * 40, runner)
-
-        # Should have called cat-file (to check), then fetch, then cat-file again (to verify)
-        cat_file_calls = [c for c in runner.calls if c[:2] == ("git", "cat-file")]
-        fetch_calls = [c for c in runner.calls if c[:2] == ("git", "fetch")]
-        assert len(cat_file_calls) == 2  # Check + Verify
-        assert len(fetch_calls) == 1
-
-    def test_skip_when_object_exists(self):
-        """Skip fetch if object already exists."""
-        runner = FakeRun()
-        runner.object_exists = True  # Object present
-
-        materialize_missing_object(Path("/checkout"), "a" * 40, runner)
-
-        # Should only check, not fetch
-        fetch_calls = [c for c in runner.calls if c[:2] == ("git", "fetch")]
-        assert len(fetch_calls) == 0
-
-    def test_rejects_invalid_sha_format(self):
-        """Rejects invalid SHA format."""
-        runner = FakeRun()
-
-        with pytest.raises(BaseResolutionError, match="Invalid SHA"):
-            materialize_missing_object(Path("/checkout"), "invalid", runner)
-
-    def test_rejects_fetch_failure(self):
-        """Raises error when fetch fails."""
-        runner = FakeRun()
-        runner.object_exists = False
-        runner.fetch_failures.add("a" * 40)
-
-        with pytest.raises(BaseResolutionError, match="fetch"):
-            materialize_missing_object(Path("/checkout"), "a" * 40, runner)
+def test_stale_ref_and_missing_object_are_repaired_by_production_resolver(history):
+    remote, clone, first, tip = history
+    assert git(clone, 'rev-parse', 'origin/main') == first
+    with pytest.raises(subprocess.CalledProcessError):
+        git(clone, 'cat-file', '-e', tip)
+    calls = []
+    def github(args):
+        calls.append(args)
+        assert args == ['gh', 'api', 'repos/owner/repo/git/ref/heads/main', '--jq', '.object.sha']
+        return tip
+    result = base.resolve_and_materialize_base('owner/repo', 'main', clone, gh_api_runner=github)
+    assert result.exact_sha == tip
+    assert len(calls) == 1
+    assert git(clone, 'rev-parse', 'origin/main') == tip
+    assert git(clone, 'rev-parse', 'HEAD') == first  # source/worker head is preserved
+    git(clone, 'cat-file', '-e', tip + '^{commit}')
 
 
-class TestPinRemoteRef:
-    """Tests for pin_remote_ref function."""
-
-    def test_pins_ref_to_sha(self):
-        """Pins refs/remotes/origin/<branch> to the SHA."""
-        runner = FakeRun()
-
-        pin_remote_ref(Path("/checkout"), "main", "a" * 40, runner)
-
-        update_ref_calls = [c for c in runner.calls if c[:2] == ("git", "update-ref")]
-        assert len(update_ref_calls) == 1
-        assert "refs/remotes/origin/main" in update_ref_calls[0]
-
-    def test_rejects_invalid_sha(self):
-        """Rejects invalid SHA format."""
-        runner = FakeRun()
-
-        with pytest.raises(BaseResolutionError, match="Invalid SHA"):
-            pin_remote_ref(Path("/checkout"), "main", "invalid", runner)
+def test_existing_object_still_replaces_stale_remote_ref(history):
+    remote, clone, first, tip = history
+    git(clone, 'fetch', 'origin', tip)
+    base.resolve_and_materialize_base('owner/repo', 'main', clone, gh_api_runner=lambda _:tip)
+    assert git(clone, 'rev-parse', 'origin/main') == tip
 
 
-class TestResolveAndMaterializeBase:
-    """Tests for resolve_and_materialize_base convenience function."""
-
-    def test_full_workflow(self, tmp_path):
-        """Complete resolution, materialization, and pin workflow."""
-        def gh_api_runner(args):
-            return "a" * 40 + "\n"
-
-        def fetch_runner(args):
-            return ""
-
-        def git_runner(args):
-            if args[0] == "git" and args[1] == "update-ref":
-                return ""
-            raise AssertionError(f"Unexpected git command: {args}")
-
-        result = resolve_and_materialize_base(
-            repository="owner/repo",
-            base_branch="main",
-            checkout_path=tmp_path,
-            gh_api_runner=gh_api_runner,
-            fetch_runner=fetch_runner,
-            git_runner=git_runner,
-        )
-
-        assert isinstance(result, ResolvedBase)
-        assert result.exact_sha == "a" * 40
-
-    def test_fetch_failure_before_pin(self, tmp_path):
-        """Fetch failure prevents pin operation."""
-        def gh_api_runner(args):
-            return "a" * 40 + "\n"
-
-        def fetch_runner(args):
-            raise BaseResolutionError("fetch failed")
-
-        with pytest.raises(BaseResolutionError, match="fetch"):
-            resolve_and_materialize_base(
-                repository="owner/repo",
-                base_branch="main",
-                checkout_path=tmp_path,
-                gh_api_runner=gh_api_runner,
-                fetch_runner=fetch_runner,
-            )
+def test_failed_fetch_fails_closed_without_repinning(history):
+    remote, clone, first, tip = history
+    git(clone, 'remote', 'set-url', 'origin', str(clone / 'missing'))
+    with pytest.raises(base.BaseResolutionError):
+        base.resolve_and_materialize_base('owner/repo', 'main', clone, gh_api_runner=lambda _:tip)
+    assert git(clone, 'rev-parse', 'origin/main') == first
 
 
-class TestVerifyBaseShaInCheckout:
-    """Tests for verify_base_sha_in_checkout function."""
+@pytest.mark.parametrize('sha', ['', 'a'*39, 'g'*40, 'a'*40+'\nextra'])
+def test_invalid_github_identity_rejected(history, sha):
+    _, clone, first, _ = history
+    with pytest.raises(base.BaseResolutionError):
+        base.resolve_and_materialize_base('owner/repo', 'main', clone, gh_api_runner=lambda _:sha)
+    assert git(clone, 'rev-parse', 'origin/main') == first
 
-    def test_returns_true_when_object_exists(self, tmp_path):
-        """Returns True when the object exists in the checkout."""
-        # This test would require a real Git repo with an object
-        # For now, just verify the function signature
-        assert verify_base_sha_in_checkout(tmp_path, "a" * 40) is False  # No repo
 
-    def test_returns_false_for_invalid_sha(self, tmp_path):
-        """Returns False for invalid SHA format."""
-        assert verify_base_sha_in_checkout(tmp_path, "invalid") is False
+def test_blob_is_not_accepted_as_commit(history):
+    _, clone, _, _ = history
+    blob = git(clone, 'rev-parse', 'HEAD:base.txt')
+    with pytest.raises(base.BaseResolutionError):
+        base.resolve_and_materialize_base('owner/repo', 'main', clone, gh_api_runner=lambda _:blob)
+
+
+def test_reviewer_resolves_actual_stacked_base_through_cli(history, monkeypatch, capsys):
+    remote, clone, _, tip = history
+    git(remote, 'branch', 'stacked/base')
+    real = base.run_command
+    def runner(args, cwd):
+        if args[0] != 'gh': return real(args, cwd)
+        if args[1:3] == ['pr', 'view']:
+            assert '--repo' in args
+            return json.dumps({'baseRefName':'stacked/base'})
+        assert 'repos/owner/repo/git/ref/heads/stacked/base' in args
+        return tip
+    monkeypatch.setattr(base, 'run_command', runner)
+    assert base.main(['--checkout', str(clone), '--repository', 'owner/repo', '--role', 'reviewer', '--pr', '3']) == 0
+    assert capsys.readouterr().out.strip() == 'stacked/base\t'+tip
+    assert git(clone, 'rev-parse', 'origin/stacked/base') == tip
+
+
+def test_worker_invokes_same_resolver_and_retains_pinned_identity():
+    script = (Path(__file__).parents[1]/'bin/codex-local-worker-v4').read_text()
+    assert 'python3 -m codex_local_harness.base_resolution' in script
+    assert 'AUTHORITATIVE_BASE branch=$base_branch sha=$base_sha' in script
+    assert 'coder_postflight_base_args+=(--base-sha "$base_sha")' in script
+    assert script.index('python3 -m codex_local_harness.base_resolution') < script.index('review_prepare_args=()')

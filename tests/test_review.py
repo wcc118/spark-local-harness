@@ -118,6 +118,8 @@ class PreflightRun:
             return self.branch + "\n"
         if command == ("git", "rev-parse", "HEAD"):
             return self.sha + "\n"
+        if command == ("git", "cat-file", "-e", BASE_SHA + "^{commit}"):
+            return ""
         if command == ("git", "ls-files"):
             return "issuebench/code.py\n"
         if command[:3] == ("gh", "pr", "view"):

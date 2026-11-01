@@ -58,7 +58,7 @@ def test_verify_and_rollback_reject_modified_wrapper(tmp_path):
     assert worker.read_text() == 'operator change\n'
 
 
-def test_installed_coder_dispatches_supervised_without_default_deadline(tmp_path):
+def test_installed_coder_dispatches_supervised_without_default_deadline(tmp_path, fake_base_api):
     home = tmp_path / 'home'
     install(home)
     repo = tmp_path / 'repo'
