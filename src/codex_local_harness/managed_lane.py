@@ -9,7 +9,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-from .lane import check_lane
+from .lane import check_lane, GpuLease
 
 
 def admit(config, environment, check=check_lane):
@@ -39,12 +39,10 @@ def main(argv=None):
     state = Path.home() / '.local/share/codex-local-harness'
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     config_path = Path(os.environ.get('CODEX_LOCAL_WORKER_CONFIG', str(Path.home() / '.config/codex-local/workers.json')))
+    lease = GpuLease('gpu-advisory', 'managed native 3090 worker', state)
     try:
         config = json.loads(config_path.read_text())
-        fd = os.open(state / 'lane-3090.lock', os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not lease.acquire(timeout=0):
             record = {'status': 'lease-busy', 'checked_at': datetime.now(timezone.utc).isoformat()}
             tier = model = None
         else:
@@ -61,7 +59,6 @@ def main(argv=None):
             os.fsync(handle.fileno())
         print(json.dumps(record, sort_keys=True), flush=True)
         if record['disposition'] == 'skipped' or os.environ.get('CODEX_LOCAL_DRY_RUN') == '1':
-            os.close(fd)
             return 0
         env = dict(os.environ, CODEX_LOCAL_SOURCE=str(root / 'src'),
                    CODEX_LOCAL_LANE_ADMISSION=record['admission_id'], CODEX_LOCAL_TIER=tier, CODEX_LOCAL_MODEL=model,
@@ -69,12 +66,14 @@ def main(argv=None):
                    CODEX_LOCAL_TIMEOUT_SECONDS='900', CODEX_LOCAL_RECORD_RUN='1',
                    CODEX_LOCAL_LANE_CONTEXT=str(record['loaded_context']))
         # Keep the advisory lease for the entire managed execution, including cleanup.
-        os.set_inheritable(fd, True)
+        os.set_inheritable(lease._fd.fileno(), True)
         os.execve(root / 'bin/codex-local-worker-candidate',
                   ['codex-local-worker-candidate', 'coder', *args], env)
     except (OSError, ValueError, TypeError) as exc:
         print('managed lane admission failed: ' + type(exc).__name__, file=sys.stderr)
         return 2
+    finally:
+        lease.release()
     return 0
 
 

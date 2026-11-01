@@ -14,7 +14,7 @@ PYTHONPATH=src python3 -m codex_local_harness.managed_lane REPOSITORY TASK
 ```
 
 The entry point checks `/api/v0/models` for the exact loaded model and at least
-65536 loaded context, while holding the existing lane-3090 file lease. Missing,
+65536 loaded context, while holding the existing gpu-advisory lease. Missing,
 unreachable, insufficient-context or busy lanes record a skipped admission and
 exit0 without creating a worker, changing a model, or blocking the main task.
 A downloaded model listed by `/v1/models` alone is not sufficient.

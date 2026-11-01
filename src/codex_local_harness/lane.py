@@ -356,9 +356,7 @@ class GpuLease:
         if self._held:
             return True
 
-        self._fd = open(self.lock_file, "w")
-        self._fd.write(f"{os.getpid()}\n")
-        self._fd.flush()
+        self._fd = open(self.lock_file, "a+")
 
         start_time = time.monotonic()
         poll_interval = 0.1
@@ -366,6 +364,10 @@ class GpuLease:
         while True:
             try:
                 fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._fd.seek(0)
+                self._fd.truncate()
+                self._fd.write(f"{os.getpid()}\n")
+                self._fd.flush()
                 # Successfully acquired, write sidecar
                 sidecar_data = {
                     "pid": os.getpid(),
@@ -398,20 +400,20 @@ class GpuLease:
 
     def release(self) -> None:
         """Release the lease and remove sidecar file."""
-        if self._held and self._fd is not None:
-            try:
-                fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
-                self._fd.close()
-            except OSError:
-                pass
-            self._fd = None
-            self._held = False
-
-        # Always remove sidecar, even if lock wasn't held
+        if not self._held or self._fd is None:
+            return
+        # Remove only our sidecar, while still holding the lock. A contender
+        # must not erase the active owner's evidence or a successor's sidecar.
         try:
             self.sidecar_file.unlink(missing_ok=True)
         except OSError:
             pass
+        try:
+            fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fd.close()
+            self._fd = None
+            self._held = False
 
     def __enter__(self) -> "GpuLease":
         """Context manager entry - acquire with no timeout."""

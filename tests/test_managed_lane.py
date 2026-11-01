@@ -45,3 +45,53 @@ def test_native_worker_uses_exact_endpoint_and_does_not_put_token_in_argv(tmp_pa
     assert 'qwen/qwen3.8-27b' in args
     assert 'OPENAI_API_KEY' in args
     assert not any('test-only-token' in arg for arg in args)
+
+
+def test_main_unloaded_and_busy_skip_without_worker(tmp_path, monkeypatch, capsys):
+    import json
+    from codex_local_harness import managed_lane
+    from codex_local_harness.lane import GpuLease
+    monkeypatch.setenv('HOME',str(tmp_path))
+    config=tmp_path/'config.json';config.write_text(json.dumps(CONFIG))
+    monkeypatch.setenv('CODEX_LOCAL_WORKER_CONFIG',str(config))
+    calls=[]
+    monkeypatch.setattr(managed_lane.os,'execve',lambda *args: calls.append(args))
+    monkeypatch.setattr(managed_lane,'admit',lambda *args: ('managed-3090','lmstudio/qwen/qwen3.8-27b',dict(status='model-not-loaded',loaded_context=None)))
+    assert managed_lane.main(['repo','task'])==0
+    assert json.loads(capsys.readouterr().out)['disposition']=='skipped'
+    lease=GpuLease('gpu-advisory','test',tmp_path/'.local/share/codex-local-harness')
+    assert lease.acquire(timeout=0)
+    try:
+        assert managed_lane.main(['repo','task'])==0
+        assert json.loads(capsys.readouterr().out)['status']=='lease-busy'
+        assert lease.sidecar_file.exists()
+        assert lease.holder()['purpose']=='test'
+    finally:
+        lease.release()
+    assert not calls
+
+
+def test_main_holds_lease_through_exec_and_forces_bounds(tmp_path, monkeypatch):
+    import json, os
+    from codex_local_harness import managed_lane
+    from codex_local_harness.lane import GpuLease
+    monkeypatch.setenv('HOME',str(tmp_path))
+    monkeypatch.delenv('CODEX_LOCAL_DRY_RUN',raising=False)
+    config=tmp_path/'config.json';config.write_text(json.dumps(CONFIG))
+    monkeypatch.setenv('CODEX_LOCAL_WORKER_CONFIG',str(config))
+    monkeypatch.setattr(managed_lane,'admit',lambda *args: ('managed-3090','lmstudio/qwen/qwen3.8-27b',dict(status='ok',loaded_context=65536)))
+    class Executed(Exception): pass
+    def execute(path,args,env):
+        competitor=GpuLease('gpu-advisory','test',tmp_path/'.local/share/codex-local-harness')
+        assert not competitor.acquire(timeout=0)
+        assert env['CODEX_LOCAL_MODEL_SWITCH']=='0'
+        assert env['CODEX_LOCAL_TOOL_CALL_BUDGET']=='80'
+        assert env['CODEX_LOCAL_TIMEOUT_SECONDS']=='900'
+        assert env['CODEX_LOCAL_LANE_CONTEXT']=='65536'
+        assert args[1:] == ['coder','repo','task']
+        raise Executed
+    monkeypatch.setattr(managed_lane.os,'execve',execute)
+    with pytest.raises(Executed): managed_lane.main(['repo','task'])
+    lease=GpuLease('gpu-advisory','after',tmp_path/'.local/share/codex-local-harness')
+    assert lease.acquire(timeout=0)
+    lease.release()
