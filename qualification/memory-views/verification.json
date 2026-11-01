@@ -21,7 +21,7 @@
       "preset": "cross-project-topics",
       "result_sets": 1,
       "row_counts": [
-        50
+        38
       ]
     },
     {
@@ -57,5 +57,6 @@
       ]
     }
   ],
-  "limits": "Queries executed; no browser UI or owner usability claim; counts are a point-in-time snapshot."
+  "cross_project_distinct_nonempty_verified": true,
+  "limits": "Point-in-time query evidence, no browser UI or owner usability claim."
 }
