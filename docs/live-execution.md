@@ -71,7 +71,8 @@ that a retained worker result became available to Codex; the UI does not infer
 an unobserved coder-to-reviewer conversation.
 
 Live diagnostics now fingerprint observable tool name/input pairs and emit an
-`exploration-loop` warning after three distinct calls repeat the same request.
+`exploration-loop` warning after three distinct calls repeat the same request
+for coder/investigation roles, or 20 for reviewer/convergence-reviewer roles.
 Lifecycle updates for one call ID are deduplicated. Fingerprints are hashes;
 command bodies and paths are not copied into the projection.
 

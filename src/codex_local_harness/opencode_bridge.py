@@ -50,6 +50,11 @@ def _request(
         raise BridgeError(f"OpenCode returned malformed JSON: {method} {path}") from exc
 
 
+def _abort_session(base_url: str, password: str, session_id: str) -> None:
+    """Abort an OpenCode session with timeout 5."""
+    _request(base_url, password, "POST", f"/session/{session_id}/abort", timeout=5)
+
+
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -213,6 +218,20 @@ def run_bridge(
                 _append_event(log, normalized)
                 for diagnostic in diagnostics.observe(normalized):
                     _append_event(log, diagnostic)
+                    # Enforce exploration-loop threshold for reviewer agents
+                    if diagnostic.get("type") == "diagnostic":
+                        part = diagnostic.get("part") or {}
+                        if part.get("kind") == "exploration-loop":
+                            count = part.get("count", 0)
+                            role = diagnostics.role
+                            reviewer_roles = {"reviewer", "convergence-reviewer"}
+                            threshold = 20 if role in reviewer_roles else 3
+                            if count >= threshold:
+                                _abort_session(base_url, password, session_id)
+                                raise BridgeError(
+                                    f"exploration-loop threshold exceeded for {role}: "
+                                    f"fingerprint {part.get('fingerprint')}, count {count}"
+                                )
             if compaction_tracker is not None:
                 compaction = compaction_tracker.observe(raw, observed_at=_iso_timestamp())
                 if compaction is not None:
