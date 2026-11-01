@@ -140,3 +140,17 @@ event stream before completion, this opt-in mode aborts the old session and
 attempts one fresh session within the original timeout. The first attempt log
 and control record remain as `.attempt-1` artifacts. Reviewer checkpoint resume
 is not supported; timeout, audit, publication and other failures are not retried.
+
+### Explicit completed-tool-call budgets
+
+Set `CODEX_LOCAL_TOOL_CALL_BUDGET=N` to a positive integer for a recorded,
+supervised convergence run. The default is unset (no total-call limit); unset it
+to roll back. Prompt requests such as "use ten commands" remain advisory.
+The host counts unique completed nonempty calls, including errors, across both
+OpenCode and native Qwen event formats and across a bounded reviewer restart.
+Exactly N completions are allowed; N+1 triggers `step-budget`, exit 75 and owned
+process-group cancellation. Polling can observe an overshoot; this is not a
+per-call authorization boundary. A mandatory postflight count prevents a fast
+finishing over-budget result from publishing. Malformed/missing evidence fails
+closed for publication. Logs and isolated checkpoints remain available. This
+setting does not add permissions, load models, or promote routes.

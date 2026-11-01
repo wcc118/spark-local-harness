@@ -218,6 +218,8 @@ def test_real_supervised_tool_budget(tmp_path, fake_base_api, lifetime_image, ru
     if calls > 2:
         marker = json.loads((health / (terminal['run_id'] + '.tool-budget.json')).read_text())
         assert marker['count'] == 3 and marker['limit'] == 2
+        events = [json.loads(line) for line in (health / 'workflow.jsonl').read_text().splitlines()]
+        assert any(event.get('stop_reason') == 'step-budget' for event in events)
     remaining = subprocess.check_output(['docker', 'ps', '-q', '--filter',
         'label=' + PREFIX + 'run=' + terminal['run_id']], text=True)
     assert not remaining.strip()

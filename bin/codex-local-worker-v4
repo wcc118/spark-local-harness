@@ -92,11 +92,13 @@ cleanup() {
       echo "WARN: lifecycle telemetry ingestion failed for run $worker_run_id" >&2
       record_publication_failure cleanup lifecycle
     fi
+    diagnostic_stop_reason=$diagnostic_event
+    [[ -z $worker_budget_marker || ! -f $worker_budget_marker ]] || diagnostic_stop_reason=step-budget
     if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
       --records "$workflow_records" --event-id "$worker_run_id:$diagnostic_event" \
       --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state interrupted \
       --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \
-      --role "$worker_role" --model "$worker_model" --stop-reason "$diagnostic_event" \
+      --role "$worker_role" --model "$worker_model" --stop-reason "$diagnostic_stop_reason" \
       "${workflow_identity_args[@]}" >/dev/null; then
       echo "WARN: workflow telemetry ingestion failed for run $worker_run_id" >&2
       record_publication_failure cleanup workflow
@@ -947,7 +949,8 @@ if [[ $record_run == 1 ]]; then
   if [[ $worker_role == coder ]]; then
     delivery_state=failed
     [[ $delivery_ready == true ]] && delivery_state=passed
-    if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    [[ -z $worker_budget_marker || ! -f $worker_budget_marker ]] || workflow_stop_args=(--stop-reason step-budget)
+  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
       --records "$workflow_records" --event-id "$worker_run_id:delivery-$delivery_state" \
       --operation-id "$worker_operation_id" --stage delivery --state "$delivery_state" \
       --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \

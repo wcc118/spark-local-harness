@@ -11,7 +11,7 @@
   },
   "files": {
     "AGENTS.md": "439274d71d4e83624102bb7a76b9a9308f682c1d44c472ee66950cb9dcb317ee",
-    "README.md": "409287d1953610e983d9b6de0138a2a3f23783aca11c0af37459e03e77edb8fa",
+    "README.md": "2443c70c2d6f20aa09ef16a0f6b69f7373f1a679201229275f5414a9e4f16822",
     "agents/advisory.md": "53a5ba1d703c59a833bee101b451473211fd7ea1c9aad55f0171da81f49d3ea2",
     "agents/coder.md": "8313923ff3012824f75bd25c5b96f62daefbb70fb165d437a00ffc22c51dcb52",
     "agents/convergence-reviewer.md": "d52e658e6deee604ffebcf288086eda144963335e02c0e61697d7b963500997d",
@@ -22,7 +22,7 @@
     "bin/codex-local-model": "651303665226f78680e72258bbe6c509ccfdce79e05e798fb6d81215e034c721",
     "bin/codex-local-supervise": "2a4ed80ef002818af57b53bf6d71b57f2b9bc109ab3c6a346eb38720d3dbc62b",
     "bin/codex-local-worker-candidate": "e570d9e707b7120a308d060cfa474e78e861725b23ae0a229a08f05b08133721",
-    "bin/codex-local-worker-v4": "446b10a4bbbb3e543744f06c12e920ed85be9efbb4be8e3777b116714df495b5",
+    "bin/codex-local-worker-v4": "1d6ed845c624418dfab99d6c2416775927ccbab26ea9df91e90a2b31c226b764",
     "bin/install-harness": "a0497315dc8388baa8836330dfe3efc197a79821bfe84138c3aa95e6430a8229",
     "config/deepseek-v4-compose.codex.yaml": "817eeb90e14245b027a42075fffef26a87322f33275290523ea76f64739df7b6",
     "config/deepseek-v4-reasoning.yaml": "c9e523c829f32444e2549d252384c6ee1eb3772c8b9796ef0fa7f249ea34bea9",
