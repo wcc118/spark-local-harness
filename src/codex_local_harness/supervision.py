@@ -84,13 +84,20 @@ def launch(command: list[str]) -> int:
         health = Path(os.environ.get("CODEX_LOCAL_HEALTH_DIR", str(Path.home() / ".local/share/codex-local-harness/health")))
         item = None
         offset = 0
+        log_identity = None
         while process.poll() is None:
             try:
                 if item is None:
                     item = next((e for e in records(health / "ownership.jsonl") if e.get("pid") == process.pid
                                  and e.get("process_start") == process_start(process.pid)), None)
                 if item:
-                    delta = observe(Path(item["log"]), offset)
+                    log_path = Path(item["log"])
+                    stat = log_path.stat()
+                    identity = (stat.st_dev, stat.st_ino)
+                    if log_identity is not None and identity != log_identity:
+                        offset = 0  # A bounded infrastructure restart archived the prior attempt.
+                    log_identity = identity
+                    delta = observe(log_path, offset)
                     offset = delta["offset"]
                     if delta["events"]:
                         types = {}
