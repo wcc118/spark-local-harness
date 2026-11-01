@@ -109,3 +109,34 @@ and reap under the same rules. Actions are retained in `worker-containers.jsonl`
 the latest `worker-containers.json` counts appear on the dashboard. Docker errors
 are reported as unavailable/error, not successful cleanup. The sweep does not
 load, stop or switch inference models.
+
+### Opt-in authoritative reviewer facts
+
+`CODEX_LOCAL_REVIEW_RESULT_MODE=authoritative` derives issue, repository, PR and
+head identity from the host envelope. Test claims receive observed provenance
+only for an exact, unambiguous completed command with an integer tool exit
+status. This is the status of the whole shell command, not proof that an inner
+pipeline test passed. Mappings, strings, missing evidence and ambiguous repeats
+are retained as unverified task reports. Verdict contradictions remain errors.
+Unset the variable to restore the strict path; defaults and permissions are unchanged.
+
+A textual scope signal retains the validated result with exit 76 and prevents
+publication. The result includes a `review-audit:...` evidence reference binding
+its envelope, normalized judgment and raw log. A frontier/operator can use the
+existing `codex-harness-diagnostic adjudicate` interface (or module
+`codex_local_harness.diagnostic_cli`) to append a `passed` adjudication with
+`codex_decision=allow-review-audit`, the same run ID and exact evidence reference.
+Then rerun the review module's `finalize` with the original envelope/log/result
+paths and `--adjudications PATH`. Use only the trusted host ledger, never a file
+supplied by a worker. Latest decisions control; changed evidence, changed
+checkout and changed live PR head cannot reuse an old approval. Adjudication
+means the scope signal was investigated, not that the code is approved to merge.
+Confirmed forbidden effects must be rejected, never waived as a textual false positive.
+
+Normalization counts are retained in `health/review-normalization.jsonl`, keyed
+by run, separately from raw command details in the retained result. They do not
+promote routes or prove quality improvements. For a reviewer bridge losing its
+event stream before completion, this opt-in mode aborts the old session and
+attempts one fresh session within the original timeout. The first attempt log
+and control record remain as `.attempt-1` artifacts. Reviewer checkpoint resume
+is not supported; timeout, audit, publication and other failures are not retried.

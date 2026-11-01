@@ -26,6 +26,8 @@ def normalize(log: Path, runtime: str, exit_status: int | None = None) -> dict[s
                 malformed = True
         except ValueError:
             malformed = True
+    restarted = any(e.get("type") == "diagnostic" and
+                    (e.get("part") or {}).get("kind") == "infrastructure-restart" for e in events)
     calls, errors = set(), set()
     observed: dict[str, dict[str, Any]] = {}
     result = None
@@ -84,9 +86,11 @@ def normalize(log: Path, runtime: str, exit_status: int | None = None) -> dict[s
         return sum(values) if values and all(v is not None for v in values) else None
     total, cache = summed(totals), summed(caches)
     complete = (result is not None if runtime == "qwen-code" else exit_status == 0)
-    coverage = "complete" if complete and total is not None and not malformed else "partial" if contributions else "unknown"
+    coverage = "complete" if complete and total is not None and not malformed and not restarted else "partial" if contributions else "unknown"
     return {
         "schema_version": 1, "runtime": runtime, "coverage": coverage,
+        **({"coverage_reason": "restart: totals cover final attempt only; prior attempt retained separately"}
+           if restarted else {}),
         "input_reported": summed(inputs), "output_reported": summed(outputs),
         "reasoning_reported": summed(reasoning), "cache_read_write": cache,
         "total_including_cache": total,

@@ -288,7 +288,17 @@ def parse_result(log_path: Path) -> dict[str, Any]:
     return result
 
 
-def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
+def canonicalize_result(result: dict[str, Any], envelope: Envelope, log_path: Path | None = None) -> dict[str, Any]:
+    if os.environ.get("CODEX_LOCAL_REVIEW_RESULT_MODE") != "authoritative":
+        return _canonicalize_result_strict(result, envelope)
+    from .review_evidence import normalize
+    normalized, diagnostics = normalize(result, envelope, log_path)
+    canonical = _canonicalize_result_strict(normalized, envelope)
+    canonical["_review_diagnostics"] = diagnostics
+    return canonical
+
+
+def _canonicalize_result_strict(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
     """Convert a small, documented reviewer compatibility vocabulary to schema v1.
 
     This boundary changes representation only.  It rejects unknown fields and
@@ -378,7 +388,7 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
     }
 
 
-def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
+def audit_tool_scope(log_path: Path, envelope: Envelope, *, authoritative: bool = False) -> None:
     checkout = Path(envelope.checkout).resolve()
     trusted_tool_roots = (Path.home() / ".local/bin", Path.home() / "bin")
     forbidden_commands = re.compile(
@@ -414,7 +424,13 @@ def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
         if tool.startswith("memory_"):
             violations.append(f"line {line_number}: prohibited memory tool {tool}")
         command = str(inputs.get("command", inputs.get("cmd", "")))
-        if command and forbidden_commands.search(command):
+        audit_command = command
+        if authoritative:
+            from .review_adjudication import unquoted_command
+            audit_command = unquoted_command(command)
+            if "$(" in command or "`" in command:
+                violations.append(f"line {line_number}: shell substitution requires adjudication")
+        if command and forbidden_commands.search(audit_command):
             violations.append(f"line {line_number}: prohibited command")
         values = [str(value) for value in inputs.values() if isinstance(value, str)]
         for value in values:
@@ -504,7 +520,7 @@ def validate_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any
     return result
 
 
-def render_comment(result: dict[str, Any], envelope: Envelope, run_id: str) -> str:
+def render_comment(result: dict[str, Any], envelope: Envelope, run_id: str, diagnostics: dict | None = None) -> str:
     marker = f"<!-- codex-review:{run_id}:{envelope.head_sha} -->"
     lines = [
         marker,
@@ -516,6 +532,10 @@ def render_comment(result: dict[str, Any], envelope: Envelope, run_id: str) -> s
         "",
         str(result["summary"]),
     ]
+    if diagnostics:
+        lines.extend(["", "Evidence normalization: " + json.dumps({key: diagnostics[key] for key in
+            ("identity_echo_mismatch", "derived_tests", "unverified_tests", "audit_flagged", "audit_adjudicated")
+            if key in diagnostics}, sort_keys=True)])
     findings = result.get("findings", [])
     if findings:
         lines.extend(["", "### Findings", ""])
@@ -545,6 +565,7 @@ def publish_result(
     envelope: Envelope,
     run_id: str,
     run: Run = run_command,
+    *, diagnostics: dict | None = None,
 ) -> dict[str, Any]:
     if _current_pr_sha(envelope, run) != envelope.head_sha:
         raise ReviewError("stale review: pull-request head changed")
@@ -558,7 +579,7 @@ def publish_result(
         raise ReviewError("multiple comments already use this review marker")
     comment_url = matches[0].get("url") if matches else None
     if not matches:
-        body = render_comment(result, envelope, run_id)
+        body = render_comment(result, envelope, run_id, diagnostics)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(body)
             body_path = Path(handle.name)
@@ -635,6 +656,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finalize.add_argument("--run-id", required=True)
     finalize.add_argument("--result-out", type=Path, required=True)
     finalize.add_argument("--no-publish", action="store_true")
+    finalize.add_argument("--adjudications", type=Path)
+    finalize.add_argument("--health-records", type=Path)
 
     incomplete = sub.add_parser("incomplete")
     incomplete.add_argument("--envelope", type=Path, required=True)
@@ -663,12 +686,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stdout.write(prepare_prompt(envelope, args.task_file.read_text(encoding="utf-8"), packet))
         elif args.command == "finalize":
             envelope = load_envelope(args.envelope)
-            audit_tool_scope(args.log, envelope)
+            authoritative = os.environ.get("CODEX_LOCAL_REVIEW_RESULT_MODE") == "authoritative"
+            audit_flag = None
+            try:
+                audit_tool_scope(args.log, envelope, authoritative=authoritative)
+            except ReviewError as exc:
+                if not authoritative or not str(exc).startswith("tool-scope audit failed:"):
+                    raise
+                audit_flag = str(exc)
             verify_checkout_unchanged(envelope)
-            result = validate_result(canonicalize_result(parse_result(args.log), envelope), envelope)
+            result = canonicalize_result(parse_result(args.log), envelope, args.log)
+            diagnostics = result.pop("_review_diagnostics", {})
+            result = validate_result(result, envelope)
+            if audit_flag:
+                from .review_adjudication import allowed, evidence_reference
+                reference = evidence_reference(envelope, args.log, result)
+                diagnostics.update(audit_flagged=True, audit_signal=audit_flag, evidence_ref=reference)
+                if not allowed(args.adjudications, args.run_id, reference):
+                    write_json(args.result_out, {"result": result, "diagnostics": diagnostics,
+                               "publication": {"published": False, "reason": "audit-adjudication-required"}})
+                    from .review_evidence import record_counts
+                    record_counts(args.health_records, args.run_id, diagnostics, published=False)
+                    print(json.dumps({"audit_flagged": True, "evidence_ref": reference}))
+                    return 76
+                diagnostics["audit_adjudicated"] = True
             publication = ({"published": False, "head_sha": envelope.head_sha}
-                           if args.no_publish else publish_result(result, envelope, args.run_id))
-            write_json(args.result_out, {"result": result, "publication": publication})
+                           if args.no_publish else publish_result(result, envelope, args.run_id,
+                                                                  diagnostics=diagnostics))
+            artifact = {"result": result, "publication": publication}
+            if authoritative:
+                artifact["diagnostics"] = diagnostics
+                from .review_evidence import record_counts
+                record_counts(args.health_records, args.run_id, diagnostics,
+                              published=not args.no_publish)
+            write_json(args.result_out, artifact)
             print(json.dumps(publication, sort_keys=True))
         else:
             result = incomplete_result(load_envelope(args.envelope), args.reason)

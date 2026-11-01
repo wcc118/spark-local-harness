@@ -85,6 +85,8 @@ def launch(command: list[str]) -> int:
         item = None
         offset = 0
         next_container_sweep = 0.0
+
+        log_identity = None
         while process.poll() is None:
             try:
                 if time.monotonic() >= next_container_sweep:
@@ -95,7 +97,13 @@ def launch(command: list[str]) -> int:
                     item = next((e for e in records(health / "ownership.jsonl") if e.get("pid") == process.pid
                                  and e.get("process_start") == process_start(process.pid)), None)
                 if item:
-                    delta = observe(Path(item["log"]), offset)
+                    log_path = Path(item["log"])
+                    stat = log_path.stat()
+                    identity = (stat.st_dev, stat.st_ino)
+                    if log_identity is not None and identity != log_identity:
+                        offset = 0  # A bounded infrastructure restart archived the prior attempt.
+                    log_identity = identity
+                    delta = observe(log_path, offset)
                     offset = delta["offset"]
                     if delta["events"]:
                         types = {}
