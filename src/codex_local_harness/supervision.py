@@ -107,12 +107,13 @@ def launch(command: list[str]) -> int:
                         marker = health / (item["run_id"] + ".tool-budget.json")
                         evidence = {"run_id": item["run_id"], "reason": "step-budget",
                                     "count": count, "limit": budget.limit}
-                        temporary = marker.with_suffix(".tmp")
-                        temporary.write_text(json.dumps(evidence))
-                        temporary.replace(marker)
-                        append(health / "interventions.jsonl", {**evidence,
-                               "kind": "tool-call-budget", "observed_at": time.time()})
-                        cancel(health, item["run_id"], item["session_id"])
+                        if not marker.exists():
+                            temporary = marker.with_suffix(".tmp")
+                            temporary.write_text(json.dumps(evidence))
+                            temporary.replace(marker)
+                            append(health / "interventions.jsonl", {**evidence,
+                                   "kind": "tool-call-budget", "observed_at": time.time()})
+                            cancel(health, item["run_id"], item["session_id"])
                         budget_stopped = True
                 if item:
                     log_path = Path(item["log"])

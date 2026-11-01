@@ -34,6 +34,7 @@ worker_memory_test_db=0
 worker_budget_marker=
 cleanup() {
   cleanup_status=$?
+  trap '' INT TERM  # Finish owned cleanup/terminal evidence despite a late cancellation.
   if [[ -n $worker_budget_marker && -f $worker_budget_marker ]]; then
     cleanup_status=75
     if [[ $worker_role == reviewer && -n ${worker_envelope:-} ]]; then
@@ -937,6 +938,7 @@ if [[ $record_run == 1 ]]; then
       timed-out|interrupted) workflow_state=interrupted; workflow_stop_args=(--stop-reason "$diagnostic_event") ;;
     esac
   fi
+  [[ -z $worker_budget_marker || ! -f $worker_budget_marker ]] || workflow_stop_args=(--stop-reason step-budget)
   if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
     --records "$workflow_records" --event-id "$worker_run_id:$worker_workflow_stage-$workflow_state" \
     --operation-id "$worker_operation_id" --stage "$worker_workflow_stage" --state "$workflow_state" \
@@ -949,8 +951,7 @@ if [[ $record_run == 1 ]]; then
   if [[ $worker_role == coder ]]; then
     delivery_state=failed
     [[ $delivery_ready == true ]] && delivery_state=passed
-    [[ -z $worker_budget_marker || ! -f $worker_budget_marker ]] || workflow_stop_args=(--stop-reason step-budget)
-  if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
+    if ! env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.observe_cli workflow \
       --records "$workflow_records" --event-id "$worker_run_id:delivery-$delivery_state" \
       --operation-id "$worker_operation_id" --stage delivery --state "$delivery_state" \
       --observed-at "$diagnostic_now" --issue "$worker_issue" --run-id "$worker_run_id" \

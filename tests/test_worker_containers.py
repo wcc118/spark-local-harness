@@ -223,3 +223,35 @@ def test_real_supervised_tool_budget(tmp_path, fake_base_api, lifetime_image, ru
     remaining = subprocess.check_output(['docker', 'ps', '-q', '--filter',
         'label=' + PREFIX + 'run=' + terminal['run_id']], text=True)
     assert not remaining.strip()
+
+
+def test_late_signal_cannot_interrupt_terminal_cleanup(tmp_path):
+    """Execute the production cleanup function; signal while its stop is in progress."""
+    import signal
+    import subprocess
+    import time
+    root = Path(__file__).resolve().parents[1]
+    source = (root / 'bin/codex-local-worker-v4').read_text()
+    cleanup = source[source.index('cleanup() {'):source.index('trap cleanup EXIT')]
+    script = '''set -eu
+worker_budget_marker= worker_server_pid= worker_control= worker_control_secret=
+worker_memory_test_db=0 diagnostic_started=0 task_temp= review_runtime_tmp=
+worker_runtime_home= worker_isolation_root= supervision_admitted=0 convergence=1
+worker_server_container=fixture
+function docker() { touch "$READY"; sleep 1; touch "$DONE"; }
+''' + cleanup + '\ntrap cleanup EXIT\ntrap "exit 143" TERM\nexit 75\n'
+    env = os.environ | {'READY': str(tmp_path / 'ready'), 'DONE': str(tmp_path / 'done')}
+    process = subprocess.Popen(['bash', '-c', script], env=env, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 5
+        while not (tmp_path / 'ready').exists() and time.monotonic() < deadline:
+            assert process.poll() is None
+            time.sleep(.01)
+        assert (tmp_path / 'ready').exists()
+        os.killpg(process.pid, signal.SIGTERM)
+        assert process.wait(timeout=5) == 75
+        assert (tmp_path / 'done').exists()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
