@@ -353,6 +353,79 @@ if [[ $worker_role == coder || $worker_role == reviewer ]]; then
     git -C "$worker_repo_path" remote set-url origin "$source_remote"
     git -C "$worker_repo_path" checkout --quiet -B "$source_branch" "$source_head"
   fi
+
+  # Authoritative base resolution: host-side GitHub API resolution before worker inference.
+  # Coder uses main as base; reviewer uses PR baseRefName. Fetch missing objects and pin refs.
+  if [[ $worker_role == coder ]]; then
+    base_branch="main"
+  elif [[ $worker_role == reviewer ]]; then
+    base_branch=$(git -C "$worker_repo_path" ls-remote origin --heads "refs/heads/*" | \
+      grep "$(git -C "$worker_repo_path" rev-parse HEAD)" | cut -f2 | sed 's|^refs/heads/||' || true)
+    # For reviewer, we need the PR's base branch, not HEAD's branch
+    base_branch=$(env PYTHONPATH="$candidate_source" python3 -c "
+import subprocess, sys, os
+repo = os.environ.get('CODEX_LOCAL_REPOSITORY', '')
+pr_num = os.environ.get('CODEX_LOCAL_PR', '')
+try:
+    result = subprocess.run(
+        ['gh', 'pr', 'view', pr_num, '--repo', repo, '--json', 'baseRefName'],
+        capture_output=True, text=True, check=True
+    )
+    import json
+    data = json.loads(result.stdout)
+    print(data.get('baseRefName', ''))
+except Exception:
+    print('', file=sys.stderr)
+" 2>/dev/null || echo "main")
+  else
+    base_branch=""
+  fi
+
+  if [[ -n "$base_branch" && -n "$worker_repository" ]]; then
+    # Resolve exact SHA via GitHub API
+    base_sha=$(env PYTHONPATH="$candidate_source" python3 -c "
+import subprocess, sys, os
+repo = os.environ.get('CODEX_LOCAL_REPOSITORY', '')
+branch = os.environ.get('CODEX_LOCAL_BASE_BRANCH', '$base_branch')
+try:
+    result = subprocess.run(
+        ['gh', 'api', f'repos/{repo}/git/ref/heads/{branch}', '--jq', '.object.sha'],
+        capture_output=True, text=True, check=True
+    )
+    sha = result.stdout.strip()
+    import re
+    if not re.fullmatch(r'[0-9a-f]{40}', sha):
+        raise ValueError(f'Invalid SHA: {sha}')
+    print(sha)
+except Exception as e:
+    print(f'ERROR: base resolution failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null) || {
+      echo "ERROR: failed to resolve authoritative base SHA for $worker_repository/$base_branch" >&2
+      exit 1
+    }
+
+    if [[ -n "$base_sha" ]]; then
+      # Materialize the object if absent from local clone
+      if ! git -C "$worker_repo_path" cat-file -e "$base_sha" 2>/dev/null; then
+        if ! git -C "$worker_repo_path" fetch origin "$base_sha" 2>/dev/null; then
+          echo "ERROR: failed to fetch base object $base_sha for $worker_repository" >&2
+          exit 1
+        fi
+        if ! git -C "$worker_repo_path" cat-file -e "$base_sha" 2>/dev/null; then
+          echo "ERROR: base object $base_sha not present after fetch" >&2
+          exit 1
+        fi
+      fi
+
+      # Pin refs/remotes/origin/<base> to the exact resolved SHA
+      git -C "$worker_repo_path" update-ref "refs/remotes/origin/$base_branch" "$base_sha" || {
+        echo "ERROR: failed to pin refs/remotes/origin/$base_branch to $base_sha" >&2
+        exit 1
+      }
+    fi
+  fi
+
   if [[ $convergence == 1 ]]; then
     exec {checkout_lock_fd}>"$worker_isolation_root/.execution.lock"
     flock -n "$checkout_lock_fd" || { echo "ERROR: retained checkout already has an active worker" >&2; exit 75; }
@@ -443,7 +516,9 @@ if [[ $worker_role == reviewer ]]; then
   fi
   review_prepare_args=()
   [[ $convergence != 1 ]] || review_prepare_args+=(--investigative --container-tmpfs)
-  worker_task=$("${review_cli[@]}" prepare "${review_prepare_args[@]}" \
+  review_prepare_base_args=()
+  [[ -z "${base_sha:-}" ]] || review_prepare_base_args+=(--base-sha "$base_sha")
+  worker_task=$("${review_cli[@]}" prepare "${review_prepare_args[@]}" "${review_prepare_base_args[@]}" \
     --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --pr "$worker_pr" --task-file "$worker_task_file" \
     --envelope-out "$worker_envelope" --scratch-dir "$review_runtime_tmp" \
@@ -458,7 +533,13 @@ case "${CODEX_LOCAL_DELIVERY_FEEDBACK:-1}" in
   0) ;;
   1)
     if [[ $worker_role == coder && $worker_runtime == qwen-code && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
-      if feedback_base=$(git -C "$worker_repo_path" merge-base origin/main HEAD) && \
+      # Use pinned base_sha if available (from host base resolution), otherwise use merge-base
+      if [[ -n "${base_sha:-}" ]]; then
+        feedback_base="$base_sha"
+      else
+        feedback_base=$(git -C "$worker_repo_path" merge-base origin/main HEAD) || true
+      fi
+      if [[ -n "$feedback_base" ]] && \
         env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.delivery_feedback install \
           --runtime-home "$worker_runtime_home" --checkout "$worker_repo_path" --base "$feedback_base"; then
         worker_task=$'LOCAL DELIVERY FEEDBACK: A native Stop hook reports uncommitted changes and committed-diff whitespace errors before you finish. Use its evidence to repair your own work. If a genuine blocker remains, begin your final response with ESCALATE: and explain it. This feedback never authorizes publication; final host postflight remains authoritative.\n\n'"$worker_task"
@@ -745,9 +826,12 @@ elif [[ $worker_role == reviewer && $inference_status == 0 ]]; then
 fi
 if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   set +e
+  coder_postflight_base_args=()
+  [[ -z "${base_sha:-}" ]] || coder_postflight_base_args+=(--base-sha "$base_sha")
   "${coder_cli[@]}" --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --result-out "$worker_result" --publish \
-    --publication-failure-records "$publication_failure_records" --run-id "$worker_run_id"
+    --publication-failure-records "$publication_failure_records" --run-id "$worker_run_id" \
+    "${coder_postflight_base_args[@]}"
   finalize_status=$?
   set -e
   [[ $finalize_status == 0 ]] || workflow_status=65

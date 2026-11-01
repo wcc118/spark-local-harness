@@ -18,6 +18,40 @@ Run = Callable[[Sequence[str], Path | None], str]
 GENERATED = re.compile(r"(^|/)(?:__pycache__|\.pytest_cache)(?:/|$)|\.pyc$|(^|/)\.coverage(?:\.|$)")
 
 
+def _materialize_base_object_if_needed(checkout: Path, base_sha: str, run: Run) -> None:
+    """Materialize the base object if absent from the local clone.
+
+    Verifies the SHA is valid and fetches it if missing.
+    """
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+        raise ReviewError(f"Invalid base SHA format: {base_sha!r}")
+
+    # Check if object exists locally
+    try:
+        run(["git", "cat-file", "-e", base_sha], checkout)
+        # Object exists, nothing to do
+        return
+    except ReviewError:
+        # Object doesn't exist; proceed to fetch
+        pass
+
+    # Fetch the exact object from remote
+    try:
+        run(["git", "fetch", "origin", base_sha], checkout)
+    except ReviewError as exc:
+        raise ReviewError(
+            f"Failed to fetch base object {base_sha} from origin: {exc}"
+        )
+
+    # Verify the object is now present
+    try:
+        run(["git", "cat-file", "-e", base_sha], checkout)
+    except ReviewError as exc:
+        raise ReviewError(
+            f"Base object {base_sha} not present after fetch: {exc}"
+        )
+
+
 def _json(run: Run, argv: Sequence[str], cwd: Path | None = None) -> Any:
     try:
         return json.loads(run(argv, cwd))
@@ -134,6 +168,7 @@ def finalize_coder(
     publication_failure_records: Path | None = None,
     run_id: str | None = None,
     delay: Callable[[float], None] = time.sleep,
+    base_sha: str | None = None,
 ) -> dict[str, Any]:
     canonical = checkout.resolve(strict=True)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], canonical).strip()).resolve()
@@ -146,13 +181,21 @@ def finalize_coder(
     head_sha = run(["git", "rev-parse", "HEAD"], canonical).strip()
     if not branch or not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
         raise ReviewError("coder checkout has invalid branch or HEAD")
+
+    # Materialize the pinned base SHA if provided
+    if base_sha is not None:
+        _materialize_base_object_if_needed(canonical, base_sha, run)
+
     unexpected = _unexpected_status(run(["git", "status", "--porcelain=v1"], canonical))
     if unexpected:
         raise ReviewError(f"coder left unexpected checkout changes: {'; '.join(unexpected)}")
 
     if publish:
-        base_sha = run(["git", "merge-base", "origin/main", head_sha], canonical).strip()
-        _run_diff_check(base_sha, head_sha, run, canonical)
+        # Use pinned base_sha if provided, otherwise resolve via merge-base
+        diff_check_base = base_sha if base_sha is not None else run(
+            ["git", "merge-base", "origin/main", head_sha], canonical
+        ).strip()
+        _run_diff_check(diff_check_base, head_sha, run, canonical)
         run(["git", "push", "--set-upstream", "origin", branch], canonical)
 
     prs = _list_prs(run, canonical, repository, branch)
@@ -238,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--publication-failure-records", type=Path)
     parser.add_argument("--run-id")
+    parser.add_argument("--base-sha", type=str, default=None,
+                        help="Authoritative base SHA (pinned by host, skips merge-base resolution)")
     args = parser.parse_args(argv)
     try:
         result = finalize_coder(
@@ -247,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
             publish=args.publish,
             publication_failure_records=args.publication_failure_records,
             run_id=args.run_id,
+            base_sha=args.base_sha,
         )
         if args.result_out:
             args.result_out.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
