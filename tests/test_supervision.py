@@ -57,7 +57,7 @@ def test_guidance_is_queued_not_falsely_claimed_delivered(tmp_path):
         guidance(tmp_path, "run-1", "other", task)
 
 
-def test_candidate_timeout_preserves_unpublished_edit_and_records_ownership(tmp_path):
+def test_candidate_timeout_preserves_unpublished_edit_and_records_ownership(tmp_path, fake_base_api):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-b", "issue-181-smoke", str(repo)], check=True, capture_output=True)
     for key, value in [("user.name", "Test"), ("user.email", "test@example.invalid")]:

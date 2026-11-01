@@ -316,6 +316,7 @@ if [[ $record_run == 1 && ( -z $worker_repository || -z $worker_issue ) ]]; then
   exit 2
 fi
 
+candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
 checkout_kind=source-read-only
 checkout_id=$(printf '%s' "$(realpath "$worker_source_repo_path")" | sha256sum | cut -d' ' -f1)
 if [[ $worker_role == coder || $worker_role == reviewer ]]; then
@@ -353,6 +354,17 @@ if [[ $worker_role == coder || $worker_role == reviewer ]]; then
     git -C "$worker_repo_path" remote set-url origin "$source_remote"
     git -C "$worker_repo_path" checkout --quiet -B "$source_branch" "$source_head"
   fi
+
+  # Resolve on the host; neither the source clone's refs nor model echoes are authoritative.
+  base_sha=""
+  if [[ -n "$worker_repository" ]]; then
+    base_args=(--checkout "$worker_repo_path" --repository "$worker_repository" --role "$worker_role")
+    [[ $worker_role != reviewer ]] || base_args+=(--pr "$worker_pr")
+    base_result=$(env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.base_resolution "${base_args[@]}") || exit 65
+    IFS=$'\t' read -r base_branch base_sha <<< "$base_result"
+    worker_task="AUTHORITATIVE_BASE branch=$base_branch sha=$base_sha"$'\n\n'"$worker_task"
+  fi
+
   if [[ $convergence == 1 ]]; then
     exec {checkout_lock_fd}>"$worker_isolation_root/.execution.lock"
     flock -n "$checkout_lock_fd" || { echo "ERROR: retained checkout already has an active worker" >&2; exit 75; }
@@ -371,7 +383,6 @@ if [[ $worker_role == coder ]]; then
   git -C "$worker_repo_path" config user.email "$(git config --global user.email)"
 fi
 
-candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
 [[ -d $candidate_source/codex_local_harness ]] || {
   echo "ERROR: installed harness runtime is missing: $candidate_source" >&2
   exit 69
@@ -443,7 +454,9 @@ if [[ $worker_role == reviewer ]]; then
   fi
   review_prepare_args=()
   [[ $convergence != 1 ]] || review_prepare_args+=(--investigative --container-tmpfs)
-  worker_task=$("${review_cli[@]}" prepare "${review_prepare_args[@]}" \
+  review_prepare_base_args=()
+  [[ -z "${base_sha:-}" ]] || review_prepare_base_args+=(--base-sha "$base_sha")
+  worker_task=$("${review_cli[@]}" prepare "${review_prepare_args[@]}" "${review_prepare_base_args[@]}" \
     --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --pr "$worker_pr" --task-file "$worker_task_file" \
     --envelope-out "$worker_envelope" --scratch-dir "$review_runtime_tmp" \
@@ -458,7 +471,13 @@ case "${CODEX_LOCAL_DELIVERY_FEEDBACK:-1}" in
   0) ;;
   1)
     if [[ $worker_role == coder && $worker_runtime == qwen-code && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
-      if feedback_base=$(git -C "$worker_repo_path" merge-base origin/main HEAD) && \
+      # Use pinned base_sha if available (from host base resolution), otherwise use merge-base
+      if [[ -n "${base_sha:-}" ]]; then
+        feedback_base="$base_sha"
+      else
+        feedback_base=$(git -C "$worker_repo_path" merge-base origin/main HEAD) || true
+      fi
+      if [[ -n "$feedback_base" ]] && \
         env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.delivery_feedback install \
           --runtime-home "$worker_runtime_home" --checkout "$worker_repo_path" --base "$feedback_base"; then
         worker_task=$'LOCAL DELIVERY FEEDBACK: A native Stop hook reports uncommitted changes and committed-diff whitespace errors before you finish. Use its evidence to repair your own work. If a genuine blocker remains, begin your final response with ESCALATE: and explain it. This feedback never authorizes publication; final host postflight remains authoritative.\n\n'"$worker_task"
@@ -745,9 +764,12 @@ elif [[ $worker_role == reviewer && $inference_status == 0 ]]; then
 fi
 if [[ $worker_role == coder && $inference_status == 0 && ${CODEX_LOCAL_CODER_POSTFLIGHT:-1} == 1 ]]; then
   set +e
+  coder_postflight_base_args=()
+  [[ -z "${base_sha:-}" ]] || coder_postflight_base_args+=(--base-sha "$base_sha")
   "${coder_cli[@]}" --checkout "$worker_repo_path" --repository "$worker_repository" \
     --issue "$worker_issue" --result-out "$worker_result" --publish \
-    --publication-failure-records "$publication_failure_records" --run-id "$worker_run_id"
+    --publication-failure-records "$publication_failure_records" --run-id "$worker_run_id" \
+    "${coder_postflight_base_args[@]}"
   finalize_status=$?
   set -e
   [[ $finalize_status == 0 ]] || workflow_status=65

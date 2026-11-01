@@ -20,6 +20,8 @@ from .evidence_packet import (
     discover_test_executables,
 )
 
+from .base_resolution import BaseResolutionError, materialize_missing_object
+
 
 RESULT_PREFIX = "REVIEW_RESULT_JSON="
 VERDICTS = {"APPROVE", "REQUEST_CHANGES", "ESCALATE"}
@@ -118,6 +120,7 @@ def build_envelope(
     run: Run = run_command,
     scratch_dir: Path | None = None,
     runtime_home: Path | None = None,
+    base_sha: str | None = None,
 ) -> Envelope:
     canonical = checkout.resolve(strict=True)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], canonical).strip()).resolve()
@@ -156,12 +159,21 @@ def build_envelope(
     base_branch = str(pr.get("baseRefName") or "")
     if not base_branch:
         raise ReviewError("pull request has no base branch")
-    base_sha = run(
-        ["gh", "api", f"repos/{repository}/git/ref/heads/{base_branch}", "--jq", ".object.sha"],
-        canonical,
-    ).strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
-        raise ReviewError("GitHub returned an invalid base SHA")
+
+    # Use provided base_sha if available (pinned by host), otherwise resolve via GitHub API
+    if base_sha is not None:
+        # Validate and materialize the pinned base SHA
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+            raise ReviewError(f"Invalid pinned base SHA format: {base_sha!r}")
+    else:
+        # Resolve base SHA via GitHub API
+        base_sha = run(
+            ["gh", "api", f"repos/{repository}/git/ref/heads/{base_branch}", "--jq", ".object.sha"],
+            canonical,
+        ).strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+            raise ReviewError("GitHub returned an invalid base SHA")
+    materialize_missing_object(canonical, base_sha, lambda args: run(args, canonical))
     labels = {item["name"] for item in issue_data.get("labels", [])}
     workflow = labels & WORKFLOW_LABELS
     if workflow != {"status/review"}:
@@ -614,6 +626,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--runtime-home", type=Path)
     prepare.add_argument("--investigative", action="store_true")
     prepare.add_argument("--container-tmpfs", action="store_true")
+    prepare.add_argument("--base-sha", type=str, default=None,
+                         help="Authoritative base SHA (pinned by host, skips GitHub API resolution)")
 
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--envelope", type=Path, required=True)
@@ -635,6 +649,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             envelope = build_envelope(
                 args.checkout, args.repository, args.issue, args.pr,
                 scratch_dir=args.scratch_dir, runtime_home=args.runtime_home,
+                base_sha=args.base_sha,
             )
             if args.investigative:
                 from dataclasses import replace

@@ -83,3 +83,13 @@ worker and runtime pointer.
 The `v0.1.0` scaffold adds a localhost-only, read-only diagnostic dashboard.
 See [dashboard usage and interpretation](docs/dashboard.md). The four-state
 release replay lives in [`qualification/v010/`](qualification/v010/README.md).
+
+### Authoritative worker bases
+
+Issue-bound coder dispatch resolves GitHub `main` on the host before inference;
+reviewer dispatch resolves the PR base branch. The host validates and fetches the
+exact commit into the isolated checkout and pins its remote ref. The task records
+the resolved branch/SHA; coder postflight checks its diff against that pinned
+base rather than a stale source-clone ref. Review preflight also materializes a
+newly resolved base for standalone callers. Resolution/fetch failure stops before
+inference; worker credentials and permissions are unchanged.

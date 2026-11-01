@@ -82,7 +82,7 @@ def test_generated_worker_policy_denies_external_paths_without_blocking_sandboxe
     assert 'isolated coder requires CODEX_LOCAL_REPOSITORY and CODEX_LOCAL_ISSUE' in content
 
 
-def test_interrupted_coder_mutates_only_disposable_clone(tmp_path):
+def test_interrupted_coder_mutates_only_disposable_clone(tmp_path, fake_base_api):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-b", "issue-79-test", str(repo)], check=True, capture_output=True)

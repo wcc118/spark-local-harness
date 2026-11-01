@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .base_resolution import BaseResolutionError, materialize_missing_object
 from .diagnostics import PublicationFailure, append_record
 from .review import WORKFLOW_LABELS, ReviewError, normalize_remote, run_command
 
@@ -134,6 +135,7 @@ def finalize_coder(
     publication_failure_records: Path | None = None,
     run_id: str | None = None,
     delay: Callable[[float], None] = time.sleep,
+    base_sha: str | None = None,
 ) -> dict[str, Any]:
     canonical = checkout.resolve(strict=True)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], canonical).strip()).resolve()
@@ -146,13 +148,21 @@ def finalize_coder(
     head_sha = run(["git", "rev-parse", "HEAD"], canonical).strip()
     if not branch or not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
         raise ReviewError("coder checkout has invalid branch or HEAD")
+
+    # Materialize the pinned base SHA if provided
+    if base_sha is not None:
+        materialize_missing_object(canonical, base_sha, lambda args: run(args, canonical))
+
     unexpected = _unexpected_status(run(["git", "status", "--porcelain=v1"], canonical))
     if unexpected:
         raise ReviewError(f"coder left unexpected checkout changes: {'; '.join(unexpected)}")
 
     if publish:
-        base_sha = run(["git", "merge-base", "origin/main", head_sha], canonical).strip()
-        _run_diff_check(base_sha, head_sha, run, canonical)
+        # Use pinned base_sha if provided, otherwise resolve via merge-base
+        diff_check_base = run(
+            ["git", "merge-base", base_sha or "origin/main", head_sha], canonical
+        ).strip()
+        _run_diff_check(diff_check_base, head_sha, run, canonical)
         run(["git", "push", "--set-upstream", "origin", branch], canonical)
 
     prs = _list_prs(run, canonical, repository, branch)
@@ -238,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--publication-failure-records", type=Path)
     parser.add_argument("--run-id")
+    parser.add_argument("--base-sha", type=str, default=None,
+                        help="Authoritative base SHA (pinned by host, skips merge-base resolution)")
     args = parser.parse_args(argv)
     try:
         result = finalize_coder(
@@ -247,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             publish=args.publish,
             publication_failure_records=args.publication_failure_records,
             run_id=args.run_id,
+            base_sha=args.base_sha,
         )
         if args.result_out:
             args.result_out.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
