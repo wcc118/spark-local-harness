@@ -94,6 +94,22 @@ base rather than a stale source-clone ref. Review preflight also materializes a
 newly resolved base for standalone callers. Resolution/fetch failure stops before
 inference; worker credentials and permissions are unchanged.
 
+### Worker container lifetime
+
+All container worker paths use `codex-worker-RUN_ID` names and ownership labels,
+including wrapper PID and Linux process start ticks. Timeout/cancellation cleanup
+stops that exact container; CLI shutdown has a five-second grace period. Worker
+containers are distinct from unlabelled model-serving containers.
+
+A bounded sweep at worker startup and every minute in the attached supervisor
+stops old labelled containers only when their recorded wrapper no longer exists
+or its PID has been reused. It skips live wrappers and uncertain ownership. Run
+`python -m codex_local_harness.worker_containers --health HEALTH_DIR` to inspect
+and reap under the same rules. Actions are retained in `worker-containers.jsonl`;
+the latest `worker-containers.json` counts appear on the dashboard. Docker errors
+are reported as unavailable/error, not successful cleanup. The sweep does not
+load, stop or switch inference models.
+
 ### Opt-in authoritative reviewer facts
 
 `CODEX_LOCAL_REVIEW_RESULT_MODE=authoritative` derives issue, repository, PR and
@@ -124,3 +140,17 @@ event stream before completion, this opt-in mode aborts the old session and
 attempts one fresh session within the original timeout. The first attempt log
 and control record remain as `.attempt-1` artifacts. Reviewer checkpoint resume
 is not supported; timeout, audit, publication and other failures are not retried.
+
+### Explicit completed-tool-call budgets
+
+Set `CODEX_LOCAL_TOOL_CALL_BUDGET=N` to a positive integer for a recorded,
+supervised convergence run. The default is unset (no total-call limit); unset it
+to roll back. Prompt requests such as "use ten commands" remain advisory.
+The host counts unique completed nonempty calls, including errors, across both
+OpenCode and native Qwen event formats and across a bounded reviewer restart.
+Exactly N completions are allowed; N+1 triggers `step-budget`, exit 75 and owned
+process-group cancellation. Polling can observe an overshoot; this is not a
+per-call authorization boundary. A mandatory postflight count prevents a fast
+finishing over-budget result from publishing. Malformed/missing evidence fails
+closed for publication. Logs and isolated checkpoints remain available. This
+setting does not add permissions, load models, or promote routes.
