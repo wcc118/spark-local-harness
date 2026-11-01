@@ -348,3 +348,70 @@ worker_server_pid=$!
     descriptor = json.loads(control.read_text())
     assert descriptor["state"] == "failed" and descriptor["credential_file"] is None
     assert descriptor["termination_cause"] == {"kind": "exploration-loop", "count": 20}
+
+
+@pytest.mark.parametrize('mode,agent,error,restarts', [
+    ('authoritative','reviewer','OpenCode event stream ended before session completion',True),
+    ('','reviewer','OpenCode event stream ended before session completion',False),
+    ('authoritative','coder','OpenCode event stream ended before session completion',False),
+    ('authoritative','reviewer','OpenCode session exceeded bridge timeout',False),
+])
+def test_one_infrastructure_restart_preserves_evidence(tmp_path, monkeypatch, mode, agent, error, restarts):
+    from codex_local_harness import opencode_bridge as bridge
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE',mode)
+    log=tmp_path/'run.jsonl'; control=tmp_path/'control.json'; secret=tmp_path/'secret'
+    calls=[]; aborted=[]
+    def once(**kw):
+        calls.append(kw)
+        if len(calls)==1:
+            log.write_text('first attempt evidence\n')
+            control.write_text(json.dumps({'session_id':'first','state':'failed','credential_file':None}))
+            raise BridgeError(error)
+        assert aborted==['first']
+        assert log.with_name(log.name+'.attempt-1').read_text()=='first attempt evidence\n'
+        assert 'infrastructure-restart' in log.read_text()
+        assert kw['timeout']<=30
+        return 0
+    monkeypatch.setattr(bridge,'_run_bridge_once',once)
+    monkeypatch.setattr(bridge,'_abort_session',lambda base,password,session: aborted.append(session))
+    args=dict(base_url='http://example',password='secret',run_id='run',task='review',agent=agent,
+              model='provider/model',log=log,control=control,secret=secret,timeout=30)
+    if restarts:
+        assert bridge.run_bridge(**args)==0 and len(calls)==2
+    else:
+        with pytest.raises(BridgeError,match=error): bridge.run_bridge(**args)
+        assert len(calls)==1 and not aborted
+
+
+def test_second_stream_loss_is_terminal_and_abort_failure_cannot_restart(tmp_path,monkeypatch):
+    from codex_local_harness import opencode_bridge as bridge
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    log=tmp_path/'run';control=tmp_path/'control';secret=tmp_path/'secret';calls=[]
+    def once(**kwargs):
+        calls.append(kwargs)
+        log.write_text('evidence')
+        control.write_text(json.dumps({'session_id':str(len(calls)),'credential_file':None}))
+        raise BridgeError('OpenCode event stream ended before session completion')
+    monkeypatch.setattr(bridge,'_run_bridge_once',once)
+    def abort_failed(*args): raise BridgeError('abort failed')
+    monkeypatch.setattr(bridge,'_abort_session',abort_failed)
+    args=dict(base_url='url',password='secret',run_id='run',task='task',agent='reviewer',
+              model='p/m',log=log,control=control,secret=secret,timeout=30)
+    with pytest.raises(BridgeError,match='abort failed'): bridge.run_bridge(**args)
+    assert len(calls)==1
+    calls.clear()
+    monkeypatch.setattr(bridge,'_abort_session',lambda *args:None)
+    with pytest.raises(BridgeError,match='event stream ended'): bridge.run_bridge(**args)
+    assert len(calls)==2
+
+
+def test_restarted_usage_never_claims_complete_run_coverage(tmp_path):
+    from codex_local_harness.usage import normalize
+    log=tmp_path/'usage'
+    events=[{'type':'diagnostic','part':{'kind':'infrastructure-restart'}},
+            {'type':'step_finish','part':{'tokens':{'input':10,'output':2,'total':12,'cache':{'read':0,'write':0}}}}]
+    log.write_text('\n'.join(json.dumps(e) for e in events))
+    result=normalize(log,'opencode',0)
+    assert result['coverage']=='partial'
+    assert result['total_including_cache']==12
+    assert 'final attempt only' in result['coverage_reason']
