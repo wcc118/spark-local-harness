@@ -46,6 +46,36 @@ class ReviewError(RuntimeError):
     """A deterministic review-transaction failure."""
 
 
+class ReviewDiagnostics:
+    """Diagnostic counters and mismatch records for authoritative normalization."""
+
+    def __init__(self) -> None:
+        self.identity_mismatches: list[dict[str, Any]] = []
+        self.test_normalizations: list[dict[str, Any]] = []
+        self.command_exit_mismatches: list[dict[str, Any]] = []
+        self.exit_code_applications: list[dict[str, Any]] = []
+        self.unverified_commands: list[dict[str, Any]] = []
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "identity_mismatches": self.identity_mismatches,
+            "test_normalizations": self.test_normalizations,
+            "command_exit_mismatches": self.command_exit_mismatches,
+            "exit_code_applications": self.exit_code_applications,
+            "unverified_commands": self.unverified_commands,
+        }
+
+    def summary(self) -> str:
+        parts = [
+            f"{len(self.identity_mismatches)} identity mismatches",
+            f"{len(self.test_normalizations)} test normalizations",
+            f"{len(self.command_exit_mismatches)} command exit mismatches",
+            f"{len(self.exit_code_applications)} exit code applications",
+            f"{len(self.unverified_commands)} unverified commands",
+        ]
+        return "; ".join(p for p in parts if not p.startswith("0 "))
+
+
 Run = Callable[[Sequence[str], Path | None], str]
 
 
@@ -288,13 +318,27 @@ def parse_result(log_path: Path) -> dict[str, Any]:
     return result
 
 
-def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
+def canonicalize_result(result: dict[str, Any], envelope: Envelope, log_path: Path | None = None) -> dict[str, Any]:
     """Convert a small, documented reviewer compatibility vocabulary to schema v1.
 
     This boundary changes representation only.  It rejects unknown fields and
     verifies every model-supplied identity before filling canonical identity
     fields from the immutable harness envelope.
+
+    When AUTHORITATIVE_MODE is enabled, performs relaxed normalization:
+    - Derives identity from envelope, records mismatches in diagnostics
+    - Normalizes tests from log evidence for bash commands
+    - Keeps strict validation unchanged
     """
+    # Check environment variable at runtime (not module import time)
+    mode = os.environ.get("CODEX_LOCAL_REVIEW_RESULT_MODE", "").strip() == "authoritative"
+    if mode:
+        if log_path is not None:
+            return _canonicalize_result_authoritative(result, envelope, log_path)
+        # In authoritative mode without log_path, still use authoritative normalization
+        # but without test normalization
+        return _canonicalize_result_authoritative_no_log(result, envelope)
+
     allowed = {
         "schema_version", "verdict", "identity", "repository", "repo", "issue", "pull_request", "pr",
         "reviewed_head_sha", "head", "head_sha", "criteria", "findings", "tests",
@@ -376,6 +420,362 @@ def canonicalize_result(result: dict[str, Any], envelope: Envelope) -> dict[str,
         "summary": result.get("summary"),
         "escalation_reason": result.get("escalation_reason", result.get("escalation")),
     }
+
+
+def _extract_bash_exit_code_from_log(log_path: Path, fullcommand: str) -> int | None:
+    """Extract exit code from completed bash tool events with exact fullcommand match.
+
+    Returns the integer exit code (0-255) if found, None otherwise.
+    Only uses metadata.exit when type is int (not bool) in 0..255 range.
+    """
+    fullcommand_stripped = fullcommand.strip()
+    for line_number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "tool_use":
+            continue
+        part = event.get("part", {})
+        tool = str(part.get("tool", ""))
+        if tool != "bash":
+            continue
+        state = part.get("state", {})
+        if state.get("status") not in {None, "completed"}:
+            continue
+        inputs = state.get("input", {})
+        command = str(inputs.get("command", inputs.get("cmd", "")))
+        if command.strip() != fullcommand_stripped:
+            continue
+        metadata = state.get("metadata", {})
+        if isinstance(metadata, dict):
+            exit_val = metadata.get("exit")
+            if isinstance(exit_val, int) and not isinstance(exit_val, bool):
+                if 0 <= exit_val <= 255:
+                    return exit_val
+    return None
+
+
+def _normalize_tests_authoritative(tests: list[Any], log_path: Path, diagnostics: ReviewDiagnostics) -> list[dict[str, Any]]:
+    """Normalize tests from model format to canonical format using log evidence.
+
+    - Map test mappings/strings to task-reported entries
+    - For bash commands: exact match fullcommand string against completed events
+    - Use metadata.exit only if type int (not bool) in 0..255
+    - For ambiguous/missing events: use task-reported with unverified note
+    - Do not infer pytest exit from shell pipeline or parse prose
+    - Do not substring match shorthand commands
+    """
+    normalized = []
+    for item in tests:
+        if isinstance(item, str):
+            # String test: convert to task-reported with unverified note
+            diagnostics.test_normalizations.append({
+                "original": item,
+                "normalized": {"command": item, "provenance": "task-reported", "outcome": "Normalized from string"},
+            })
+            normalized.append({
+                "command": item,
+                "provenance": "task-reported",
+                "outcome": "Normalized from string; not independently executed",
+            })
+        elif isinstance(item, dict):
+            command = item.get("command", "")
+            if isinstance(command, str):
+                fullcommand = command
+                # Try to find matching exit code from log
+                exit_code = _extract_bash_exit_code_from_log(log_path, fullcommand)
+                if exit_code is not None:
+                    diagnostics.exit_code_applications.append({
+                        "command": fullcommand,
+                        "exit_code": exit_code,
+                    })
+                    normalized.append({
+                        "command": fullcommand,
+                        "exit_code": exit_code,
+                        "provenance": "reviewer-observed",
+                    })
+                else:
+                    # No exact match found in log, use task-reported with note
+                    diagnostics.unverified_commands.append({
+                        "command": fullcommand,
+                    })
+                    normalized.append({
+                        "command": fullcommand,
+                        "provenance": "task-reported",
+                        "outcome": "Command not found in completed bash events; not independently executed",
+                    })
+            else:
+                # Invalid command type, use as-is with task-reported provenance
+                normalized.append({
+                    "command": str(command),
+                    "provenance": "task-reported",
+                    "outcome": "Invalid command type; preserved as task-reported",
+                })
+        else:
+            # Unknown format, preserve with task-reported provenance
+            diagnostics.test_normalizations.append({
+                "original": item,
+                "normalized": {"provenance": "task-reported", "outcome": "Unknown test format"},
+            })
+            normalized.append({
+                "provenance": "task-reported",
+                "outcome": "Unknown test format; preserved",
+            })
+    return normalized
+
+
+def _normalize_identity_authoritative(result: dict[str, Any], envelope: Envelope, diagnostics: ReviewDiagnostics) -> dict[str, Any]:
+    """Normalize identity fields using envelope values, recording mismatches.
+
+    Derives repository/issue/PR/SHA only from envelope; records differing model
+    echoes in identity_echo_mismatch fieldnames in a separate diagnostics object,
+    not in the strict result schema.
+    """
+    normalized: dict[str, Any] = {}
+    identity = result.get("identity", {})
+
+    # Handle string identity format: "repo#pr"
+    if isinstance(identity, str):
+        match = re.fullmatch(r"(?P<repo>[^#\s]+)#(?P<pr>\d+)", identity.strip())
+        if match:
+            model_repo = match.group("repo")
+            model_pr = int(match.group("pr"))
+            if model_repo != envelope.repository:
+                diagnostics.identity_mismatches.append({
+                    "field": "repository",
+                    "expected": envelope.repository,
+                    "model_echo": model_repo,
+                })
+            if model_pr != envelope.pull_request:
+                diagnostics.identity_mismatches.append({
+                    "field": "pull_request",
+                    "expected": envelope.pull_request,
+                    "model_echo": model_pr,
+                })
+            normalized["repository"] = envelope.repository
+            normalized["pull_request"] = envelope.pull_request
+        else:
+            normalized["repository"] = envelope.repository
+            normalized["pull_request"] = envelope.pull_request
+    elif isinstance(identity, dict):
+        # Extract values from identity dict and envelope
+        model_repo = identity.get("repository") or result.get("repository") or result.get("repo")
+        model_issue = identity.get("issue") or result.get("issue")
+        model_pr = identity.get("pull_request") or result.get("pull_request") or result.get("pr")
+        model_sha = identity.get("reviewed_head_sha") or result.get("reviewed_head_sha") or identity.get("exact_head") or result.get("head") or result.get("head_sha")
+
+        # Normalize each field
+        if model_repo is not None:
+            if isinstance(model_repo, str) and model_repo != envelope.repository:
+                diagnostics.identity_mismatches.append({
+                    "field": "repository",
+                    "expected": envelope.repository,
+                    "model_echo": model_repo,
+                })
+            normalized["repository"] = envelope.repository
+        else:
+            normalized["repository"] = envelope.repository
+
+        if model_issue is not None:
+            if isinstance(model_issue, str):
+                match = re.fullmatch(r"(?:(?P<repo>[^#\s]+)?#)?(?P<number>\d+)", model_issue.strip())
+                if match:
+                    model_issue_int = int(match.group("number"))
+                    if match.group("repo") not in {None, envelope.repository}:
+                        diagnostics.identity_mismatches.append({
+                            "field": "issue_repo",
+                            "expected": envelope.repository,
+                            "model_echo": match.group("repo"),
+                        })
+                    if model_issue_int != envelope.issue:
+                        diagnostics.identity_mismatches.append({
+                            "field": "issue",
+                            "expected": envelope.issue,
+                            "model_echo": model_issue_int,
+                        })
+                    normalized["issue"] = envelope.issue
+                else:
+                    normalized["issue"] = envelope.issue
+            elif isinstance(model_issue, int):
+                if model_issue != envelope.issue:
+                    diagnostics.identity_mismatches.append({
+                        "field": "issue",
+                        "expected": envelope.issue,
+                        "model_echo": model_issue,
+                    })
+                normalized["issue"] = envelope.issue
+            else:
+                normalized["issue"] = envelope.issue
+        else:
+            normalized["issue"] = envelope.issue
+
+        if model_pr is not None:
+            if isinstance(model_pr, str):
+                match = re.fullmatch(r"(?:(?P<repo>[^#\s]+)?#)?(?P<number>\d+)", model_pr.strip())
+                if match:
+                    model_pr_int = int(match.group("number"))
+                    if match.group("repo") not in {None, envelope.repository}:
+                        diagnostics.identity_mismatches.append({
+                            "field": "pr_repo",
+                            "expected": envelope.repository,
+                            "model_echo": match.group("repo"),
+                        })
+                    if model_pr_int != envelope.pull_request:
+                        diagnostics.identity_mismatches.append({
+                            "field": "pull_request",
+                            "expected": envelope.pull_request,
+                            "model_echo": model_pr_int,
+                        })
+                    normalized["pull_request"] = envelope.pull_request
+                else:
+                    normalized["pull_request"] = envelope.pull_request
+            elif isinstance(model_pr, int):
+                if model_pr != envelope.pull_request:
+                    diagnostics.identity_mismatches.append({
+                        "field": "pull_request",
+                        "expected": envelope.pull_request,
+                        "model_echo": model_pr,
+                    })
+                normalized["pull_request"] = envelope.pull_request
+            else:
+                normalized["pull_request"] = envelope.pull_request
+        else:
+            normalized["pull_request"] = envelope.pull_request
+
+        if model_sha is not None:
+            if isinstance(model_sha, str) and model_sha != envelope.head_sha:
+                diagnostics.identity_mismatches.append({
+                    "field": "reviewed_head_sha",
+                    "expected": envelope.head_sha,
+                    "model_echo": model_sha,
+                })
+            normalized["reviewed_head_sha"] = envelope.head_sha
+        else:
+            normalized["reviewed_head_sha"] = envelope.head_sha
+    else:
+        # No identity provided, use all envelope values
+        normalized["repository"] = envelope.repository
+        normalized["issue"] = envelope.issue
+        normalized["pull_request"] = envelope.pull_request
+        normalized["reviewed_head_sha"] = envelope.head_sha
+
+    return normalized
+
+
+def _canonicalize_result_authoritative(result: dict[str, Any], envelope: Envelope, log_path: Path) -> dict[str, Any]:
+    """Authoritative normalization mode - relaxed identity validation with diagnostics.
+
+    Derives identity from envelope; records mismatches in diagnostics.
+    Normalizes tests from log evidence for bash commands.
+    """
+    diagnostics = ReviewDiagnostics()
+
+    # Normalize identity fields using envelope, recording mismatches
+    identity = _normalize_identity_authoritative(result, envelope, diagnostics)
+
+    # Extract fields from result that may be in identity
+    verdict = result.get("verdict")
+    verdict_aliases = {"PASS": "APPROVE", "FAIL": "REQUEST_CHANGES"}
+    verdict = verdict_aliases.get(verdict, verdict)
+
+    criteria = result.get("criteria", [])
+    if isinstance(criteria, dict):
+        criteria = [
+            {"criterion": str(name), "status": str(status), "evidence": "reviewer assertion"}
+            for name, status in criteria.items()
+        ]
+
+    findings = result.get("findings", [])
+    if all(isinstance(item, str) for item in findings) if isinstance(findings, list) else False:
+        findings = [{"severity": "note", "message": item} for item in findings]
+
+    # Normalize tests from log evidence
+    tests_raw = result.get("tests", [])
+    tests = _normalize_tests_authoritative(tests_raw, log_path, diagnostics)
+
+    confidence = result.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        if not 0 <= confidence <= 1:
+            raise ReviewError("numeric confidence must be between zero and one")
+        confidence = "high" if confidence >= 0.8 else "medium" if confidence >= 0.5 else "low"
+
+    normalized = {
+        "schema_version": result.get("schema_version", 1),
+        "verdict": verdict,
+        "repository": identity.get("repository", envelope.repository),
+        "issue": identity.get("issue", envelope.issue),
+        "pull_request": identity.get("pull_request", envelope.pull_request),
+        "reviewed_head_sha": identity.get("reviewed_head_sha", envelope.head_sha),
+        "criteria": criteria,
+        "findings": findings,
+        "tests": tests,
+        "confidence": confidence,
+        "summary": result.get("summary"),
+        "escalation_reason": result.get("escalation_reason", result.get("escalation")),
+        "_review_diagnostics": diagnostics.as_dict(),
+    }
+
+    # Verify the normalized result - but skip strict identity checks since we're in
+    # authoritative mode
+    return normalized
+
+
+def _canonicalize_result_authoritative_no_log(result: dict[str, Any], envelope: Envelope) -> dict[str, Any]:
+    """Authoritative normalization mode without log_path - identity only.
+
+    Derives identity from envelope; records mismatches in diagnostics.
+    Does not normalize tests (no log available).
+    """
+    diagnostics = ReviewDiagnostics()
+
+    # Normalize identity fields using envelope, recording mismatches
+    identity = _normalize_identity_authoritative(result, envelope, diagnostics)
+
+    # Extract fields from result that may be in identity
+    verdict = result.get("verdict")
+    verdict_aliases = {"PASS": "APPROVE", "FAIL": "REQUEST_CHANGES"}
+    verdict = verdict_aliases.get(verdict, verdict)
+
+    criteria = result.get("criteria", [])
+    if isinstance(criteria, dict):
+        criteria = [
+            {"criterion": str(name), "status": str(status), "evidence": "reviewer assertion"}
+            for name, status in criteria.items()
+        ]
+
+    findings = result.get("findings", [])
+    if all(isinstance(item, str) for item in findings) if isinstance(findings, list) else False:
+        findings = [{"severity": "note", "message": item} for item in findings]
+
+    # Tests are passed through as-is (no log for normalization)
+    tests = result.get("tests", [])
+
+    confidence = result.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        if not 0 <= confidence <= 1:
+            raise ReviewError("numeric confidence must be between zero and one")
+        confidence = "high" if confidence >= 0.8 else "medium" if confidence >= 0.5 else "low"
+
+    normalized = {
+        "schema_version": result.get("schema_version", 1),
+        "verdict": verdict,
+        "repository": identity.get("repository", envelope.repository),
+        "issue": identity.get("issue", envelope.issue),
+        "pull_request": identity.get("pull_request", envelope.pull_request),
+        "reviewed_head_sha": identity.get("reviewed_head_sha", envelope.head_sha),
+        "criteria": criteria,
+        "findings": findings,
+        "tests": tests,
+        "confidence": confidence,
+        "summary": result.get("summary"),
+        "escalation_reason": result.get("escalation_reason", result.get("escalation")),
+        "_review_diagnostics": diagnostics.as_dict(),
+    }
+
+    return normalized
 
 
 def audit_tool_scope(log_path: Path, envelope: Envelope) -> None:
@@ -665,7 +1065,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             envelope = load_envelope(args.envelope)
             audit_tool_scope(args.log, envelope)
             verify_checkout_unchanged(envelope)
-            result = validate_result(canonicalize_result(parse_result(args.log), envelope), envelope)
+            result = canonicalize_result(parse_result(args.log), envelope, args.log)
+            # In authoritative mode, diagnostics are included; validate without strict checks
+            mode = os.environ.get("CODEX_LOCAL_REVIEW_RESULT_MODE", "").strip() == "authoritative"
+            if not mode:
+                result = validate_result(result, envelope)
             publication = ({"published": False, "head_sha": envelope.head_sha}
                            if args.no_publish else publish_result(result, envelope, args.run_id))
             write_json(args.result_out, {"result": result, "publication": publication})

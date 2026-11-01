@@ -1018,3 +1018,249 @@ text content
     assert result.returncode == 0, f"stderr: {result.stderr}"
     rendered = output.read_text()
     assert "/tmp" in rendered
+
+
+def test_authoritative_mode_with_mismatched_identity(tmp_path, monkeypatch):
+    """Authoritative mode normalizes identity mismatches to envelope values."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result, ReviewDiagnostics
+
+    # Result with mismatched identity
+    raw = {
+        "identity": {"repository": "wrong/repo", "issue": 99, "pull_request": 99, "reviewed_head_sha": "c" * 40},
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, None)
+
+    # Verify identity was normalized to envelope values
+    assert result["repository"] == REPO
+    assert result["issue"] == 7
+    assert result["pull_request"] == 11
+    assert result["reviewed_head_sha"] == SHA
+
+    # Verify diagnostics were recorded
+    assert "_review_diagnostics" in result
+    diag = result["_review_diagnostics"]
+    assert len(diag["identity_mismatches"]) == 4
+    assert diag["identity_mismatches"][0]["field"] == "repository"
+    assert diag["identity_mismatches"][0]["model_echo"] == "wrong/repo"
+
+
+def test_authoritative_mode_normalizes_test_strings(tmp_path, monkeypatch):
+    """Authoritative mode normalizes test strings to task-reported entries."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result
+
+    # Create a log with a bash event
+    log_path = tmp_path / "run.jsonl"
+    log_path.write_text(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "bash", "state": {"status": "completed", "input": {"command": "pytest -q"}, "metadata": {"exit": 0}}}
+    }) + "\n")
+
+    raw = {
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": ["pytest -q", "git diff --check"],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, log_path)
+
+    # Verify tests were normalized - string tests become task-reported
+    assert len(result["tests"]) == 2
+    assert result["tests"][0]["command"] == "pytest -q"
+    assert result["tests"][0]["provenance"] == "task-reported"
+    assert "not independently executed" in result["tests"][0]["outcome"]
+    assert result["tests"][1]["command"] == "git diff --check"
+    assert result["tests"][1]["provenance"] == "task-reported"
+
+
+def test_authoritative_mode_exact_command_match(tmp_path, monkeypatch):
+    """Authoritative mode requires exact fullcommand match for exit codes."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result
+    
+    # Log has command with extra arguments that don't match exactly
+    log_path = tmp_path / "run.jsonl"
+    log_path.write_text(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "bash", "state": {"status": "completed", "input": {"command": "pytest -q --tb=no"}, "metadata": {"exit": 0}}}
+    }) + "\n")
+    
+    raw = {
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [{"command": "pytest -q", "provenance": "task-reported"}],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, log_path)
+    
+    # pytest -q should not match pytest -q --tb=no (exact match required)
+    assert result["tests"][0]["provenance"] == "task-reported"
+    assert "not independently executed" in result["tests"][0]["outcome"]
+
+
+def test_authoritative_mode_noninteger_exit_code(tmp_path, monkeypatch):
+    """Authoritative mode ignores non-integer exit codes."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result
+    
+    # Log has boolean exit code (should be ignored)
+    log_path = tmp_path / "run.jsonl"
+    log_path.write_text(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "bash", "state": {"status": "completed", "input": {"command": "pytest -q"}, "metadata": {"exit": True}}}
+    }) + "\n")
+    
+    raw = {
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [{"command": "pytest -q", "provenance": "task-reported"}],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, log_path)
+    
+    # Boolean exit should be ignored, use task-reported
+    assert result["tests"][0]["provenance"] == "task-reported"
+
+
+def test_authoritative_mode_out_of_range_exit_code(tmp_path, monkeypatch):
+    """Authoritative mode ignores out-of-range exit codes."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result
+    
+    # Log has exit code out of range (should be ignored)
+    log_path = tmp_path / "run.jsonl"
+    log_path.write_text(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "bash", "state": {"status": "completed", "input": {"command": "pytest -q"}, "metadata": {"exit": 256}}}
+    }) + "\n")
+    
+    raw = {
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [{"command": "pytest -q", "provenance": "task-reported"}],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, log_path)
+    
+    # Exit code 256 is out of range, use task-reported
+    assert result["tests"][0]["provenance"] == "task-reported"
+
+
+def test_authoritative_mode_identity_string_format(tmp_path, monkeypatch):
+    """Authoritative mode handles string identity format 'repo#pr'."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result
+    
+    raw = {
+        "identity": "wrong/repo#99",
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, None)
+    
+    # Verify identity was normalized
+    assert result["repository"] == REPO
+    assert result["pull_request"] == 11
+    assert result["issue"] == 7
+
+
+def test_strict_mode_rejects_identity_mismatch(tmp_path, monkeypatch):
+    """Strict mode (default) rejects identity mismatches."""
+    monkeypatch.delenv("CODEX_LOCAL_REVIEW_RESULT_MODE", raising=False)
+    from codex_local_harness.review import canonicalize_result
+    
+    raw = {
+        "identity": {"repository": "wrong/repo"},
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    
+    # Strict mode should raise ReviewError for identity mismatch
+    import pytest
+    with pytest.raises(ReviewError, match="identity mismatch"):
+        canonicalize_result(raw, env, None)
+
+
+def test_authoritative_diagnostics_summary():
+    """ReviewDiagnostics provides summary of normalizations."""
+    from codex_local_harness.review import ReviewDiagnostics
+    
+    diag = ReviewDiagnostics()
+    diag.identity_mismatches.append({"field": "repo"})
+    diag.test_normalizations.append({"original": "test"})
+    diag.exit_code_applications.append({"command": "cmd", "exit_code": 0})
+    
+    summary = diag.summary()
+    assert "1 identity mismatches" in summary
+    assert "1 test normalizations" in summary
+    assert "1 exit code applications" in summary
+
+
+def test_authoritative_mode_no_log_identity_only(tmp_path, monkeypatch):
+    """Authoritative mode without log_path normalizes identity but not tests."""
+    monkeypatch.setenv("CODEX_LOCAL_REVIEW_RESULT_MODE", "authoritative")
+    from codex_local_harness.review import canonicalize_result
+    
+    raw = {
+        "identity": {"repository": "wrong/repo", "issue": 99, "pull_request": 99, "reviewed_head_sha": "c" * 40},
+        "verdict": "APPROVE",
+        "criteria": [],
+        "findings": [],
+        "tests": [{"command": "pytest -q", "provenance": "task-reported"}],
+        "confidence": "high",
+        "summary": "Test summary",
+        "escalation_reason": None,
+    }
+    env = envelope(tmp_path)
+    result = canonicalize_result(raw, env, None)
+    
+    # Verify identity was normalized
+    assert result["repository"] == REPO
+    assert result["issue"] == 7
+    assert result["pull_request"] == 11
+    assert result["reviewed_head_sha"] == SHA
+    
+    # Diagnostics should be present
+    assert "_review_diagnostics" in result
+    diag = result["_review_diagnostics"]
+    assert len(diag["identity_mismatches"]) == 4
+    
+    # Tests passed through as-is (no log available)
+    assert result["tests"][0]["command"] == "pytest -q"
