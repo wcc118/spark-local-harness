@@ -1,5 +1,5 @@
 {
-  "status": "probation-pending-independent-review",
+  "status": "evaluation-passed-for-probation",
   "scope": "One playback-check authoring trial, template plus one frontier correction; not general autonomous oracle capability.",
   "origin_issue": "https://github.com/wcc118/oracles/issues/5",
   "issue": "https://github.com/wcc118/codex-local-harness/issues/257",
