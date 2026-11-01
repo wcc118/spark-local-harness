@@ -73,12 +73,25 @@ def lifetime_image(tmp_path_factory):
     if subprocess.run(['docker','image','inspect','codex-local-worker:0.3.0'],capture_output=True).returncode:
         pytest.skip('local worker image unavailable')
     script='''#!/bin/sh
-case "$*" in *fixture-sleep*) exec sleep 300 ;; esac
+case "$*" in *fixture-budget*) exec python3 /budget.py "$@" ;; *fixture-sleep*) exec sleep 300 ;; esac
 sleep 1
 printf '%s\\n' '{"type":"text","part":{"text":"fixture completed"}}'
 '''
+    (root/'budget.py').write_text("""import json, sys, time
+args = ' '.join(sys.argv)
+count = 2 if 'fixture-budget-2' in args else 3
+for i in range(count):
+    identity = str(i)
+    if any(arg.startswith('qwen') for arg in sys.argv):
+        events = [{'type':'assistant','message':{'content':[{'type':'tool_use','id':identity,'name':'read_file','input':{'path':identity}}]}},
+                  {'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':identity,'content':'fixture'}]}}]
+    else:
+        events = [{'type':'tool_use','part':{'callID':identity,'tool':'read','state':{'status':'completed','input':{'filePath':identity}}}}]
+    for event in events: print(json.dumps(event), flush=True)
+if 'slow' in args: time.sleep(30)
+""")
     (root/'fixture.sh').write_text(script)
-    (root/'Dockerfile').write_text('FROM codex-local-worker:0.3.0\nCOPY fixture.sh /fixture.sh\nENTRYPOINT ["/bin/sh", "/fixture.sh"]\n')
+    (root/'Dockerfile').write_text('FROM codex-local-worker:0.3.0\nCOPY fixture.sh /fixture.sh\nCOPY budget.py /budget.py\nENTRYPOINT ["/bin/sh", "/fixture.sh"]\n')
     subprocess.run(['docker','build','-q','-t',tag,str(root)],check=True,capture_output=True,timeout=60)
     try: yield tag
     finally: subprocess.run(['docker','image','rm',tag],capture_output=True,timeout=15)
@@ -165,3 +178,80 @@ def test_real_reaper_stops_only_its_owned_orphan(tmp_path,lifetime_image):
         assert not docker('ps','-q','--filter','id='+identifier).strip()
     finally:
         subprocess.run(['docker','stop','--time','1',identifier],capture_output=True,timeout=5)
+
+
+@pytest.mark.parametrize('runtime', ['opencode', 'qwen-code'])
+@pytest.mark.parametrize('calls,slow', [(2, False), (3, False), (3, True)])
+def test_real_supervised_tool_budget(tmp_path, fake_base_api, lifetime_image, runtime, calls, slow):
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    repo = tmp_path / 'repo'
+    subprocess.run(['git', 'init', '-b', 'main', str(repo)], check=True, capture_output=True)
+    for key, value in [('user.email', 'fixture@example.invalid'), ('user.name', 'Fixture')]:
+        subprocess.run(['git', '-C', str(repo), 'config', key, value], check=True)
+    (repo / 'data').write_text('original')
+    subprocess.run(['git', '-C', str(repo), 'add', 'data'], check=True)
+    subprocess.run(['git', '-C', str(repo), 'commit', '-m', 'fixture'], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(repo), 'remote', 'add', 'origin', 'https://github.com/wcc118/example.git'], check=True)
+    routes = tmp_path / 'routes.json'
+    routes.write_text(json.dumps({'defaults': {'coder': 'standard'}, 'routes': {'coder/standard': {
+        'agent': 'coder', 'model': 'vllm/test', 'runtime': runtime, 'mode': 'native'}}}))
+    health = tmp_path / 'health'
+    env = os.environ | {'CODEX_LOCAL_WORKER_CONFIG': str(routes), 'CODEX_LOCAL_SOURCE': str(root / 'src'),
+        'CODEX_LOCAL_CONTAINER_IMAGE': lifetime_image, 'CODEX_LOCAL_MODEL_SWITCH': '0',
+        'CODEX_LOCAL_SESSION_BRIDGE': '0', 'CODEX_LOCAL_RECORD_RUN': '1',
+        'CODEX_LOCAL_REPOSITORY': 'wcc118/example', 'CODEX_LOCAL_ISSUE': '265',
+        'CODEX_LOCAL_SESSION_ID': 'fixture-budget', 'CODEX_LOCAL_CODER_POSTFLIGHT': '0',
+        'CODEX_LOCAL_TIMEOUT_SECONDS': '40', 'CODEX_LOCAL_TOOL_CALL_BUDGET': '2',
+        'CODEX_LOCAL_MEMORY_CONFIG': str(tmp_path / 'no-memory'), 'CODEX_LOCAL_HEALTH_DIR': str(health),
+        'CODEX_LOCAL_LOG_DIR': str(tmp_path / 'logs'), 'CODEX_LOCAL_ISOLATION_PARENT': str(tmp_path / 'isolated'),
+        'CODEX_LOCAL_SANDBOX_MOUNTS': str(tmp_path / 'no-mounts')}
+    task = f'fixture-budget-{calls}-' + ('slow' if slow else 'fast')
+    result = subprocess.run([str(root / 'bin/codex-local-worker-candidate'), 'coder', str(repo), task],
+                            env=env, capture_output=True, text=True, timeout=55)
+    assert result.returncode == (75 if calls > 2 else 0), result.stderr
+    terminal = json.loads((health / 'execution.jsonl').read_text())
+    assert terminal['stop_reason'] == ('step-budget' if calls > 2 else None)
+    assert terminal['publication'] is None
+    assert Path(terminal['checkout']).exists()
+    assert (repo / 'data').read_text() == 'original'
+    if calls > 2:
+        marker = json.loads((health / (terminal['run_id'] + '.tool-budget.json')).read_text())
+        assert marker['count'] == 3 and marker['limit'] == 2
+        events = [json.loads(line) for line in (health / 'workflow.jsonl').read_text().splitlines()]
+        assert any(event.get('stop_reason') == 'step-budget' for event in events)
+    remaining = subprocess.check_output(['docker', 'ps', '-q', '--filter',
+        'label=' + PREFIX + 'run=' + terminal['run_id']], text=True)
+    assert not remaining.strip()
+
+
+def test_late_signal_cannot_interrupt_terminal_cleanup(tmp_path):
+    """Execute the production cleanup function; signal while its stop is in progress."""
+    import signal
+    import subprocess
+    import time
+    root = Path(__file__).resolve().parents[1]
+    source = (root / 'bin/codex-local-worker-v4').read_text()
+    cleanup = source[source.index('cleanup() {'):source.index('trap cleanup EXIT')]
+    script = '''set -eu
+worker_budget_marker= worker_server_pid= worker_control= worker_control_secret=
+worker_memory_test_db=0 diagnostic_started=0 task_temp= review_runtime_tmp=
+worker_runtime_home= worker_isolation_root= supervision_admitted=0 convergence=1
+worker_server_container=fixture
+function docker() { touch "$READY"; sleep 1; touch "$DONE"; }
+''' + cleanup + '\ntrap cleanup EXIT\ntrap "exit 143" TERM\nexit 75\n'
+    env = os.environ | {'READY': str(tmp_path / 'ready'), 'DONE': str(tmp_path / 'done')}
+    process = subprocess.Popen(['bash', '-c', script], env=env, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 5
+        while not (tmp_path / 'ready').exists() and time.monotonic() < deadline:
+            assert process.poll() is None
+            time.sleep(.01)
+        assert (tmp_path / 'ready').exists()
+        os.killpg(process.pid, signal.SIGTERM)
+        assert process.wait(timeout=5) == 75
+        assert (tmp_path / 'done').exists()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()

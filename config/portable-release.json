@@ -11,7 +11,7 @@
   },
   "files": {
     "AGENTS.md": "439274d71d4e83624102bb7a76b9a9308f682c1d44c472ee66950cb9dcb317ee",
-    "README.md": "409287d1953610e983d9b6de0138a2a3f23783aca11c0af37459e03e77edb8fa",
+    "README.md": "2443c70c2d6f20aa09ef16a0f6b69f7373f1a679201229275f5414a9e4f16822",
     "agents/advisory.md": "53a5ba1d703c59a833bee101b451473211fd7ea1c9aad55f0171da81f49d3ea2",
     "agents/coder.md": "8313923ff3012824f75bd25c5b96f62daefbb70fb165d437a00ffc22c51dcb52",
     "agents/convergence-reviewer.md": "d52e658e6deee604ffebcf288086eda144963335e02c0e61697d7b963500997d",
@@ -22,7 +22,7 @@
     "bin/codex-local-model": "651303665226f78680e72258bbe6c509ccfdce79e05e798fb6d81215e034c721",
     "bin/codex-local-supervise": "2a4ed80ef002818af57b53bf6d71b57f2b9bc109ab3c6a346eb38720d3dbc62b",
     "bin/codex-local-worker-candidate": "e570d9e707b7120a308d060cfa474e78e861725b23ae0a229a08f05b08133721",
-    "bin/codex-local-worker-v4": "8c85665b6cf25cc8e1b3b98b7b1d01b01cf683e264faab3296e0d8e3f51a029a",
+    "bin/codex-local-worker-v4": "51de6264e5aa2c4d5afb31726d4631d9d2c1a8945ffa92bb936c4b17aada754e",
     "bin/install-harness": "a0497315dc8388baa8836330dfe3efc197a79821bfe84138c3aa95e6430a8229",
     "config/deepseek-v4-compose.codex.yaml": "817eeb90e14245b027a42075fffef26a87322f33275290523ea76f64739df7b6",
     "config/deepseek-v4-reasoning.yaml": "c9e523c829f32444e2549d252384c6ee1eb3772c8b9796ef0fa7f249ea34bea9",
@@ -122,7 +122,7 @@
     "src/codex_local_harness/sandbox_mounts.py": "6bf0827aaee11e578584fbe74ee13757a7c31a5cdaeed68bbf010d607b9780ba",
     "src/codex_local_harness/spark_metrics.py": "4db9e5ea7212acb1b7b5c404d9e5b3f2f1790b49f70e69474692a34e3072aa78",
     "src/codex_local_harness/strategy.py": "720a7ba56f7eaa143af1670e9005533e36814206184f6275ab54faf1157214e8",
-    "src/codex_local_harness/supervision.py": "626cb12b1ec692ec58b06c8c30b609ad8bb873d5d8d954e5ad79d4b994e97b0f",
+    "src/codex_local_harness/supervision.py": "fcf0224e1d67647a3dc7c088408c29c783151b0a55f05c3311359d98a475faaa",
     "src/codex_local_harness/usage.py": "9aa3ea0ebb45ffa10b6d7a79a438fe3a10087f4aa18022827123ac964bc77112",
     "src/codex_local_harness/v5_runner.py": "aa0a19c4adddf1475a38bdf526c71091ab50dbee483b4d602ef71b28c9cbbe5f",
     "src/codex_local_harness/vision_judge.py": "bb80c89ce0420ea2d2942903465d154f7f3202a676d47f7a041c32d3e1adc5ea",
@@ -133,6 +133,7 @@
     "src/codex_local_harness/visual_render.py": "743af2ff377f241fe9e7976a64f0b83d38c05e9dd9afa43db5b93667160edff4",
     "src/codex_local_harness/visual_render_cli.py": "19fafce4227985a92712f98176a75346713d23f52e1f107a61c7c947a5dcd4a8",
     "src/codex_local_harness/workflow.py": "00386614d2f84270fb093dc870d074f561ea89c5222593d1fa09bf783667af59",
-    "src/codex_local_harness/worker_containers.py": "0a6dacb454d137567bacc9b8210e2839056d52764f5cd1029969d0573a5f1072"
+    "src/codex_local_harness/worker_containers.py": "0a6dacb454d137567bacc9b8210e2839056d52764f5cd1029969d0573a5f1072",
+    "src/codex_local_harness/tool_budget.py": "dca8ef4b9400044d8662c1f1ced0819908da107f75e7a89fe8eae5a09f84e30e"
   }
 }
