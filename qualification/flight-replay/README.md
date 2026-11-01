@@ -1,3 +1,35 @@
+# Captured flight-loads failures and rejected local repair
+
+**Decision: reject the candidate; retain the replay.** This directory is an experiment, not a production flight-loads implementation. `candidate.py` deliberately preserves the locally delivered candidate unchanged. The accepted production implementation remains in flight-loads PR324.
+
+## Observed cycle
+
+The frozen source came from flight-loads correction commit `5d075c2662def5039f409b18ac5fb81c407857bf`. It failed both development checks and all six evaluation probes. One local attempt (`20261101T034503Z-2159522`, about 13 minutes) passed both development checks and five of six probes, but still claimed root loads for a missing `flight_condition`. Six probes include one development overlap, not six independent held-out tasks. The accepted reference passed all six. Two injected behavioral defects were rejected and one equivalent implementation accepted before dispatch.
+
+`recurrence.py` publishes the escaped condition after evaluation. It must never be counted as fresh held-out evidence in a future attempt. `outcome.json` records the rejection, source identity, evidence counts, limitations and intervention. The source snapshot is compact and hash-pinned; no branch checkout or network fetch is required to replay it.
+
+## Replay
+
+Requires Python3.11+, numpy and scipy. Run from the repository root:
+
+```
+python3 qualification/flight-replay/replay.py
+python3 qualification/flight-replay/recurrence.py
+python3 -m pytest -q tests/test_flight_replay.py qualification/flight-replay/test_candidate.py
+```
+
+The first command passes the two development checks. The second intentionally exits1, reproducing the escaped failure. The tests verify this rejected state and distinguish fixture/import failures (exit2) from a behavioral mismatch (exit1). `--candidate PATH` evaluates another module against the same supplied package in a temporary directory.
+
+To replay the baseline, extract only `src/flightloads/aircraft_design_compare.py` from baseline.zip to a scratch path and pass it using `--candidate`. It fails both development checks. Private evaluation scripts and mutation evidence remain in the operator evaluation store; they were not visible to the coder. The original task and checks remain frozen.
+
+## Test infrastructure correction
+
+The worker ran its two tests in separate subprocesses. Standard pytest initially failed1/2 because cached package modules referenced an already-deleted temporary extraction. Primary changed only the test entry points to preserve that process isolation under pytest; all original assertions remain. No candidate repair followed the independent evaluation.
+
+This is a within-case repair result, not a model success rate or proof that executable guidance caused the improvement. Other original pilot defects are out of scope. There is no production route, physics, acceptance policy or permission change.
+
+## Original worker notes (not independent acceptance evidence)
+
 # Flight-Replay Development Checks
 
 This directory contains bounded behavioral development checks for the `candidate.py` module.

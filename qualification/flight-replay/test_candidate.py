@@ -39,7 +39,7 @@ def load_candidate(candidate_path: Path, destination: Path):
     return module, flightloads
 
 
-def test_input_unchanged():
+def check_input_unchanged():
     """Verify caller-owned input is not mutated after compare_designs."""
     ROOT = Path(__file__).parent
     with tempfile.TemporaryDirectory(prefix='flight-replay-test-') as tmpdir:
@@ -84,7 +84,7 @@ def test_input_unchanged():
         print("test_input_unchanged: PASSED")
 
 
-def test_invalid_definition_isolated():
+def check_invalid_definition_isolated():
     """Verify invalid definitions produce isolated rows with null metrics."""
     ROOT = Path(__file__).parent
     with tempfile.TemporaryDirectory(prefix='flight-replay-test-') as tmpdir:
@@ -168,10 +168,25 @@ def run_all_tests():
     print("\nAll tests passed!")
 
 
+def _isolated_check(flag):
+    import subprocess
+    result = subprocess.run([sys.executable, __file__, flag],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_input_unchanged():
+    _isolated_check('--test1')
+
+
+def test_invalid_definition_isolated():
+    _isolated_check('--test2')
+
+
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--test1':
-        test_input_unchanged()
+        check_input_unchanged()
     elif len(sys.argv) > 1 and sys.argv[1] == '--test2':
-        test_invalid_definition_isolated()
+        check_invalid_definition_isolated()
     else:
         run_all_tests()
