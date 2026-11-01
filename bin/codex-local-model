@@ -91,13 +91,8 @@ stop_server() {
 }
 
 launch() {
-  local profile=$1 model log extra gpu_mem
+  local profile=$1 model log extra
   model=$(profile_model "$profile") || usage
-
-  gpu_mem="${CODEX_LOCAL_VLLM_GPU_MEM:-$gpu_mem_default}"
-  if ! gpu_mem=$(validate_gpu_mem "$gpu_mem"); then
-    return 1
-  fi
 
   case "$profile" in
     qwen38)
@@ -139,6 +134,7 @@ case ${1:-} in
     (( $# == 2 )) || usage
     target=$2
     expected=$(profile_model "$target") || usage
+    gpu_mem=$(validate_gpu_mem "${CODEX_LOCAL_VLLM_GPU_MEM-$gpu_mem_default}") || exit 1
     acquire_lock
     current=$(active_model)
     deepseek_current=$(active_model "$deepseek_endpoint")
@@ -177,7 +173,7 @@ case ${1:-} in
         # The production recipe uses an auto-removed container. Recreate it
         # through that same recipe when returning from DeepSeek.
         "$recipe_launcher" qwen3-coder-next-fp8 --solo --port 8000 \
-          --gpu-mem "$gpu_mem_default" --max-model-len 185000 --daemon
+          --gpu-mem "$gpu_mem" --max-model-len 185000 --daemon
         wait_for_model "$(profile_model coder-next)"
         [[ $target != coder-next ]] || exit 0
       fi

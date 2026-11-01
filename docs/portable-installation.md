@@ -82,7 +82,8 @@ workstation file; an existing file is preserved. The default recipe paths are
 Model servers run as isolated Linux host-network containers. The vLLM runtime
 supports GPU memory control via the optional `CODEX_LOCAL_VLLM_GPU_MEM` environment
 variable. When unset, the manager defaults to `0.82` for Coder-Next and qwen38
-profiles. The `qwen35-nvfp4` profile always uses `0.82` and ignores this setting.
+profiles. The `qwen35-nvfp4` profile keeps its own fixed `0.82` launch value. All `use` commands validate the
+setting before touching containers, including switches to other profiles.
 Valid values are finite numbers in the interval `(0.5, 0.95]`. An empty value,
 nonfinite value (NaN, Inf), or value outside the range causes the launch to fail
 before any container mutation. This setting does not affect the DeepSeek backend,

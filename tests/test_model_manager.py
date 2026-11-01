@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+
+import pytest
 from pathlib import Path
 
 
@@ -64,6 +66,7 @@ def _fake_runtime(tmp_path: Path, *, updates_model: bool = True):
         "CODEX_LOCAL_RECIPE_LAUNCHER": str(recipe),
         "FAKE_DOCKER_CALLS": str(calls),
     }
+    env.pop("CODEX_LOCAL_VLLM_GPU_MEM", None)
     return state, calls, env
 
 
@@ -97,7 +100,7 @@ def test_model_manager_is_idempotent_then_switches_exact_model(tmp_path):
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
     assert "--max-model-len 185000" in docker_calls
-    assert "--gpu-memory-utilization 0.87" in docker_calls
+    assert "--gpu-memory-utilization 0.82" in docker_calls
     assert "--load-format fastsafetensors" in docker_calls
     assert "--attention-backend flashinfer" in docker_calls
     assert "--enable-prefix-caching" in docker_calls
@@ -159,7 +162,7 @@ def test_model_manager_launches_qwen38_profile(tmp_path):
     assert "--enable-auto-tool-choice" in docker_calls
     assert "--tool-call-parser qwen3_coder" in docker_calls
     assert "--max-model-len 185000" in docker_calls
-    assert "--gpu-memory-utilization 0.87" in docker_calls
+    assert "--gpu-memory-utilization 0.82" in docker_calls
     assert "--load-format fastsafetensors" in docker_calls
     assert "--attention-backend flashinfer" in docker_calls
     assert "--enable-prefix-caching" in docker_calls
@@ -300,14 +303,14 @@ def test_model_manager_rejects_out_of_range_low_CODEX_LOCAL_VLLM_GPU_MEM(tmp_pat
 def test_model_manager_rejects_out_of_range_high_CODEX_LOCAL_VLLM_GPU_MEM(tmp_path):
     state, calls, env = _fake_runtime(tmp_path)
     state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
-    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.95"
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.99"
     first = subprocess.run([str(MANAGER), "use", "qwen38"], env=env, text=True, capture_output=True)
     assert first.returncode == 1
     assert "must be finite and in (0.5, 0.95]" in first.stderr
     assert not calls.exists()
 
 
-def test_model_manager_accepts_boundary_value_0_95_exclusive_upper(tmp_path):
+def test_model_manager_accepts_boundary_value_0_95_inclusive_upper(tmp_path):
     state, calls, env = _fake_runtime(tmp_path)
     state.write_text("Qwen/Qwen3-Coder-Next-FP8", encoding="utf-8")
     env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.9499"
@@ -325,3 +328,34 @@ def test_model_manager_qwen35_nvfp4_ignores_env_and_keeps_0_82(tmp_path):
     assert first.returncode == 0, first.stderr
     docker_calls = calls.read_text(encoding="utf-8")
     assert "--gpu-memory-utilization 0.82" in docker_calls
+
+
+@pytest.mark.parametrize("target", ["qwen38", "coder-next"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_override_applies_to_direct_and_recipe_paths(tmp_path, target, missing):
+    state, calls, env = _fake_runtime(tmp_path)
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = "0.80"
+    env["FAKE_CONTAINER_MISSING"] = "1" if missing else "0"
+    result = subprocess.run([str(MANAGER), "use", target], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    commands = calls.read_text()
+    if missing:
+        assert "--gpu-mem 0.80 " in commands
+    if not missing or target == "qwen38":
+        assert "--gpu-memory-utilization 0.80 " in commands
+    assert "--gpu-mem 0.82 " not in commands
+
+
+@pytest.mark.parametrize("value", ["", "abc", "nan", "inf", "0.5", "0.99"])
+@pytest.mark.parametrize("target", ["coder-next", "deepseek-v4-reasoning"])
+def test_invalid_setting_rejected_before_stopping_resident_model(tmp_path, value, target):
+    state, calls, env = _fake_runtime(tmp_path)
+    state.write_text("Qwen/Qwen3.8-27B-FP8")
+    env["CODEX_LOCAL_VLLM_GPU_MEM"] = value
+    result = subprocess.run([str(MANAGER), "use", target], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "CODEX_LOCAL_VLLM_GPU_MEM" in result.stderr
+    assert not calls.exists()
+    assert state.read_text() == "Qwen/Qwen3.8-27B-FP8"
