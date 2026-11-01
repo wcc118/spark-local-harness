@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import uuid
 from datetime import datetime, timezone
 
 from .lane import check_lane
@@ -48,6 +49,7 @@ def main(argv=None):
             tier = model = None
         else:
             tier, model, record = admit(config, os.environ)
+        record['admission_id'] = uuid.uuid4().hex
         record['repository'] = os.environ.get('CODEX_LOCAL_REPOSITORY')
         record['issue'] = os.environ.get('CODEX_LOCAL_ISSUE')
         record['disposition'] = 'admitted' if record['status'] == 'ok' else 'skipped'
@@ -61,7 +63,8 @@ def main(argv=None):
         if record['disposition'] == 'skipped' or os.environ.get('CODEX_LOCAL_DRY_RUN') == '1':
             os.close(fd)
             return 0
-        env = dict(os.environ, CODEX_LOCAL_TIER=tier, CODEX_LOCAL_MODEL=model,
+        env = dict(os.environ, CODEX_LOCAL_SOURCE=str(root / 'src'),
+                   CODEX_LOCAL_LANE_ADMISSION=record['admission_id'], CODEX_LOCAL_TIER=tier, CODEX_LOCAL_MODEL=model,
                    CODEX_LOCAL_MODEL_SWITCH='0', CODEX_LOCAL_TOOL_CALL_BUDGET='80',
                    CODEX_LOCAL_TIMEOUT_SECONDS='900', CODEX_LOCAL_RECORD_RUN='1',
                    CODEX_LOCAL_LANE_CONTEXT=str(record['loaded_context']))

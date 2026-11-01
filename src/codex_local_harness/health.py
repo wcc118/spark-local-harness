@@ -76,6 +76,8 @@ class RunHealth:
     pull_request: int | None = None
     schema_version: int = SCHEMA_VERSION
     canonical_usage: dict[str, Any] | None = None
+    lane_admission: str | None = None
+    loaded_context: int | None = None
 
     @property
     def local_tokens(self) -> int | None:
@@ -94,6 +96,10 @@ class RunHealth:
         required = (self.run_id, self.role, self.runtime, self.model, self.profile, self.task_class, self.status)
         if any(not value.strip() for value in required):
             raise ValueError("required string fields must be non-empty")
+        if self.loaded_context is not None and (isinstance(self.loaded_context, bool) or not isinstance(self.loaded_context, int) or self.loaded_context < 0):
+            raise ValueError("loaded context must be a non-negative integer")
+        if self.lane_admission is not None and (not isinstance(self.lane_admission, str) or not self.lane_admission.strip()):
+            raise ValueError("lane admission identity must be non-empty")
         if self.issue <= 0:
             raise ValueError("issue must be positive")
         if self.pull_request is not None and self.pull_request <= 0:

@@ -23,7 +23,7 @@ For actual execution remove DRY_RUN, set the normal repository/issue/session
 identity, and use a clean issue checkout. The gate records model and loaded context
 in `lane-admissions.jsonl`, then uses normal supervised worker confinement,
 publication, shared-memory credentials and completion ownership. It forces a
-900-second deadline,80 completed-tool-call budget,8192 output-token cap, and no
+900-second deadline,40 session turns,80 completed-tool-call budget,8192 output-token cap, and no
 Spark switch. The lane lease remains held through the execution. Private oracle
 memory is never mounted or provisioned for this worker. Memory runs on the Spark;
 LM Studio on the PC supplies inference and needs no database credentials.
