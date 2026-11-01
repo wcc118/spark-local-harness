@@ -38,7 +38,6 @@ class ExecutionDiagnostics:
     """Derive observable stage, repetition, and budget events from tool telemetry."""
 
     def __init__(self, role: str, budgets: dict[str, dict[str, int]], *, clock=time.monotonic):
-        self.role = role
         self.stage = "review" if role == "reviewer" else "investigation"
         self.budgets = budgets
         self.clock = clock
@@ -94,16 +93,12 @@ class ExecutionDiagnostics:
                 self.fingerprints[fingerprint] += 1
                 self.stage_calls[self.stage] += 1
                 count = self.fingerprints[fingerprint]
-                # For reviewer roles, enforce exploration-loop threshold of 20;
-                # for other roles, use threshold of 3. Empty input alone never aborts.
-                reviewer_roles = {"reviewer", "convergence-reviewer"}
-                threshold = 20 if self.role in reviewer_roles else 3
-                if count >= threshold:
+                if count >= 3:
                     key = ("repeated-command", fingerprint, str(count))
                     if key not in self.emitted:
                         self.emitted.add(key)
                         output.append(self._event(
-                            "exploration-loop", "critical",
+                            "exploration-loop", "warning" if count == 3 else "critical",
                             f"the same observable tool request completed {count} times",
                             fingerprint=fingerprint, count=count,
                         ))

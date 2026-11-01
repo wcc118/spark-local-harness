@@ -47,32 +47,6 @@ def test_testing_stage_and_reviewer_budget():
     assert signal["part"]["severity"] == "critical"
 
 
-def test_reviewer_enforces_20_repetition_threshold():
-    detector = ExecutionDiagnostics("reviewer", load_stage_budgets(None), clock=lambda: 0)
-    output = []
-    for index in range(19):
-        output += detector.observe(tool(str(index), filePath="/secret/repository/file.py"))
-    signals = [item for item in output if item["part"]["kind"] == "exploration-loop"]
-    assert signals == []
-    output += detector.observe(tool("19", filePath="/secret/repository/file.py"))
-    signal = next(item for item in output if item["part"]["kind"] == "exploration-loop")
-    assert signal["part"]["count"] == 20
-    assert "/secret" not in json.dumps(signal)
-
-
-def test_convergence_reviewer_enforces_20_repetition_threshold():
-    detector = ExecutionDiagnostics("convergence-reviewer", load_stage_budgets(None), clock=lambda: 0)
-    output = []
-    for index in range(19):
-        output += detector.observe(tool(str(index), filePath="/secret/repository/file.py"))
-    signals = [item for item in output if item["part"]["kind"] == "exploration-loop"]
-    assert signals == []
-    output += detector.observe(tool("19", filePath="/secret/repository/file.py"))
-    signal = next(item for item in output if item["part"]["kind"] == "exploration-loop")
-    assert signal["part"]["count"] == 20
-    assert "/secret" not in json.dumps(signal)
-
-
 @pytest.mark.parametrize("raw", ["[]", '{"unknown":{}}', '{"testing":{"tokens":-1}}'])
 def test_invalid_budget_configuration_is_rejected(raw):
     with pytest.raises(ValueError):
