@@ -1,0 +1,14 @@
+{
+  "source_commit": "a3be0906e162f326611bcf20f3a5f3869d2e14e9",
+  "paths": {
+    "benchmark": "src/codex_local_harness/benchmark.py",
+    "benchmark_cli": "src/codex_local_harness/benchmark_cli.py",
+    "dashboard": "src/codex_local_harness/dashboard.py",
+    "manifest": "qualification/paired-model/manifest.json",
+    "paired_runner": "qualification/paired-model/run.py",
+    "routes": "config/workers-vllm.json",
+    "reviewer": "agents/reviewer.md",
+    "worker": "bin/codex-local-worker-v4",
+    "dashboard_unit": "deployment/dashboard-backend.service"
+  }
+}
