@@ -1018,3 +1018,152 @@ text content
     assert result.returncode == 0, f"stderr: {result.stderr}"
     rendered = output.read_text()
     assert "/tmp" in rendered
+
+
+
+def event_log(path, commands):
+    path.write_text(''.join(json.dumps({'type': 'tool_use', 'part': {'tool': 'bash',
+        'state': {'status': status, 'input': {'command': command}, 'metadata': {'exit': code}}}}) + '\n'
+        for command, code, status in commands))
+    return path
+
+
+@pytest.mark.parametrize('mode', ['', 'authoritative'])
+def test_judgment_contradictions_remain_strict(tmp_path, monkeypatch, mode):
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE', mode)
+    for changes in ({'verdict': 'NONSENSE'}, {'summary': ''},
+                    {'findings': [{'severity': 'blocker', 'message': 'broken'}]},
+                    {'verdict': 'ESCALATE', 'escalation_reason': None}):
+        with pytest.raises(ReviewError):
+            validate_result(canonicalize_result(valid_result(**changes), envelope(tmp_path)), envelope(tmp_path))
+
+
+def test_authoritative_identity_is_envelope_and_diagnostics_are_field_names(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE', 'authoritative')
+    result = canonicalize_result(valid_result(repository='wrong/repo', issue=99, pull_request=99,
+        reviewed_head_sha='wrong'), envelope(tmp_path))
+    assert [result[k] for k in ('repository', 'issue', 'pull_request', 'reviewed_head_sha')] == [REPO, 7, 11, SHA]
+    assert result['_review_diagnostics']['identity_echo_mismatch'] == ['repository', 'issue', 'pull_request', 'reviewed_head_sha']
+    assert 'wrong' not in json.dumps(result['_review_diagnostics'])
+    monkeypatch.delenv('CODEX_LOCAL_REVIEW_RESULT_MODE')
+    with pytest.raises(ReviewError, match='identity mismatch'):
+        canonicalize_result(valid_result(repository='wrong/repo'), envelope(tmp_path))
+
+
+@pytest.mark.parametrize('code,status,expected', [(0,'completed',0), (1,'completed',1),
+    (True,'completed',None), (256,'completed',None), (-1,'completed',None),
+    ('0','completed',None), (0,'running',None), (0,None,None)])
+def test_authoritative_exit_requires_completed_exact_integer_event(tmp_path, monkeypatch, code, status, expected):
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    log = event_log(tmp_path/'events', [('pytest',code,status)])
+    result = canonicalize_result(valid_result(), envelope(tmp_path), log)
+    test = result['tests'][0]
+    assert test.get('exit_code') == expected
+    assert test['provenance'] == ('reviewer-observed' if expected is not None else 'task-reported')
+    assert test.get('unverified',False) == (expected is None)
+
+
+@pytest.mark.parametrize('commands', [[], [('pytest -q',0,'completed')],
+    [('pytest',0,'completed'),('pytest',1,'completed')], [('pytest | tee log',0,'completed')]])
+def test_no_fabricated_shorthand_or_ambiguous_observation(tmp_path, monkeypatch, commands):
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    result = canonicalize_result(valid_result(), envelope(tmp_path), event_log(tmp_path/'events',commands))
+    assert result['tests'][0]['provenance'] == 'task-reported'
+    assert 'exit_code' not in result['tests'][0]
+
+
+def test_mapping_strings_and_claimed_harness_evidence_cannot_upgrade(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    log=event_log(tmp_path/'events',[('pytest',0,'completed')])
+    for tests in ({'pytest':'passed'}, ['pytest'], [{'command':'pytest','provenance':'harness-observed','exit_code':0}]):
+        result=canonicalize_result(valid_result(tests=tests),envelope(tmp_path),log)
+        assert result['tests'][0]['provenance']=='task-reported'
+        assert result['tests'][0]['unverified'] is True
+    result=canonicalize_result(valid_result(findings=[{'severity':'warning','description':'real finding'}]),envelope(tmp_path),log)
+    assert result['findings'][0]['message']=='real finding'
+    assert result['findings'][0]['severity']=='warning'
+
+
+def test_pipeline_observation_does_not_claim_inner_test_success(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    command='pytest | tee log'
+    log=event_log(tmp_path/'events',[(command,0,'completed')])
+    result=canonicalize_result(valid_result(tests=[{'command':command,'provenance':'reviewer-observed',
+        'exit_code':1,'outcome':'all tests pass'}]),envelope(tmp_path),log)
+    assert result['tests'][0]['exit_code']==0
+    assert 'all tests pass' not in result['tests'][0]['outcome']
+    assert 'whole-command' in result['tests'][0]['outcome']
+
+
+def test_authoritative_scope_quoted_pattern_and_real_pipeline(tmp_path):
+    log=event_log(tmp_path/'events',[("git show X | grep -n 'a|gh issue|b'",0,'completed')])
+    audit_tool_scope(log,envelope(tmp_path),authoritative=True)
+    with pytest.raises(ReviewError,match='audit failed'):
+        audit_tool_scope(log,envelope(tmp_path))
+    event_log(log,[('git show X | gh pr view',0,'completed')])
+    with pytest.raises(ReviewError,match='line 1'):
+        audit_tool_scope(log,envelope(tmp_path),authoritative=True)
+
+
+def test_authoritative_finalize_retains_flag_and_rejects_stale_adjudication(tmp_path, monkeypatch):
+    from codex_local_harness import review
+    from codex_local_harness.diagnostics import Adjudication, append_record
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    env=envelope(tmp_path/'checkout'); envpath=tmp_path/'envelope.json'
+    envpath.write_text(json.dumps(env.as_dict()))
+    log=event_log(tmp_path/'events',[('gh pr view',0,'completed')])
+    with log.open('a') as f:
+        f.write(json.dumps({'type':'text','part':{'text':RESULT_PREFIX+json.dumps(valid_result())}})+'\n')
+    output=tmp_path/'result.json'; records=tmp_path/'adjudications.jsonl'
+    monkeypatch.setattr(review,'verify_checkout_unchanged',lambda env: None)
+    published=[]
+    monkeypatch.setattr(review,'publish_result',lambda *a,**k: published.append(a) or {'published':True})
+    argv=['finalize','--envelope',str(envpath),'--log',str(log),'--run-id','run1','--result-out',str(output),
+          '--adjudications',str(records)]
+    assert review.main(argv)==76
+    retained=json.loads(output.read_text()); ref=retained['diagnostics']['evidence_ref']
+    assert retained['result']['verdict']=='APPROVE' and not published
+    assert '_review_diagnostics' not in retained['result']
+    def decide(identifier,source='codex',reference=ref,verdict='passed'):
+        append_record(records,Adjudication(identifier,'run1',verdict,source,'2026-11-01T00:00:00Z',
+            codex_decision='allow-review-audit',evidence_refs=(reference,)))
+    decide('a',source='reviewer')
+    assert review.main(argv)==76 and not published
+    decide('b',reference='review-audit:wrong')
+    assert review.main(argv)==76 and not published
+    decide('c')
+    assert review.main(argv)==0 and len(published)==1
+    with log.open('a') as f: f.write('\n')
+    assert review.main(argv)==76 and len(published)==1
+    def changed(env): raise ReviewError('checkout HEAD changed during review')
+    monkeypatch.setattr(review,'verify_checkout_unchanged',changed)
+    assert review.main(argv)==1 and len(published)==1
+
+
+def test_normalization_health_records_are_counts_only_and_idempotent(tmp_path):
+    from codex_local_harness.review_evidence import record_counts
+    path=tmp_path/'counts.jsonl'
+    diagnostics={'identity_echo_mismatch':['repository'], 'derived_tests':2,'unverified_tests':3,
+                 'audit_flagged':True,'audit_signal':'private raw command text'}
+    record_counts(path,'run1',diagnostics,published=False)
+    record_counts(path,'run1',diagnostics,published=False)
+    records=[json.loads(line) for line in path.read_text().splitlines()]
+    assert len(records)==1
+    assert records[0]['identity_echo_mismatches']==1 and records[0]['unverified_tests']==3
+    assert 'private' not in path.read_text() and 'repository' not in path.read_text()
+
+
+@pytest.mark.parametrize('changes',[{'summary':''},{'verdict':'ESCALATE','escalation_reason':None},
+    {'findings':[{'severity':'blocker','message':'must not approve'}]}])
+def test_authoritative_cli_cannot_bypass_judgment_validation(tmp_path,monkeypatch,changes):
+    from codex_local_harness import review
+    monkeypatch.setenv('CODEX_LOCAL_REVIEW_RESULT_MODE','authoritative')
+    envpath=tmp_path/'env';envpath.write_text(json.dumps(envelope(tmp_path).as_dict()))
+    log=tmp_path/'events';log.write_text(json.dumps({'type':'text','part':{
+        'text':RESULT_PREFIX+json.dumps(valid_result(**changes))}})+'\n')
+    monkeypatch.setattr(review,'verify_checkout_unchanged',lambda env:None)
+    published=[]
+    monkeypatch.setattr(review,'publish_result',lambda *a,**k:published.append(a))
+    assert review.main(['finalize','--envelope',str(envpath),'--log',str(log),'--run-id','run',
+                        '--result-out',str(tmp_path/'result')])==1
+    assert not published

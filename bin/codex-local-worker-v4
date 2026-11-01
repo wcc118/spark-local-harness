@@ -758,7 +758,9 @@ fi
 reviewer_observed_tokens=0
 reviewer_budget_reason=
 if [[ $worker_role == reviewer ]]; then
-  reviewer_observed_tokens=$(jq -s '[.[] | select(.type == "step_finish") | (.part.tokens.total // 0)] | add // 0' "$worker_log")
+  reviewer_usage_logs=("$worker_log")
+  [[ ! -f "$worker_log.attempt-1" ]] || reviewer_usage_logs+=("$worker_log.attempt-1")
+  reviewer_observed_tokens=$(jq -s '[.[] | select(.type == "step_finish") | (.part.tokens.total // 0)] | add // 0' "${reviewer_usage_logs[@]}")
   if [[ $convergence != 1 || -n ${CODEX_LOCAL_REVIEWER_TOKEN_BUDGET:-} ]] && (( reviewer_observed_tokens > reviewer_token_budget )); then
     reviewer_budget_reason=token-budget
   elif (( inference_status == 124 || inference_status == 137 )); then
@@ -799,11 +801,17 @@ elif [[ $worker_role == reviewer && $inference_status == 0 ]]; then
   set +e
   review_publish_args=()
   [[ ${CODEX_LOCAL_REVIEW_PUBLISH:-1} != 0 ]] || review_publish_args+=(--no-publish)
+  if [[ ${CODEX_LOCAL_REVIEW_RESULT_MODE:-} == authoritative ]]; then
+    review_publish_args+=(--health-records "$health_dir/review-normalization.jsonl")
+  fi
   "${review_cli[@]}" finalize "${review_publish_args[@]}" --envelope "$worker_envelope" --log "$worker_log" \
     --run-id "$worker_run_id" --result-out "$worker_result"
   finalize_status=$?
   set -e
-  if [[ $finalize_status != 0 ]]; then
+  if [[ $finalize_status == 76 ]]; then
+    # Preserve the validated review and binding for explicit host adjudication.
+    workflow_status=76
+  elif [[ $finalize_status != 0 ]]; then
     "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason malformed-result \
       --result-out "$worker_result" || true
     workflow_status=65
@@ -861,7 +869,9 @@ if [[ $record_run == 1 ]]; then
         *) failure_class=infrastructure-inference ;;
       esac
     else
-      if [[ $reviewer_budget_reason == token-budget ]]; then
+      if [[ $workflow_status == 76 ]]; then
+        failure_class=review-audit-adjudication-required
+      elif [[ $reviewer_budget_reason == token-budget ]]; then
         failure_class=review-token-budget
       elif (( output_status != 0 )); then
         failure_class=malformed-result

@@ -90,6 +90,8 @@ def launch(command: list[str]) -> int:
         offset = 0
         next_container_sweep = 0.0
         budget_stopped = False
+
+        log_identity = None
         while process.poll() is None:
             try:
                 if time.monotonic() >= next_container_sweep:
@@ -113,7 +115,13 @@ def launch(command: list[str]) -> int:
                         cancel(health, item["run_id"], item["session_id"])
                         budget_stopped = True
                 if item:
-                    delta = observe(Path(item["log"]), offset)
+                    log_path = Path(item["log"])
+                    stat = log_path.stat()
+                    identity = (stat.st_dev, stat.st_ino)
+                    if log_identity is not None and identity != log_identity:
+                        offset = 0  # A bounded infrastructure restart archived the prior attempt.
+                    log_identity = identity
+                    delta = observe(log_path, offset)
                     offset = delta["offset"]
                     if delta["events"]:
                         types = {}

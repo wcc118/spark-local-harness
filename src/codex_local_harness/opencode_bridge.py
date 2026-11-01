@@ -131,6 +131,53 @@ def run_bridge(
     compaction_records: Path | None = None, log: Path, control: Path,
     secret: Path, timeout: float,
 ) -> int:
+    started = time.monotonic()
+    arguments = dict(base_url=base_url, password=password, run_id=run_id, task=task,
+                     agent=agent, model=model, repository=repository, issue=issue,
+                     compaction_records=compaction_records, log=log, control=control,
+                     secret=secret, timeout=timeout)
+    try:
+        return _run_bridge_once(**arguments)
+    except BridgeError as exc:
+        eligible = (os.environ.get("CODEX_LOCAL_REVIEW_RESULT_MODE") == "authoritative"
+                    and agent in {"reviewer", "convergence-reviewer"}
+                    and str(exc) == "OpenCode event stream ended before session completion")
+        if not eligible:
+            raise
+        remaining = timeout - (time.monotonic() - started) if timeout > 0 else timeout
+        if timeout > 0 and remaining <= 0:
+            raise
+        descriptor = json.loads(control.read_text(encoding="utf-8"))
+        session_id = descriptor.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise BridgeError("Cannot restart reviewer without prior session identity") from exc
+        # Reviewer checkpoint resume is unsupported. Abort before one fresh session.
+        # A failed abort cannot safely create a second active reviewer.
+        _abort_session(base_url, password, session_id)
+        archive = log.with_name(log.name + ".attempt-1")
+        archived_control = control.with_name(control.name + ".attempt-1")
+        if archive.exists() or archived_control.exists():
+            raise BridgeError("Reviewer restart evidence already exists") from exc
+        if log.exists():
+            log.rename(archive)
+        else:
+            archive.write_text("", encoding="utf-8")
+        _atomic_json(archived_control, descriptor)
+        _append_event(log, {"type": "diagnostic", "part": {
+            "kind": "infrastructure-restart", "attempt": 1,
+            "reason": str(exc), "prior_log": str(archive),
+            "prior_session": session_id, "resume_supported": False}})
+        arguments["timeout"] = remaining
+        # No recursion: a second stream loss is terminal, never another retry.
+        return _run_bridge_once(**arguments)
+
+
+def _run_bridge_once(
+    *, base_url: str, password: str, run_id: str, task: str, agent: str,
+    model: str, repository: str | None = None, issue: int | None = None,
+    compaction_records: Path | None = None, log: Path, control: Path,
+    secret: Path, timeout: float,
+) -> int:
     deadline = time.monotonic() + timeout if timeout > 0 else float("inf")
     startup_deadline = min(deadline, time.monotonic() + 30)
     diagnostics = ExecutionDiagnostics(agent, load_stage_budgets(os.environ.get("CODEX_LOCAL_STAGE_BUDGETS")))
