@@ -56,12 +56,12 @@ Partial runtime usage is not a cost estimate or evidence of frontier savings.
 
 ## Bounds and rollout
 
-The digest shows at most64 assignments,32 runs per issue and16 attributed
+The digest shows at most 64 assignments, 32 runs per issue and 16 attributed
 observations per issue. Full durable evidence stays in the existing ledgers.
 Assignment records are small and do not contain prompts, tool arguments or logs.
 Use the existing worker budgets, exact-head reviews and completion ownership.
-No automatic3090 model loads, concurrent large Spark model loads, automatic
-route promotion or revival of the retired27B batching experiment is introduced.
+No automatic 3090 model loads, concurrent large Spark model loads, automatic
+route promotion or revival of the retired 27B batching experiment is introduced.
 The owner-authorized role rotation applies after the upgrade is accepted;
 installed defaults remain unchanged for callers without explicit assignments.
 

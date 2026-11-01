@@ -204,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pull-request", type=int)
     parser.add_argument("--allow-malformed", action="store_true")
     parser.add_argument("--canonical", action="store_true")
+    parser.add_argument("--lane-admission")
+    parser.add_argument("--loaded-context", type=int)
     args = parser.parse_args(argv)
     try:
         try:
@@ -236,6 +238,11 @@ def main(argv: list[str] | None = None) -> int:
             canonical = normalize(args.log, args.runtime, args.inference_status)
             health = replace(health, canonical_usage=canonical, intervention_depth="unknown",
                              tool_errors=canonical["tool_errors"], tool_calls=canonical["tool_calls"])
+        if args.lane_admission is not None:
+            from dataclasses import replace
+            if args.loaded_context is None or args.loaded_context < 65536:
+                raise ValueError("managed lane requires observed context >=65536")
+            health = replace(health, lane_admission=args.lane_admission, loaded_context=args.loaded_context)
         append_jsonl(args.records, health)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
