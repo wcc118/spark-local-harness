@@ -35,7 +35,9 @@ class ToolCallBudget:
         if not isinstance(identity, str) or not identity:
             return
         pending = self._pending_calls.pop(identity, False)
-        if pending if eligible is None else eligible:
+        if eligible is None:
+            eligible = pending
+        if eligible:
             self._completed_ids.add(identity)
 
     def _pending(self, identity: object, value: object, tool: object) -> None:
@@ -52,7 +54,7 @@ class ToolCallBudget:
             state = state if isinstance(state, dict) else {}
             if event.get("type") == "tool_use":
                 if state.get("status") in ("completed", "error"):
-                    self._complete(identity, nonempty(state.get("input"), part.get("tool")))
+                    self._complete(identity, nonempty(state["input"], part.get("tool")) if "input" in state else None)
                 else:
                     self._pending(identity, state.get("input"), part.get("tool"))
             elif event.get("type") == "tool_result":
@@ -69,6 +71,37 @@ class ToolCallBudget:
             elif item.get("type") == "tool_result":
                 self._complete(item.get("tool_use_id"))
         return self.exceeded
+
+
+class LogBudget:
+    """Incremental counters survive an attempt-log rename without double counting."""
+
+    def __init__(self, limit: int):
+        ToolCallBudget(limit)
+        self.limit = limit
+        self.streams = {}
+
+    def poll(self, log: Path) -> int:
+        for path in (Path(str(log) + ".attempt-1"), log):
+            if not path.exists():
+                continue
+            with path.open() as stream:
+                import os
+                stat = os.fstat(stream.fileno())
+                identity = (stat.st_dev, stat.st_ino)
+                budget, offset = self.streams.get(identity, (ToolCallBudget(self.limit), 0))
+                if stat.st_size < offset:
+                    raise ValueError("tool log truncated")
+                stream.seek(offset)
+                while True:
+                    line = stream.readline()
+                    if not line or not line.endswith("\n"):
+                        break
+                    if line.strip():
+                        budget.observe(json.loads(line))
+                    offset = stream.tell()
+                self.streams[identity] = (budget, offset)
+        return sum(budget.count for budget, _ in self.streams.values())
 
 
 def check_logs(paths: list[Path], limit: int) -> int:

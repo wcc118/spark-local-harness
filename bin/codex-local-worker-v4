@@ -31,8 +31,16 @@ diagnostic_started=0
 diagnostic_finalized=0
 worker_started_epoch=
 worker_memory_test_db=0
+worker_budget_marker=
 cleanup() {
   cleanup_status=$?
+  if [[ -n $worker_budget_marker && -f $worker_budget_marker ]]; then
+    cleanup_status=75
+    if [[ $worker_role == reviewer && -n ${worker_envelope:-} ]]; then
+      "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason step-budget \
+        --result-out "$worker_result" || true
+    fi
+  fi
   if [[ -n $worker_server_container ]]; then
     docker stop --time 5 "$worker_server_container" >/dev/null 2>&1 || true
   fi
@@ -317,6 +325,13 @@ if [[ $record_run == 1 && ( -z $worker_repository || -z $worker_issue ) ]]; then
 fi
 
 candidate_source=${CODEX_LOCAL_SOURCE:-${HOME}/.local/share/codex-local-harness/runtime/current/src}
+if [[ -n ${CODEX_LOCAL_TOOL_CALL_BUDGET+x} ]]; then
+  [[ $convergence == 1 && $record_run == 1 && ${CODEX_LOCAL_BUDGET_SUPERVISOR:-} == "$PPID" ]] || {
+    echo "ERROR: tool-call budget requires a supervised, recorded convergence run" >&2; exit 2;
+  }
+  env PYTHONPATH="$candidate_source" python3 -c 'import os; from codex_local_harness.tool_budget import ToolCallBudget; ToolCallBudget(int(os.environ["CODEX_LOCAL_TOOL_CALL_BUDGET"]))' || exit 2
+  worker_budget_marker="$health_dir/$worker_run_id.tool-budget.json"
+fi
 checkout_kind=source-read-only
 checkout_id=$(printf '%s' "$(realpath "$worker_source_repo_path")" | sha256sum | cut -d' ' -f1)
 if [[ $worker_role == coder || $worker_role == reviewer ]]; then
@@ -726,6 +741,20 @@ if [[ $convergence == 1 && -n ${bridge_status:-} ]]; then
 fi
 set -e
 
+tool_budget_status=0
+if [[ -n $worker_budget_marker ]]; then
+  budget_logs=(--log "$worker_log")
+  [[ ! -f "$worker_log.attempt-1" ]] || budget_logs+=(--log "$worker_log.attempt-1")
+  env PYTHONPATH="$candidate_source" python3 -m codex_local_harness.tool_budget \
+    "${budget_logs[@]}" --limit "$CODEX_LOCAL_TOOL_CALL_BUDGET" >"$worker_budget_marker.tmp" || tool_budget_status=$?
+  if (( tool_budget_status == 75 )); then
+    mv "$worker_budget_marker.tmp" "$worker_budget_marker"
+    inference_status=75
+  elif (( tool_budget_status != 0 )); then
+    inference_status=65
+  fi
+fi
+
 reviewer_observed_tokens=0
 reviewer_budget_reason=
 if [[ $worker_role == reviewer ]]; then
@@ -758,7 +787,11 @@ if [[ $worker_role == reviewer ]] && jq -s -e '
 ' "$worker_log" >/dev/null; then
   reviewer_has_result=1
 fi
-if [[ $worker_role == reviewer && -n $reviewer_budget_reason && $reviewer_has_result == 0 ]]; then
+if [[ $worker_role == reviewer && $tool_budget_status == 75 ]]; then
+  "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason step-budget \
+    --result-out "$worker_result" || true
+  workflow_status=75
+elif [[ $worker_role == reviewer && -n $reviewer_budget_reason && $reviewer_has_result == 0 ]]; then
   "${review_cli[@]}" incomplete --envelope "$worker_envelope" --reason "$reviewer_budget_reason" \
     --result-out "$worker_result" || true
   workflow_status=75
@@ -824,6 +857,7 @@ if [[ $record_run == 1 ]]; then
           fi
           ;;
         130|143) health_status=interrupted; failure_class=execution-interrupted ;;
+        75) failure_class=step-budget ;;
         *) failure_class=infrastructure-inference ;;
       esac
     else

@@ -75,7 +75,11 @@ def cancel(health: Path, run: str, session: str) -> None:
 
 def launch(command: list[str]) -> int:
     """Keep execution attached while giving cancellation its own process group."""
-    process = subprocess.Popen(command, start_new_session=True)
+    from .tool_budget import LogBudget
+    configured = os.environ.get("CODEX_LOCAL_TOOL_CALL_BUDGET")
+    budget = LogBudget(int(configured)) if configured is not None else None
+    child_env = os.environ | {"CODEX_LOCAL_BUDGET_SUPERVISOR": str(os.getpid())}
+    process = subprocess.Popen(command, start_new_session=True, env=child_env)
     def forward(signum, frame):
         if process.poll() is None:
             os.killpg(process.pid, signum)
@@ -85,6 +89,7 @@ def launch(command: list[str]) -> int:
         item = None
         offset = 0
         next_container_sweep = 0.0
+        budget_stopped = False
         while process.poll() is None:
             try:
                 if time.monotonic() >= next_container_sweep:
@@ -94,6 +99,19 @@ def launch(command: list[str]) -> int:
                 if item is None:
                     item = next((e for e in records(health / "ownership.jsonl") if e.get("pid") == process.pid
                                  and e.get("process_start") == process_start(process.pid)), None)
+                if item and budget is not None and not budget_stopped:
+                    count = budget.poll(Path(item["log"]))
+                    if count > budget.limit:
+                        marker = health / (item["run_id"] + ".tool-budget.json")
+                        evidence = {"run_id": item["run_id"], "reason": "step-budget",
+                                    "count": count, "limit": budget.limit}
+                        temporary = marker.with_suffix(".tmp")
+                        temporary.write_text(json.dumps(evidence))
+                        temporary.replace(marker)
+                        append(health / "interventions.jsonl", {**evidence,
+                               "kind": "tool-call-budget", "observed_at": time.time()})
+                        cancel(health, item["run_id"], item["session_id"])
+                        budget_stopped = True
                 if item:
                     delta = observe(Path(item["log"]), offset)
                     offset = delta["offset"]
@@ -143,6 +161,7 @@ def finish(health: Path, run: str, session: str, status: int) -> None:
         "state": "terminal", "acceptance": "unknown", "observed_at": time.time(),
         "checkout": item["checkout"], "continuation": "checkpoint-restart",
         "review_verdict": result.get("verdict"), "publication": artifact.get("publication"),
+        "stop_reason": "step-budget" if (health / (run + ".tool-budget.json")).exists() else None,
         "result_evidence_error": evidence_error,
     }
     try:

@@ -415,3 +415,42 @@ class TestToolCallBudgetCLI:
         log_file.write_text('{"type":"tool_result","tool_use_id":"c1"}\n')
         result = main(["--log", str(log_file), "--limit", "1"])
         assert result == 0
+
+
+def test_native_shell_empty_and_arguments_not_retained():
+    budget = ToolCallBudget(1)
+    for identity, command in [('empty', '  '), ('work', 'private-payload')]:
+        budget.observe({'message': {'content': [{'type': 'tool_use', 'id': identity,
+            'name': 'run_shell_command', 'input': {'command': command, 'description': 'work'}}]}})
+        assert all(type(value) is bool for value in budget._pending_calls.values())
+        budget.observe({'message': {'content': [{'type': 'tool_result', 'tool_use_id': identity}]}})
+    assert budget.count == 1 and not budget.exceeded
+    assert not budget._pending_calls
+
+
+def test_incremental_budget_survives_rename_and_waits_for_complete_line(tmp_path):
+    from codex_local_harness.tool_budget import LogBudget, check_logs
+    log = tmp_path / 'run.jsonl'
+    event = {'type': 'tool_use', 'part': {'callID': 'same-id', 'tool': 'read',
+             'state': {'status': 'completed', 'input': {'filePath': 'source'}}}}
+    line = json.dumps(event)
+    log.write_text(line)
+    budget = LogBudget(1)
+    assert budget.poll(log) == 0
+    log.write_text(line + '\n')
+    assert budget.poll(log) == budget.poll(log) == 1
+    archive = Path(str(log) + '.attempt-1')
+    log.rename(archive)
+    log.write_text(line + '\n')  # Same ID in a new runtime attempt is another call.
+    assert budget.poll(log) == budget.poll(log) == 2
+    assert check_logs([archive, log], 1) == 2
+
+
+def test_multiple_native_calls_and_unknown_results():
+    budget = ToolCallBudget(1)
+    budget.observe({'message': {'content': [
+        {'type': 'tool_use', 'id': str(i), 'name': 'read_file', 'input': {'path': str(i)}} for i in range(2)]}})
+    assert budget.count == 0
+    budget.observe({'message': {'content': [
+        {'type': 'tool_result', 'tool_use_id': str(i), 'is_error': True} for i in range(3)]}})
+    assert budget.count == 2 and budget.exceeded
