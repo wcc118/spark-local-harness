@@ -536,3 +536,57 @@ def test_collect_pointers_limits_and_filters(tmp_path, fake_service):
     assert len(pointers) == 4
     assert pointers[0] == ('memory:m0', 't0')
     assert pointers[3] == ('memory:m3', 't3')
+
+
+def test_recall_total_deadline_includes_streaming_body():
+    class StreamingHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            try:
+                # Each chunk arrives well inside the socket timeout. A socket
+                # timeout alone permits the entire seven-second response.
+                for _ in range(70):
+                    self.wfile.write(b' ')
+                    self.wfile.flush()
+                    time.sleep(.1)
+                self.wfile.write(b'{"result":{"structuredContent":{"memories":[]}}}')
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), StreamingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    start = time.monotonic()
+    try:
+        with pytest.raises(ValueError, match='deadline'):
+            collect_pointers(f'http://127.0.0.1:{server.server_port}/mcp',
+                             'not-a-real-credential', 'coder', 'test/repo', '1', None)
+        assert time.monotonic() - start < 6
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_oversized_recall_does_not_change_guidance(tmp_path, fake_service, monkeypatch, capsys):
+    runtime(tmp_path)
+    _SERVICE['search'] = {'memories': [{'id': 'memory:abc', 'title': 'x' * 300000}]}
+    config = make_config(tmp_path, fake_service.server_address[1])
+    monkeypatch.setenv('CODEX_LOCAL_MEMORY_RECALL', '1')
+    assert prepare(config, tmp_path, 'coder', 'run', 'wcc118/codex-local-harness', '245')
+    assert _guidance(tmp_path) == _expected_guidance()
+    assert 'memory recall unavailable' in capsys.readouterr().err
+
+
+def test_recall_response_limit_rejects_before_json_parsing(fake_service):
+    from codex_local_harness.memory import _collect_pointers_request
+    _SERVICE['search'] = {'memories': [{'id': 'memory:abc', 'title': 'x' * 300000}]}
+    with pytest.raises(ValueError, match='Recall response too large'):
+        _collect_pointers_request(
+            f'http://127.0.0.1:{fake_service.server_address[1]}/mcp',
+            'fake-token', 'coder', 'test/repo', '1', None,
+        )

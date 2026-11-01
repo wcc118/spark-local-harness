@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import unicodedata
 from pathlib import Path
 import sys
@@ -129,7 +130,7 @@ def sanitize_title(title: str) -> str | None:
     return cleaned[:120]
 
 
-def collect_pointers(endpoint: str, token: str, role: str, repository: str, issue: str, issue_title: str | None) -> list[tuple[str, str]]:
+def _collect_pointers_request(endpoint: str, token: str, role: str, repository: str, issue: str, issue_title: str | None) -> list[tuple[str, str]]:
     """Run one search_memory call and return at most 4 valid (id, title) pointer pairs.
 
     Only IDs matching ^memory:[A-Za-z0-9_]+$ and titles that survive sanitization are
@@ -146,7 +147,10 @@ def collect_pointers(endpoint: str, token: str, role: str, repository: str, issu
                  'Accept': 'application/json, text/event-stream'},
         data=json.dumps(body).encode())
     with urllib.request.urlopen(request, timeout=5) as response:
-        payload = json.load(response)
+        raw = response.read(262145)
+        if len(raw) > 262144:
+            raise ValueError('Recall response too large')
+        payload = json.loads(raw)
     result = payload.get('result') or {}
     if result.get('isError'):
         raise ValueError('search_memory failed')
@@ -169,6 +173,29 @@ def collect_pointers(endpoint: str, token: str, role: str, repository: str, issu
             continue
         pointers.append((memory_id, title))
     return pointers
+
+
+def collect_pointers(endpoint: str, token: str, role: str, repository: str,
+                     issue: str, issue_title: str | None) -> list[tuple[str, str]]:
+    """Bound the entire optional retrieval, including a slowly streamed body.
+
+    The short-lived child receives the credential through stdin, never argv.
+    subprocess.run kills and reaps it on timeout; it cannot leave a blocked
+    retrieval thread behind. Child stderr is discarded to avoid leaking data.
+    """
+    request = dict(endpoint=endpoint, token=token, role=role,
+                   repository=repository, issue=issue, issue_title=issue_title)
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), '--recall-request'],
+            input=json.dumps(request), text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, timeout=5, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ValueError('Recall deadline exceeded') from None
+    if completed.returncode:
+        raise ValueError('Recall request failed')
+    return [tuple(pointer) for pointer in json.loads(completed.stdout)]
 
 
 def recall_block(endpoint: str, token: str, role: str, repository: str, issue: str, issue_title: str | None) -> str:
@@ -255,6 +282,14 @@ def prepare(config_path: Path, runtime_home: Path, role: str, run_id: str, repos
 
 
 def main() -> None:
+    # Internal bounded-request entry point. Never print request data or errors.
+    if sys.argv[1:] == ['--recall-request']:
+        try:
+            pointers = _collect_pointers_request(**json.load(sys.stdin))
+            print(json.dumps(pointers))
+        except Exception:
+            raise SystemExit(1) from None
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--runtime-home', type=Path, required=True)

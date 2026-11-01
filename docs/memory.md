@@ -181,3 +181,10 @@ Use the install-harness receipt's rollback command to restore the previous insta
 launcher. Restore only the memory entries in interactive client configs; do not clobber
 unrelated later changes. Rollback leaves knowledge data intact. Stop the memory-tools
 user service if needed; database and graph browser are separate services.
+
+The optional recall request has a five-second total deadline, including streaming
+response bodies, and a 256 KiB response limit. A short-lived child receives its
+run credential through stdin (never command arguments), returns only sanitized
+pointers, and is killed and reaped on deadline. Failure adds no recall block and
+does not disable the worker's ordinary memory tools. This deadline excludes the
+existing credential-mint step and the separately bounded issue-title lookup.
