@@ -25,7 +25,7 @@ from starlette.responses import JSONResponse
 import uvicorn
 
 import embedding
-from memoryctl import ROOT, credentials, private_write
+from memoryctl import ROOT, credentials, private_write, database_name, private_directory, URL, NS
 
 
 @dataclass(frozen=True)
@@ -126,18 +126,18 @@ def verify_token(token, key):
 
 class Database:
     def __init__(self, database='knowledge'):
-        self.database = database
+        self.database = database_name(database)
 
     def query(self, sql, parameters=None):
-        user, password = credentials('memory_writer')
+        user, password = credentials('memory_writer', self.database)
         headers = {
             'Authorization': 'Basic ' + base64.b64encode(f'{user}:{password}'.encode()).decode(),
             'Content-Type': 'application/json', 'Accept': 'application/json',
-            'surreal-ns': 'personal', 'surreal-db': self.database,
-            'surreal-auth-ns': 'personal', 'surreal-auth-db': 'knowledge',
+            'surreal-ns': NS, 'surreal-db': self.database,
+            'surreal-auth-ns': NS, 'surreal-auth-db': self.database,
         }
         payload = {'id': 'memory', 'method': 'query', 'params': [sql, parameters or {}]}
-        req = urllib.request.Request('http://127.0.0.1:9600/rpc', data=json.dumps(payload).encode(), headers=headers)
+        req = urllib.request.Request(URL + '/rpc', data=json.dumps(payload).encode(), headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=12) as response:
                 result = json.load(response)
@@ -599,7 +599,8 @@ def valid_auth_config(config):
 
 
 class AuthenticatedApp:
-    def __init__(self, app, config, path=None):
+    def __init__(self, app, config, path=None, *, allow_workers=True):
+        self.allow_workers = allow_workers
         self.app, self.config, self.path = app, config, path
         self.mtime = path.stat().st_mtime_ns if path else None
 
@@ -631,6 +632,8 @@ class AuthenticatedApp:
         if not token.isascii():
             return await JSONResponse({'error':'unauthorized'},status_code=401)(scope,receive,send)
         if request.url.path == '/sessions' and request.method == 'POST':
+            if not self.allow_workers:
+                return await JSONResponse({'error':'worker sessions disabled'},status_code=403)(scope,receive,send)
             if not hmac.compare_digest(token, self.config['issuer_token']):
                 return await JSONResponse({'error':'unauthorized'},status_code=401)(scope,receive,send)
             try:
@@ -653,7 +656,10 @@ class AuthenticatedApp:
             if hmac.compare_digest(token,value['token']):
                 principal = Principal(role=value['role'],actor=name)
                 break
-        principal = principal or verify_token(token, self.config['signing_key'])
+        if self.allow_workers:
+            principal = principal or verify_token(token, self.config['signing_key'])
+        elif principal is not None and principal.role != 'frontier':
+            principal = None
         if principal is None:
             return await JSONResponse({'error':'unauthorized'},status_code=401)(scope,receive,send)
         reset = CURRENT.set(principal)
@@ -663,20 +669,43 @@ class AuthenticatedApp:
             CURRENT.reset(reset)
 
 
-def provision():
-    path = ROOT/'.local/service-auth.json'
+def provision(database='knowledge'):
+    directory = private_directory(database)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory/'service-auth.json'
     if not path.exists():
         private_write(path,json.dumps({'issuer_token':secrets.token_urlsafe(40),'signing_key':secrets.token_urlsafe(48),
             'clients':{'codex':{'role':'frontier','token':secrets.token_urlsafe(40)},
                        'opencode':{'role':'coder','token':secrets.token_urlsafe(40)}}},indent=2))
-    return json.loads(path.read_text())
+    config = json.loads(path.read_text())
+    if database == 'oracle':
+        # A separate frontier identity for each client; no worker identities.
+        changed = False
+        for name in ('codex', 'claude'):
+            if name not in config['clients']:
+                config['clients'][name] = {'role':'frontier','token':secrets.token_urlsafe(40)}
+                changed = True
+        for name in list(config['clients']):
+            if config['clients'][name].get('role') != 'frontier':
+                del config['clients'][name]
+                changed = True
+        if changed:
+            private_write(path,json.dumps(config,indent=2))
+    return config
 
 
 def main():
-    config = provision()
-    server = build_server(MemoryStore())
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--database', choices=['knowledge','oracle'], default='knowledge')
+    args = parser.parse_args()
+    database = args.database
+    config = provision(database)
+    server = build_server(MemoryStore(Database(database)))
     app = server.streamable_http_app(stateless_http=True,json_response=True)
-    uvicorn.run(AuthenticatedApp(app,config,ROOT/'.local/service-auth.json'),host='127.0.0.1',port=9602,access_log=False)
+    uvicorn.run(AuthenticatedApp(app,config,private_directory(database)/'service-auth.json',
+                                allow_workers=database == 'knowledge'),
+                host='127.0.0.1',port=9602 if database == 'knowledge' else 9603,access_log=False)
 
 
 if __name__ == '__main__':

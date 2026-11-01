@@ -8,6 +8,7 @@ Register fixed host ports here before deployment; inspect reservations and liste
 | SurrealDB HTTP / MCP | 127.0.0.1:9600 | 8000 | Assigned |
 | Surrealist graph browser | 127.0.0.1:9601 | 8080 | Assigned |
 | Memory tools MCP | 127.0.0.1:9602 | n/a | Assigned; local agents only, no PC forward needed |
+| Oracle memory MCP | 127.0.0.1:9603 | n/a | Reserved for frontier-only oracle profile (#254) |
 | PC SSH forwards | PC loopback 9600 and 9601 to the same host ports | n/a | Session-scoped; check PC availability |
 
 ## Registration evidence — 2026-10-23
@@ -38,3 +39,5 @@ Open http://127.0.0.1:9601 and connect to http://127.0.0.1:9600.
 Reuse an existing matching tunnel; do not stop unrelated listeners.
 PC forwarding is documented here, not claimed to be installed or verified remotely.
 These host reservations persist even when memory services are stopped.
+
+Port 9603 checked on 2026-11-01 against the listed project registries and `ss -ltn`; no conflicting reservation or listener was found. It is not forwarded to the PC or supplied to workers.

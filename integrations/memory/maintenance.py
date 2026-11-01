@@ -268,20 +268,22 @@ def link_similar(db=None, minimum=0.85, space=None):
     return {'memories': len(ids), 'linked': linked, 'minimum': minimum}
 
 
-def backup_sets():
+def backup_sets(directory=None):
     """Local backups newest first, as (stem, verified)."""
-    stems = sorted({p.name.split('.')[0] + '.' + p.name.split('.')[1] for p in (ROOT / 'backups').glob('*.surql')}, reverse=True)
-    return [(stem, (ROOT / 'backups' / (stem + '.verify.json')).exists()) for stem in stems]
+    directory = directory or ROOT / 'backups'
+    stems = sorted({p.name.split('.')[0] + '.' + p.name.split('.')[1] for p in directory.glob('*.surql')}, reverse=True)
+    return [(stem, (directory / (stem + '.verify.json')).exists()) for stem in stems]
 
 
-def prune(apply=False, keep_days=14, keep_weeks=12):
+def prune(apply=False, keep_days=14, keep_weeks=12, directory=None):
     """Keep every backup newer than keep_days, then one per ISO week for keep_weeks, always the newest verified one.
 
     Prints the plan; only deletes with apply=True. With no verified backup at all, nothing is pruned.
     """
+    directory = directory or ROOT / 'backups'
     now = datetime.datetime.now(datetime.timezone.utc)
     keep, weeks = set(), set()
-    sets = backup_sets()
+    sets = backup_sets(directory)
     newest_verified = next((s for s, ok in sets if ok), None)
     for stem, verified in sets:
         stamp = datetime.datetime.strptime(stem[:15], '%Y%m%dT%H%M%S').replace(tzinfo=datetime.timezone.utc)
@@ -296,26 +298,27 @@ def prune(apply=False, keep_days=14, keep_weeks=12):
     doomed = [stem for stem, _ in sets if stem not in keep]
     for stem in doomed:
         if apply:
-            for path in (ROOT / 'backups').glob(stem + '.*'):
+            for path in directory.glob(stem + '.*'):
                 path.unlink()
     return {'kept': len(keep), 'removed' if apply else 'would_remove': doomed}
 
 
-def offsite(config_path=None):
+def offsite(config_path=None, directory=None):
     """Encrypt the newest verified backup with gpg and copy it to the configured destination.
 
     .local/offsite.json: {"destination": "user@host:/path/ or /mount/path/", "passphrase_file": ".local/offsite.pass"}
     The backup holds database user definitions, so it is never copied unencrypted.
     """
+    directory = directory or ROOT / 'backups'
     import json
     path = Path(config_path) if config_path else ROOT / '.local/offsite.json'
     if not path.exists():
         raise RuntimeError('Off-machine backup is not configured: create .local/offsite.json (see maintenance.offsite)')
     config = json.loads(path.read_text())
-    stem = next((s for s, ok in backup_sets() if ok), None)
+    stem = next((s for s, ok in backup_sets(directory) if ok), None)
     if stem is None:
         raise RuntimeError('No verified backup to send; run backup --verify first')
-    source = ROOT / 'backups' / (stem + '.surql')
+    source = directory / (stem + '.surql')
     encrypted = source.with_suffix('.surql.gpg')
     passphrase = (ROOT / config['passphrase_file']).resolve()
     subprocess.run(['gpg', '--batch', '--yes', '--pinentry-mode', 'loopback', '--passphrase-file', str(passphrase),
