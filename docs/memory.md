@@ -159,8 +159,12 @@ End-of-run summaries can mention useful retrieved, created or challenged memory 
 No mandatory new JSON field, minimum number of searches, approval gate or invented
 lesson is imposed. A reviewer may write a memory while code remains read-only.
 Use exclude_issue="OWNER/REPO#N" to avoid current-issue claims during independent
-review. Full-text and literal matching are available; no semantic embeddings or
-weight updates are performed.
+review. Hybrid retrieval combines local semantic embeddings with full-text and
+literal matching, and falls back to keywords when embeddings are unavailable.
+This is retrieval, not a model weight update. Returned IDs, opens and self-reported
+use are distinct observations; none independently proves a lesson improved an outcome.
+Titles are supplied or derived; administrative retitle records its source and preserves
+the claim text.
 
 Discover_topics allows optional agent-directed discovery of existing topic names
 with case-insensitive substring matching. Use this to identify existing topics

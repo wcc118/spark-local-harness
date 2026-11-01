@@ -272,7 +272,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_records_search_funnel_stage(self):
         """Usage correctly counts searches and lessons returned."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # logs = [retrieval rows], uses = [], memories = [memory rows]
         mock_db.query.side_effect = [
@@ -298,7 +298,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_records_open_funnel_stage(self):
         """Usage correctly counts opens and relates to searches."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
@@ -321,7 +321,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_records_use_report_funnel_stage(self):
         """Usage correctly counts use reports (applied lessons)."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[]],  # logs (first query result - empty list of rows)
@@ -345,7 +345,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_accounts_for_searches_with_zero_results(self):
         """Usage tracks searches that returned no results."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
@@ -366,7 +366,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_accounts_for_searches_outside_window(self):
         """Usage ignores retrievals outside the time window."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Mock only returns the recent retrieval (old ones are filtered by SQL in real DB)
         mock_db.query.side_effect = [
@@ -390,7 +390,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_tracks_who_field_by_actor(self):
         """Usage correctly attributes actions to actors."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
@@ -418,7 +418,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_live_lessons_metrics(self):
         """Usage correctly counts live lessons and those never returned."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
@@ -444,7 +444,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_events_list_contains_search_open_and_use(self):
         """Usage events list includes search, open, and use events."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
@@ -485,7 +485,7 @@ class UsageTests(unittest.TestCase):
     def test_usage_as_dict_and_string_are_consistent(self):
         """Dictionary and string outputs contain equivalent data."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Two sets of queries (one for dict_result, one for string_result)
         mock_db.query.side_effect = [
@@ -529,7 +529,7 @@ class MemoryKindTests(unittest.TestCase):
     def test_usage_treats_kind_absent_as_search(self):
         """Retrievals without kind field are treated as historical searches."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
@@ -558,7 +558,7 @@ class MemoryKindTests(unittest.TestCase):
     def test_usage_searches_with_no_results_count(self):
         """Searches returning zero results are tracked separately."""
         mock_db = Mock()
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat() + 'Z'
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         mock_db.query.side_effect = [
             [[  # logs (first query result)
