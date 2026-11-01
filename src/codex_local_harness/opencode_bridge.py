@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import Counter
 import json
 import os
 import time
@@ -48,6 +49,11 @@ def _request(
         return json.loads(data)
     except json.JSONDecodeError as exc:
         raise BridgeError(f"OpenCode returned malformed JSON: {method} {path}") from exc
+
+
+def _abort_session(base_url: str, password: str, session_id: str) -> None:
+    """Abort an OpenCode session with timeout 5."""
+    _request(base_url, password, "POST", f"/session/{session_id}/abort", timeout=5)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -187,6 +193,9 @@ def run_bridge(
         "effective_policy": effective_policy,
     })
 
+    termination_cause = None
+    completed_calls: set[str] = set()
+    completed_requests: Counter[str] = Counter()
     try:
         provider, separator, model_id = model.partition("/")
         if not separator:
@@ -213,6 +222,39 @@ def run_bridge(
                 _append_event(log, normalized)
                 for diagnostic in diagnostics.observe(normalized):
                     _append_event(log, diagnostic)
+                # Enforcement is separate from the existing observational diagnostics.
+                if agent in {"reviewer", "convergence-reviewer"} and normalized["type"] == "tool_use":
+                    tool_part = normalized["part"]
+                    state = tool_part.get("state") or {}
+                    inputs = state.get("input") or {}
+                    call_id = tool_part.get("callID") or tool_part.get("id")
+                    nonempty = isinstance(inputs, dict) and bool(inputs)
+                    if tool_part.get("tool") == "bash":
+                        command = inputs.get("command") if isinstance(inputs, dict) else None
+                        nonempty = isinstance(command, str) and bool(command.strip())
+                    if call_id and state.get("status") == "completed" and call_id not in completed_calls:
+                        completed_calls.add(call_id)
+                        if nonempty:
+                            fingerprint = ExecutionDiagnostics._fingerprint(tool_part)
+                            completed_requests[fingerprint] += 1
+                            count = completed_requests[fingerprint]
+                            if count >= 20:
+                                termination_cause = {
+                                    "kind": "exploration-loop", "fingerprint": fingerprint,
+                                    "count": count,
+                                    "reason": "reviewer repeated the same nonempty completed request 20 times",
+                                }
+                                _append_event(log, {
+                                    "type": "diagnostic", "timestamp": int(time.time() * 1000),
+                                    "part": {**termination_cause, "severity": "critical", "action": "abort"},
+                                })
+                                try:
+                                    _abort_session(base_url, password, session_id)
+                                except BridgeError:
+                                    termination_cause["abort_failed"] = True
+                                raise BridgeError(
+                                    f"exploration-loop: fingerprint {fingerprint}, count {count}"
+                                )
             if compaction_tracker is not None:
                 compaction = compaction_tracker.observe(raw, observed_at=_iso_timestamp())
                 if compaction is not None:
@@ -230,6 +272,8 @@ def run_bridge(
     except Exception:
         descriptor = json.loads(control.read_text(encoding="utf-8"))
         descriptor["state"] = "failed"
+        if termination_cause is not None:
+            descriptor["termination_cause"] = termination_cause
         descriptor["credential_file"] = None
         _atomic_json(control, descriptor)
         secret.unlink(missing_ok=True)
