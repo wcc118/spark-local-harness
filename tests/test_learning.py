@@ -571,3 +571,28 @@ def test_valid_json_invalid_record_is_rejected(tmp_path, config_with_models, con
     with pytest.raises(ValueError):
         assign(ledger, config_with_models, "owner/repo", 2, "impl", "eligible", "new")
     assert ledger.read_text() == content
+
+
+@pytest.mark.parametrize('mutation', ['environment', 'same-model', 'exception-route', 'boolean-version'])
+def test_saved_route_integrity(tmp_path, config_with_models, mutation):
+    ledger = tmp_path / 'assignments'
+    record = assign(ledger, config_with_models, 'owner/repo', 1, 'impl',
+                    'exception' if mutation == 'exception-route' else 'eligible', 'reason')
+    if mutation == 'environment':
+        record['role_env']['coder']['CODEX_LOCAL_MODEL'] = 'different-model'
+    elif mutation == 'same-model':
+        record['reviewer_model'] = record['coder_model']
+    elif mutation == 'exception-route':
+        record['coder_model'] = 'unexpected-model'
+    else:
+        record['schema_version'] = True
+    original = json.dumps(record) + '\n'
+    ledger.write_text(original)
+    with pytest.raises(ValueError):
+        list_assignments(ledger)
+    assert ledger.read_text() == original
+
+
+def test_nondictionary_config_rejects_cleanly(tmp_path):
+    with pytest.raises(ValueError, match='configuration'):
+        assign(tmp_path / 'ledger', [], 'owner/repo', 1, 'impl', 'eligible', 'reason')

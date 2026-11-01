@@ -32,7 +32,7 @@ def read_annotations(path: Path) -> tuple[dict[str, Any], ...]:
             "run_ids": [str(item)[:128] for item in raw["run_ids"][:16]],
             "evidence_refs": [str(item)[:256] for item in raw.get("evidence_refs", [])[:24]],
             "observed_at": str(raw.get("observed_at") or "")[:64],
-            "source": str(raw.get("source") or "operator")[:64],
+            "source": str(raw.get("source") or "unknown")[:64],
         })
     return tuple(records[-MAX_ANNOTATIONS:])
 

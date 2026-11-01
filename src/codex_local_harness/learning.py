@@ -49,6 +49,8 @@ def _count_prior_eligible(records: tuple[dict[str, Any], ...]) -> int:
 
 def _get_models(config: dict[str, Any]) -> tuple[str, str]:
     """Get standard and deepseek model names from config."""
+    if not isinstance(config, dict):
+        raise ValueError("invalid route configuration")
     routes = config.get("routes", {})
     if not isinstance(routes, dict) or any(not isinstance(routes.get(k, {}), dict) for k in ("coder/standard", "coder/deepseek")):
         raise ValueError("invalid route configuration")
@@ -182,7 +184,8 @@ def _read_records(handle):
             raise ValueError(f"invalid record at line {number}")
         required = {"schema_version", "plan_version", "repository", "issue", "task_class",
                     "decision", "reason", "observed_at", "sequence", "coder_model", "reviewer_model", "role_env"}
-        if set(record) != required or record.get("schema_version") != 1 or record.get("plan_version") != 1:
+        if (set(record) != required or any(type(record.get(key)) is not int
+                or record[key] != 1 for key in ("schema_version", "plan_version"))):
             raise ValueError(f"invalid record schema at line {number}")
         for key in ("task_class", "reason", "observed_at"):
             validate_nonempty_string(record[key], key)
@@ -196,7 +199,21 @@ def _read_records(handle):
         if record.get("sequence") != expected or isinstance(record.get("sequence"), bool):
             raise ValueError(f"invalid sequence at line {number}")
         if expected is not None:
+            for role in ("coder", "reviewer"):
+                validate_nonempty_string(record[role + "_model"], role + " model")
+            if record["coder_model"] == record["reviewer_model"]:
+                raise ValueError(f"models must be distinct at line {number}")
+            expected_env = {
+                "coder": {"CODEX_LOCAL_TIER": "deepseek" if expected % 2 else "standard",
+                          "CODEX_LOCAL_MODEL": record["coder_model"]},
+                "reviewer": {"CODEX_LOCAL_TIER": "standard",
+                             "CODEX_LOCAL_MODEL": record["reviewer_model"]},
+            }
+            if record["role_env"] != expected_env:
+                raise ValueError(f"role environment mismatch at line {number}")
             sequence += 1
+        elif any(record[key] is not None for key in ("coder_model", "reviewer_model", "role_env")):
+            raise ValueError(f"exception contains route at line {number}")
         records.append(record)
     return records
 

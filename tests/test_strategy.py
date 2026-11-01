@@ -133,3 +133,9 @@ def test_unknown_usage_is_excluded_not_zero_or_crash():
     assert tokens["value"] == 100
     assert tokens["denominator"] == 1
     assert tokens["exclusions"] == 1
+
+
+def test_missing_annotation_source_stays_unknown(tmp_path):
+    path = tmp_path / 'annotations.jsonl'
+    path.write_text(json.dumps({'kind': 'reviewer-catch', 'run_ids': ['run-1']}) + '\n')
+    assert read_annotations(path)[0]['source'] == 'unknown'
