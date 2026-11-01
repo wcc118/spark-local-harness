@@ -117,6 +117,51 @@ class ServerThread(threading.Thread):
 class TestCheckLane:
     """Tests for check_lane function."""
 
+    def test_redirect_never_reaches_second_endpoint(self):
+        received = []
+
+        class Target(MockLMStudioHandler):
+            def do_GET(self):
+                received.append(self.headers.get("Authorization"))
+                super().do_GET()
+
+        target = ServerThread(Target)
+        target.start()
+
+        class Redirect(MockLMStudioHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target.port}/api/v0/models")
+                self.end_headers()
+
+        source = ServerThread(Redirect)
+        source.start()
+        try:
+            result = check_lane(f"http://127.0.0.1:{source.port}/v1", "model", token="test-only")
+            assert result.status == "error"
+            assert received == []
+        finally:
+            for server in (source, target):
+                server.shutdown_server()
+                server.server.server_close()
+
+    def test_oversized_model_catalogue_is_rejected(self):
+        class Large(MockLMStudioHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b" " * (1024 * 1024 + 1))
+
+        server = ServerThread(Large)
+        server.start()
+        try:
+            result = check_lane(f"http://127.0.0.1:{server.port}/v1", "model")
+            assert result.status == "error"
+            assert "exceeds 1 MiB" in result.detail
+        finally:
+            server.shutdown_server()
+            server.server.server_close()
+
     @pytest.fixture
     def http_server(self):
         """Fixture to create an HTTP server with a given handler."""
@@ -748,3 +793,12 @@ class TestLaneCli:
         assert result == 12
 
         server.shutdown_server()
+
+
+def test_unusable_lease_directory_fails_closed(tmp_path):
+    blocked = tmp_path / 'not-a-directory'
+    blocked.write_text('existing file')
+    lease = GpuLease('test', 'admission', blocked)
+    assert lease.acquire(timeout=0) is False
+    lease.release()
+    assert blocked.read_text() == 'existing file'

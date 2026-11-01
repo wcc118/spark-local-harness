@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Any
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Health probing must not forward credentials or follow another endpoint.
+        return None
+
+
 @dataclass(frozen=True)
 class LaneStatus:
     """Status of an LM Studio lane health check."""
@@ -75,8 +81,11 @@ def check_lane(
             headers["Authorization"] = f"Bearer {token}"
 
         req = urllib.request.Request(models_url, headers=headers, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        with urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout) as response:
+            payload = response.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024:
+                raise ValueError("model catalogue exceeds 1 MiB")
+            data = json.loads(payload.decode("utf-8"))
 
         elapsed = time.monotonic() - start_time
 
@@ -351,12 +360,14 @@ class GpuLease:
         Returns:
             True if acquired, False otherwise
         """
-        self._ensure_lock_dir()
-
         if self._held:
             return True
 
-        self._fd = open(self.lock_file, "a+")
+        try:
+            self._ensure_lock_dir()
+            self._fd = open(self.lock_file, "a+")
+        except OSError:
+            return False
 
         start_time = time.monotonic()
         poll_interval = 0.1

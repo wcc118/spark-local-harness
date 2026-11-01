@@ -96,7 +96,7 @@
     "src/codex_local_harness/execution_diagnostics.py": "e9bf8e8f469757bc96cb3188cfd168b496715a05a7ffa78a0bc9b15b059df595",
     "src/codex_local_harness/frontier.py": "dc6be64d8bfcddf1ff8a55464d9f796a92ab63f24d9b1d5998db399e4a2e04fd",
     "src/codex_local_harness/health.py": "d633c6c1103d04136e48c6cabb0884a36ffb6286de14f850f31c27e1008d59ea",
-    "src/codex_local_harness/lane.py": "89957e214b4b7fbfaf03fdfd74dbd4135772f52e6da4cd8bc200ff894dfe70be",
+    "src/codex_local_harness/lane.py": "9f299feffee1dcb71fff7d71d267517d1a3b795af39eb348f8735fb1071438e4",
     "src/codex_local_harness/lane_cli.py": "1f0e1264bfc59c80dab1dc7d7eb57716628bfe53deaff173bbb5353d4216c69a",
     "src/codex_local_harness/live_execution.py": "f967f3a99dc3bf266cf6cabd0ac7631a4c1fea6a39bf891071e8953ede1e34ca",
     "src/codex_local_harness/managed_lane.py": "0bf3d281c36d3ad47ffdb76c5bf628b5caf44a6c752acbec5fecc5dbccc5e35b",
