@@ -1,12 +1,13 @@
-// Oracle check for cursorPlayer (#267) behavioral trial
+// Oracle check for cursorPlayer (#257) behavioral trial
 // Usage: node check.mjs WORKSPACE_DIR
-// Exit 0 = behavioral pass, 1 = behavioral mismatch, 2 = execution failure
+// Exit 0 = all behavioral checks pass, 1 = behavioral mismatch, 2 = execution failure
 
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
-process.on('unhandledRejection', () => {});
+// Exceptions should propagate - don't suppress unhandled rejections
+// process.on('unhandledRejection', () => {});
 
 const workspace = process.argv[2];
 if (!workspace) {
@@ -28,7 +29,8 @@ try {
 }
 
 // Create a sandboxed VM context with DOM and virtual clock stubs
-function makeEnv() {
+// NOTE: We do NOT rewrite the source code - execute it byte-for-byte via vm.Script
+function makeEnv(reducedMotion = false) {
     let vnow = 1_700_000_000_000;
     const timers = [];
     const elems = new Map();
@@ -61,23 +63,22 @@ function makeEnv() {
         static now() { return vnow; }
     }
 
-    // Shared wb object that the source code will use
-    // The source code's const wb={...} will shadow this, so we need to
-    // use a different approach: wrap the source code to capture wb
-    const sharedWb = {
-        stations: [], defaults: {}, inputs: {}, results: {},
-        current: null, saved: [], busy: false, plantRun: null, plantRunSnapshot: null,
-        cursor: 0, freezeTimer: null, options: { atmosphere: false, propulsion: false },
-        players: {}
+    // Create matchMedia that respects reducedMotion setting
+    // This must be set BEFORE loading/creating player for reducedMotion tests
+    const matchMediaStub = (q) => {
+        if (q === '(prefers-reduced-motion: reduce)') {
+            return { matches: reducedMotion, addEventListener() {} };
+        }
+        return { matches: false, addEventListener() {} };
     };
 
     let tid = 0;
     const sandbox = {
         document, window: {
-            matchMedia: () => ({ matches: false, addEventListener() {} }),
+            matchMedia: matchMediaStub,
             addEventListener() {}, innerWidth: 1200, innerHeight: 800
         },
-        matchMedia: () => ({ matches: false, addEventListener() {} }),
+        matchMedia: matchMediaStub,
         localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
         fetch: () => new Promise(() => {}),
         console: { log() {}, error() {}, warn() {} },
@@ -93,26 +94,17 @@ function makeEnv() {
         },
         setInterval: () => 0, clearInterval() {},
         requestAnimationFrame: fn => sandbox.setTimeout(fn, 16),
-        // Expose sharedWb
-        _sharedWb: sharedWb,
         Math, JSON, Object, Array, Number, String, Promise, Error, Map, Set,
     };
     sandbox.globalThis = sandbox;
 
     vm.createContext(sandbox);
 
-    // Pre-wrap the source code to capture wb
-    // We replace const wb={...} with a wrapper that uses sharedWb
-    const modifiedCode = code.replace(
-        /^const wb=\{stations:\[\],defaults:\{\},inputs:\{\},results:\{\},current:null,saved:\[\],busy:false,plantRun:null,plantRunSnapshot:null,cursor:0,freezeTimer:null,options:\{atmosphere:false,propulsion:false\}\};/m,
-        'const wb = _sharedWb;'
-    );
-
-    // Run the workspace code
-    new vm.Script(modifiedCode, { filename: 'workbench.js' }).runInContext(sandbox, { timeout: 5000 });
+    // Run the workspace code - NO SOURCE REWRITING, execute byte-for-byte
+    new vm.Script(code, { filename: 'workbench.js' }).runInContext(sandbox, { timeout: 5000 });
 
     return {
-        sandbox, elems, sharedWb,
+        sandbox, elems,
         advance: async (ms) => {
             const end = vnow + ms;
             for (let guard = 0; guard < 200000; guard++) {
@@ -121,11 +113,8 @@ function makeEnv() {
                 if (!nxt || nxt.t > end) break;
                 timers.shift();
                 vnow = Math.max(vnow, nxt.t);
-                try {
-                    await nxt.fn();
-                } catch {
-                    // a throwing frame simply stops that player
-                }
+                // DO NOT swallow timer exceptions - let them propagate
+                await nxt.fn();
                 await new Promise(r => setImmediate(r));
             }
             vnow = end;
@@ -136,26 +125,10 @@ function makeEnv() {
     };
 }
 
-// Test helper: get player state from sharedWb
-function getPlayerState(env, key) {
-    const p = env.sharedWb?.players?.[key];
-    return p;
-}
-
-// Test: verify reduced-motion preference sets initial speed to 0.25x
-async function testReducedMotion(env) {
-    // Reset players to ensure fresh state
-    env.sharedWb.players = {};
-
-    // Mock reduced motion preference BEFORE creating player
-    env.sandbox.matchMedia = (q) => {
-        if (q === '(prefers-reduced-motion: reduce)') {
-            return { matches: true, addEventListener() {} };
-        }
-        return { matches: false, addEventListener() {} };
-    };
-
-    // Create a fake run for testing
+// Test: verify selected-speed movement (1x speed)
+// The tick should be at or after the clock time
+// At 1x speed, 1000ms wall time = 1000ms recorded time = advance from index 0 to index 1
+async function testSelectedSpeed(env) {
     const fakeRun = {
         truth: [
             { time_s: 0 },
@@ -164,6 +137,135 @@ async function testReducedMotion(env) {
             { time_s: 3 },
             { time_s: 4 },
             { time_s: 5 },
+        ],
+    };
+
+    const key = 'test-selected';
+    let currentIndex = 0;
+    const setIndex = (i) => { currentIndex = i; };
+
+    // Create player in default (non-reduced-motion) environment
+    env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
+
+    // Get the play button and trigger actual listener created by cursorPlayer
+    const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
+    if (!playBtn || !playBtn.listeners?.click) {
+        return { ok: false, error: 'play button not found or has no click listener' };
+    }
+
+    // Trigger actual play listener
+    playBtn.listeners.click.forEach(cb => cb());
+
+    // At 1x speed with tick every 50ms:
+    // - First 1000ms: accumulate 20 ticks of 50ms each = 1s elapsed = advance from index 0 to index 1
+    // - Next 1000ms: advance from index 1 to index 2
+    const observations = [];
+
+    // Wait 1000ms - should advance to index 1
+    await env.advance(1000);
+    observations.push({ elapsed: 1000, index: currentIndex, expectedIndex: 1 });
+
+    // Wait another 1000ms - should advance to index 2
+    await env.advance(1000);
+    observations.push({ elapsed: 2000, index: currentIndex, expectedIndex: 2 });
+
+    // Wait another 1000ms - should advance to index 3
+    await env.advance(1000);
+    observations.push({ elapsed: 3000, index: currentIndex, expectedIndex: 3 });
+
+    // Validate observations - at 1x speed, index should advance to expectedIndex after elapsed ms
+    for (const obs of observations) {
+        if (obs.index !== obs.expectedIndex) {
+            return {
+                ok: false,
+                observed: { index: obs.index, elapsed: obs.elapsed },
+                expected: { expectedIndex: obs.expectedIndex },
+                check: 'selectedSpeedMovement'
+            };
+        }
+    }
+
+    return {
+        ok: true,
+        check: 'selectedSpeedMovement',
+        observations
+    };
+}
+
+// Test: verify slow-speed accumulation (0.25x speed)
+// At 0.25x speed, 4000ms wall time = 1000ms recorded time = advance one index
+async function testSlowSpeedAccumulation(env) {
+    const fakeRun = {
+        truth: [
+            { time_s: 0 },
+            { time_s: 1 },
+            { time_s: 2 },
+        ],
+    };
+
+    const key = 'test-slow';
+    let currentIndex = 0;
+    const setIndex = (i) => { currentIndex = i; };
+
+    // Create player
+    env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
+
+    // Get the speed select and trigger actual listener to set 0.25x
+    const speedSelect = env.sandbox.document.getElementById(`wb-${key}-speed`);
+    if (!speedSelect || !speedSelect.listeners?.change) {
+        return { ok: false, error: 'speed select not found' };
+    }
+
+    // Trigger actual speed change listener
+    speedSelect.listeners.change.forEach(cb => cb({ target: { value: '0.25' } }));
+
+    // Start playback
+    const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
+    if (!playBtn || !playBtn.listeners?.click) {
+        return { ok: false, error: 'play button not found' };
+    }
+    playBtn.listeners.click.forEach(cb => cb());
+
+    // At 0.25x speed with tick every 50ms:
+    // - 4000ms wall time = 1000ms recorded = 1s = advance one index
+    const observations = [];
+
+    // Wait 4000ms - should advance to index 1 (0.25 * 4000ms = 1000ms = 1s)
+    await env.advance(4000);
+    observations.push({ elapsed: 4000, index: currentIndex, expectedIndex: 1 });
+
+    // Wait another 4000ms - should advance to index 2
+    await env.advance(4000);
+    observations.push({ elapsed: 8000, index: currentIndex, expectedIndex: 2 });
+
+    // Validate observations
+    for (const obs of observations) {
+        if (obs.index !== obs.expectedIndex) {
+            return {
+                ok: false,
+                observed: { index: obs.index, elapsed: obs.elapsed },
+                expected: { expectedIndex: obs.expectedIndex },
+                check: 'slowSpeedAccumulation'
+            };
+        }
+    }
+
+    return {
+        ok: true,
+        check: 'slowSpeedAccumulation',
+        observations
+    };
+}
+
+// Test: verify reduced-motion default sets initial speed to 0.25x
+// Use a FRESH environment with reducedMotion=true for each scenario
+async function testReducedMotionDefault(env) {
+    // env is already created with reducedMotion=true
+    const fakeRun = {
+        truth: [
+            { time_s: 0 },
+            { time_s: 1 },
+            { time_s: 2 },
         ],
     };
 
@@ -171,42 +273,49 @@ async function testReducedMotion(env) {
     let currentIndex = 0;
     const setIndex = (i) => { currentIndex = i; };
 
-    // Create player - this is where speed is determined
-    const playerDiv = env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
+    // Create player in reduced motion environment
+    // The matchMedia is already set up in makeEnv(reducedMotion=true)
+    env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
 
-    if (!playerDiv) {
-        return { ok: false, error: 'cursorPlayer did not return element' };
+    // Start playback (default speed should be 0.25 due to reduced motion)
+    const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
+    if (!playBtn || !playBtn.listeners?.click) {
+        return { ok: false, error: 'play button not found' };
     }
 
-    // Check player was created
-    const player = getPlayerState(env, key);
-    if (!player) {
-        return { ok: false, error: 'player state not created' };
+    playBtn.listeners.click.forEach(cb => cb());
+
+    // At 0.25x speed with tick every 50ms:
+    // - 4000ms wall time = 1000ms recorded = 1s = advance one index
+    const observations = [];
+
+    await env.advance(4000);
+    observations.push({ elapsed: 4000, index: currentIndex, expectedIndex: 1 });
+
+    await env.advance(4000);
+    observations.push({ elapsed: 8000, index: currentIndex, expectedIndex: 2 });
+
+    // Validate observations
+    for (const obs of observations) {
+        if (obs.index !== obs.expectedIndex) {
+            return {
+                ok: false,
+                observed: { index: obs.index, elapsed: obs.elapsed },
+                expected: { expectedIndex: obs.expectedIndex },
+                check: 'reducedMotionDefault'
+            };
+        }
     }
 
-    // Fix version: playbackReducedMotion() determines speed at player creation
-    // Raw version: always sets speed=1 in initialization (bug - doesn't respect reduced motion)
-    // The fix properly uses playbackReducedMotion() in the player creation line
-    if (player.speed !== 0.25) {
-        return { ok: false, observed: { speed: player.speed }, expected: { speed: 0.25 }, check: 'reducedMotionSpeed' };
-    }
-
-    return { ok: true, check: 'reducedMotionSpeed' };
+    return {
+        ok: true,
+        check: 'reducedMotionDefault',
+        observations
+    };
 }
 
-// Test: verify clock-based playback (fix version) vs frame-time based (raw version)
-async function testPlaybackSpeedAccumulation(env) {
-    // Reset players for fresh test
-    env.sharedWb.players = {};
-
-    // Mock reduced motion to get predictable initial speed
-    env.sandbox.matchMedia = (q) => {
-        if (q === '(prefers-reduced-motion: reduce)') {
-            return { matches: false, addEventListener() {} };
-        }
-        return { matches: false, addEventListener() {} };
-    };
-
+// Test: verify pause holds the displayed tick
+async function testPause(env) {
     const fakeRun = {
         truth: [
             { time_s: 0 },
@@ -218,216 +327,104 @@ async function testPlaybackSpeedAccumulation(env) {
         ],
     };
 
-    const key = 'test-speed';
+    const key = 'test-pause';
     let currentIndex = 0;
     const setIndex = (i) => { currentIndex = i; };
 
-    // Create player - this initializes speed based on reduced motion
+    // Create player
     env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
-    const player = getPlayerState(env, key);
-    if (!player) {
-        return { ok: false, error: 'player state not created' };
-    }
 
-    // Start playback at 1x speed (speed should be 1 now since reduced motion is off)
+    // Get play button
     const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
-    if (playBtn?.listeners?.click) {
-        playBtn.listeners.click.forEach(cb => cb());
+    if (!playBtn || !playBtn.listeners?.click) {
+        return { ok: false, error: 'play button not found' };
     }
 
-    // Wait 100ms (0.1s wall time) at 1x speed = 0.1s recorded time advance
+    // First click: play
+    playBtn.listeners.click.forEach(cb => cb());
+
+    // Record index at 100ms
+    const observations = [];
     await env.advance(100);
+    observations.push({ action: 'after 100ms play', elapsed: 100, index: currentIndex });
 
-    // Check if clock has been initialized
-    const p = getPlayerState(env, key);
-    if (!p || !('clock' in p)) {
-        return { ok: false, observed: { hasClock: false }, expected: { hasClock: true }, check: 'clockInitialized' };
-    }
+    // Second click: pause
+    playBtn.listeners.click.forEach(cb => cb());
+    const indexPaused = currentIndex;
 
-    // With 100ms at 1x speed, clock should be at ~0.1s
-    const elapsedRecorded = p.clock;
-    if (elapsedRecorded < 0.05 || elapsedRecorded > 0.2) {
-        return { ok: false, observed: { clock: elapsedRecorded }, expected: { clock: 0.1 }, check: 'clockAccumulation' };
-    }
-
-    return { ok: true, observed: { clock: elapsedRecorded }, check: 'clockAccumulation' };
-}
-
-// Test: verify that slow evaluations skip ticks (fix version behavior)
-async function testSlowEvaluationSkips(env) {
-    env.sharedWb.players = {};
-
-    env.sandbox.matchMedia = (q) => {
-        if (q === '(prefers-reduced-motion: reduce)') {
-            return { matches: false, addEventListener() {} };
-        }
-        return { matches: false, addEventListener() {} };
-    };
-
-    const fakeRun = {
-        truth: [
-            { time_s: 0 },
-            { time_s: 1 },
-            { time_s: 2 },
-            { time_s: 3 },
-            { time_s: 4 },
-            { time_s: 5 },
-        ],
-    };
-
-    const key = 'test-slow';
-    let currentIndex = 0;
-    let setIndexDelay = 0;
-    const setIndex = async (i, immediate) => {
-        await new Promise(r => setTimeout(r, setIndexDelay));
-        currentIndex = i;
-    };
-
-    env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
-    const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
-    if (playBtn?.listeners?.click) {
-        playBtn.listeners.click.forEach(cb => cb());
-    }
-
-    // Simulate slow evaluation by setting delay
-    setIndexDelay = 100;
-
-    // Advance 200ms wall time; at 1x speed, should advance 200ms recorded time
+    // Advance 200ms during pause - index should NOT change
     await env.advance(200);
+    observations.push({ action: 'after 200ms pause', elapsed: 300, index: currentIndex });
 
-    const p = getPlayerState(env, key);
-    if (!p) {
-        return { ok: false, error: 'player state not created' };
+    if (currentIndex !== indexPaused) {
+        return {
+            ok: false,
+            observed: { indexPaused, indexAfterPause: currentIndex, advanceDuringPause: 200 },
+            expected: { index: 'unchanged during pause' },
+            check: 'pause'
+        };
     }
 
-    // Check if clock is tracking properly
-    if (p.clock < 0.15 || p.clock > 0.25) {
-        return { ok: false, observed: { clock: p.clock }, expected: { clock: 0.2 }, check: 'slowEvaluationSkips' };
+    // Third click: resume
+    playBtn.listeners.click.forEach(cb => cb());
+
+    // Advance 100ms after resume - index should advance
+    await env.advance(100);
+    observations.push({ action: 'after 100ms resume', elapsed: 400, index: currentIndex });
+
+    if (currentIndex === indexPaused) {
+        return {
+            ok: false,
+            observed: { indexPaused, indexAfterResume: currentIndex },
+            expected: { index: 'advanced after resume' },
+            check: 'pauseResume'
+        };
     }
 
-    return { ok: true, observed: { clock: p.clock, index: currentIndex }, check: 'slowEvaluationSkips' };
-}
-
-// Test: verify loop behavior at end of playback
-async function testLoopBehavior(env) {
-    env.sharedWb.players = {};
-
-    env.sandbox.matchMedia = (q) => {
-        if (q === '(prefers-reduced-motion: reduce)') {
-            return { matches: false, addEventListener() {} };
-        }
-        return { matches: false, addEventListener() {} };
+    return {
+        ok: true,
+        check: 'pause',
+        observations
     };
-
-    const fakeRun = {
-        truth: [
-            { time_s: 0 },
-            { time_s: 1 },
-            { time_s: 2 },
-        ],
-    };
-
-    const key = 'test-loop';
-    let currentIndex = 2; // Start at last frame
-    const setIndex = (i) => { currentIndex = i; };
-
-    env.sandbox.cursorPlayer(key, () => fakeRun, () => currentIndex, setIndex);
-    const player = getPlayerState(env, key);
-    if (!player) {
-        return { ok: false, error: 'player not created' };
-    }
-
-    // Start playback
-    const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
-    if (playBtn?.listeners?.click) {
-        playBtn.listeners.click.forEach(cb => cb());
-    }
-
-    // Loop should be false by default
-    if (player.loop !== false) {
-        return { ok: false, observed: { loop: player.loop }, expected: { loop: false }, check: 'defaultLoop' };
-    }
-
-    return { ok: true, observed: { loop: player.loop }, check: 'defaultLoop' };
-}
-
-// Test: verify stopPlayback clears timer
-async function testStopClearsTimer(env) {
-    env.sharedWb.players = {};
-
-    env.sandbox.matchMedia = (q) => {
-        if (q === '(prefers-reduced-motion: reduce)') {
-            return { matches: false, addEventListener() {} };
-        }
-        return { matches: false, addEventListener() {} };
-    };
-
-    const fakeRun = { truth: [{ time_s: 0 }, { time_s: 1 }] };
-    const key = 'test-stop';
-    let idx = 0;
-    const setIdx = (i) => { idx = i; };
-
-    env.sandbox.cursorPlayer(key, () => fakeRun, () => idx, setIdx);
-    const p = getPlayerState(env, key);
-    if (!p) {
-        return { ok: false, error: 'player not created' };
-    }
-
-    // Start playback
-    const playBtn = env.sandbox.document.getElementById(`wb-${key}-play`);
-    if (playBtn?.listeners?.click) {
-        playBtn.listeners.click.forEach(cb => cb());
-    }
-
-    // Verify timer is set
-    if (!p.timer) {
-        return { ok: false, observed: { timer: p.timer }, expected: { timer: 'non-null' }, check: 'timerSetAfterPlay' };
-    }
-
-    // Stop playback
-    env.sandbox.stopPlayback?.(key);
-
-    // Verify timer is cleared and playing is false
-    const p2 = getPlayerState(env, key);
-    if (!p2) {
-        return { ok: false, error: 'player state lost after stop' };
-    }
-
-    if (p2.timer !== null) {
-        return { ok: false, observed: { timer: p2.timer }, expected: { timer: null }, check: 'timerClearedAfterStop' };
-    }
-
-    if (p2.playing !== false) {
-        return { ok: false, observed: { playing: p2.playing }, expected: { playing: false }, check: 'playingClearedAfterStop' };
-    }
-
-    return { ok: true, observed: { timer: p2.timer, playing: p2.playing }, check: 'stopClearsTimer' };
 }
 
 // Main check
 async function runCheck() {
-    const env = makeEnv();
-
-    // Run all tests
-    const tests = [
-        { name: 'reducedMotion', fn: testReducedMotion },
-        { name: 'speedAccumulation', fn: testPlaybackSpeedAccumulation },
-        { name: 'slowEvaluationSkips', fn: testSlowEvaluationSkips },
-        { name: 'loopBehavior', fn: testLoopBehavior },
-        { name: 'stopClearsTimer', fn: testStopClearsTimer },
-    ];
+    // Use fresh environment for each test scenario
+    // Each scenario gets its own makeEnv call with appropriate reducedMotion setting
+    const envSelected = makeEnv(false);  // No reduced motion for selected speed test
+    const envSlow = makeEnv(false);      // No reduced motion for slow speed test
+    const envReduced = makeEnv(true);    // Reduced motion for reduced motion test
+    const envPause = makeEnv(false);     // No reduced motion for pause test
 
     const results = [];
-    for (const t of tests) {
-        try {
-            const r = await t.fn(env);
-            results.push({ test: t.name, ...r });
-            if (!r.ok) {
-                return { ok: false, results, failure: r };
-            }
-        } catch (e) {
-            return { ok: false, error: `${t.name} threw: ${e.message}`, results };
-        }
+
+    // Test 1: selected-speed movement (1x speed)
+    const test1 = await testSelectedSpeed(envSelected);
+    results.push({ test: 'selectedSpeed', ...test1 });
+    if (!test1.ok) {
+        return { ok: false, results, failure: test1 };
+    }
+
+    // Test 2: slow-speed accumulation (0.25x speed)
+    const test2 = await testSlowSpeedAccumulation(envSlow);
+    results.push({ test: 'slowSpeedAccumulation', ...test2 });
+    if (!test2.ok) {
+        return { ok: false, results, failure: test2 };
+    }
+
+    // Test 3: reduced-motion default (0.25x initial speed)
+    const test3 = await testReducedMotionDefault(envReduced);
+    results.push({ test: 'reducedMotionDefault', ...test3 });
+    if (!test3.ok) {
+        return { ok: false, results, failure: test3 };
+    }
+
+    // Test 4: pause holds the displayed tick
+    const test4 = await testPause(envPause);
+    results.push({ test: 'pause', ...test4 });
+    if (!test4.ok) {
+        return { ok: false, results, failure: test4 };
     }
 
     return { ok: true, results };

@@ -59,18 +59,18 @@ Raw version (exit 1):
   "ok": false,
   "results": [
     {
-      "test": "reducedMotion",
+      "test": "selectedSpeed",
       "ok": false,
-      "observed": { "speed": 1 },
-      "expected": { "speed": 0.25 },
-      "check": "reducedMotionSpeed"
+      "observed": { "index": 0, "elapsed": 1000 },
+      "expected": { "expectedIndex": 1 },
+      "check": "selectedSpeedMovement"
     }
   ],
   "failure": {
     "ok": false,
-    "observed": { "speed": 1 },
-    "expected": { "speed": 0.25 },
-    "check": "reducedMotionSpeed"
+    "observed": { "index": 0, "elapsed": 1000 },
+    "expected": { "expectedIndex": 1 },
+    "check": "selectedSpeedMovement"
   }
 }
 
@@ -79,33 +79,42 @@ Fix version (exit 0):
   "ok": true,
   "results": [
     {
-      "test": "reducedMotion",
+      "test": "selectedSpeed",
       "ok": true,
-      "check": "reducedMotionSpeed"
+      "check": "selectedSpeedMovement",
+      "observations": [
+        { "elapsed": 1000, "index": 1, "expectedIndex": 1 },
+        { "elapsed": 2000, "index": 2, "expectedIndex": 2 },
+        { "elapsed": 3000, "index": 3, "expectedIndex": 3 }
+      ]
     },
     {
-      "test": "speedAccumulation",
+      "test": "slowSpeedAccumulation",
       "ok": true,
-      "observed": { "clock": 0.1 },
-      "check": "clockAccumulation"
+      "check": "slowSpeedAccumulation",
+      "observations": [
+        { "elapsed": 4000, "index": 1, "expectedIndex": 1 },
+        { "elapsed": 8000, "index": 2, "expectedIndex": 2 }
+      ]
     },
     {
-      "test": "slowEvaluationSkips",
+      "test": "reducedMotionDefault",
       "ok": true,
-      "observed": { "clock": 0.2, "index": 1 },
-      "check": "slowEvaluationSkips"
+      "check": "reducedMotionDefault",
+      "observations": [
+        { "elapsed": 4000, "index": 1, "expectedIndex": 1 },
+        { "elapsed": 8000, "index": 2, "expectedIndex": 2 }
+      ]
     },
     {
-      "test": "loopBehavior",
+      "test": "pause",
       "ok": true,
-      "observed": { "loop": false },
-      "check": "defaultLoop"
-    },
-    {
-      "test": "stopClearsTimer",
-      "ok": true,
-      "observed": { "timer": null, "playing": false },
-      "check": "stopClearsTimer"
+      "check": "pause",
+      "observations": [
+        { "action": "after 100ms play", "elapsed": 100, "index": 1 },
+        { "action": "after 200ms pause", "elapsed": 300, "index": 1 },
+        { "action": "after 100ms resume", "elapsed": 400, "index": 2 }
+      ]
     }
   ]
 }
