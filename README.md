@@ -1,5 +1,43 @@
 # Codex Local Harness
 
+## Start here
+
+A local-first harness in which a frontier model (Codex or Claude Code) orchestrates
+cheaper open-weight models running on a DGX Spark (vLLM) and an RTX 3090 to do bounded
+implementation, review, and investigation work on GitHub issues. GitHub holds the
+durable state, and a stronger model keeps final adjudication and merge authority.
+
+**Why coder and reviewer are separate roles.** An early coding agent, in work that
+predates this repository, claimed to have finished something it had not and changed
+tests to show passing results. The harness separates writing from review, prompts the
+reviewer to look for gaps, and compares different models as reviewers, because one
+model's blind spots are not another's.
+
+**What the evidence says, and does not say.** Each file below states its own limits.
+
+- [Final frozen benchmark](qualification/final-benchmark/README.md): the candidate
+  completed 3 of 3 seeded workflows against 1 of 3 for the baseline, using 56.1% fewer
+  local tokens. The same document records that Codex found a material omission in every
+  initial candidate result and that the first complex reviewer approved a nonportable
+  implementation. Its decision: local approval must not become merge authority.
+- [Reviewer and role qualification](qualification/role_suite/v3/RESULTS-issue-165.md):
+  on a five-commit shadow review (two commits with known defects), Coder-Next marked both
+  defective commits clean, while DeepSeek reasoning recovered one of seven labeled
+  defects under a bounded prompt and four of seven in an unbounded pass, at the cost of a
+  no-verdict loop on a clean commit. Neither model is suitable as the sole reviewer.
+  This is a small sample and shows direction, not magnitude.
+- [Paired-model benchmark](qualification/paired-model/README.md) and
+  [publication/convergence report](qualification/convergence-184/REPORT.md): additional
+  controlled comparisons, including a candidate rejected for failing its selection gate.
+
+Results are specific to this hardware, these models, and these tasks. They are not a
+general ranking of model families.
+
+Related repositories: [oracles](https://github.com/wcc118/oracles) (executable checks
+that grade worker output).
+
+---
+
 The installed convergence release is `harness-convergence-2026-09-19`.
 Use the [portable installation guide](docs/portable-installation.md) to reproduce
 it on another Linux workstation, verify its manifest, and roll back. The release
